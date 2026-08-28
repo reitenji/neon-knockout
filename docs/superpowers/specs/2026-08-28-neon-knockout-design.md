@@ -65,9 +65,10 @@ The product language remains Turkish. The public repository may retain the `neon
 - A player is knocked out when their center crosses the outer knockout boundary surrounding the visible platform.
 - The last opponent to land a hit within the previous 4 seconds receives the knockout point.
 - Leaving the arena without a recent opposing hit counts as a self-fall and awards no point.
-- The knocked-out player is absent for 2 seconds, then respawns with zero overload.
+- A knockout transition lasts 700 milliseconds from boundary crossing to restored control. It combines a fast exit burst and a warp-in rather than leaving the player watching an empty screen.
+- Respawn resets overload but never subtracts score, lengthens later respawns, or applies an additional gameplay penalty.
 - Respawn location is chosen deterministically from fixed spawn anchors by maximizing distance to active opponents; stable anchor order breaks ties.
-- A respawned player has 1 second of visible invulnerability. They may move during this period but cannot attack or be hit.
+- A respawned player has 650 milliseconds of visible protection and may move and attack immediately. Starting an attack cancels the remaining protection, so the shield cannot be used offensively without risk.
 
 ### Arena pressure
 
@@ -115,8 +116,8 @@ Initial tuning values are part of the implementation contract and may be changed
 | Dash invulnerability | first 100 ms |
 | Dash cooldown | 1,100 ms |
 | Maximum overload | 150 |
-| Respawn delay | 2,000 ms |
-| Respawn invulnerability | 1,000 ms |
+| Knockout-to-control time | 700 ms |
+| Respawn protection | 650 ms, cancelled by attacking |
 
 ### Quick combo
 
@@ -142,7 +143,7 @@ Initial quick-strike tuning:
 - Releasing performs a forward heavy arc. Charge progress scales its overload gain, impulse, anticipation pose, sound pitch, and effect intensity.
 - A fully charged strike is powerful but remains avoidable because charge direction is visible. Release consists of 110 milliseconds windup, 90 milliseconds active time, and 320 milliseconds recovery.
 - Dash cancels an uncommitted charge but cannot cancel the heavy strike after release.
-- Attacks cannot begin during dash, hitstun, respawn protection, or another attack's committed windup/active/recovery. Dash cannot cancel a committed quick or heavy attack.
+- Attacks cannot begin during dash, hitstun, or another attack's committed windup/active/recovery. Beginning an attack removes respawn protection before hit resolution. Dash cannot cancel a committed quick or heavy attack.
 
 Initial heavy tuning ranges from 18–32 overload and 460–760 px/s base impulse over a 94-pixel, 82-degree arc.
 
@@ -195,6 +196,10 @@ Accent slots are assigned deterministically from the lowest unused palette index
 - No baked checkerboard, opaque background, stock watermark, copyrighted character, or placeholder geometric body may ship.
 - Each chassis supports authored states for `idle`, `move`, combo strikes `1–3`, `heavy-charge`, `heavy-release`, `dash`, `hit`, `knockout`, and `respawn`.
 - Animation may combine atlas frames with Phaser transforms and tweens, but attack anticipation, contact, and recovery must remain visually distinct.
+- Idle and locomotion use continuous loops with pose variation; every attack, dash, hit, knockout, and respawn uses authored pose changes rather than a static sprite plus a trail.
+- Local movement and attack anticipation begin on the next rendered frame after input. Idle/move transitions blend within 80 milliseconds, combo poses continue without snapping to idle between steps, and authoritative corrections do not restart an animation that is already in the correct state.
+- Animation time is driven by elapsed milliseconds rather than rendered-frame counts, so motion speed stays stable on 60 Hz, 90 Hz, 120 Hz, and temporarily slower displays.
+- Snapshot interpolation moves the fighter container while animation plays independently inside it. Network updates therefore cannot replace an authored pose with a visibly rigid slide.
 - Direction follows the authoritative/predicted facing vector. Effects may rotate freely; chassis art must remain readable at all directions and supported viewport sizes.
 - Reduced-motion mode removes nonessential camera shake and looping bob, shortens trails, and preserves attack/hit state readability.
 
@@ -290,13 +295,13 @@ Old team, core, delivery, reactor, tackle, and score-event fields are removed fr
 
 - `socket.id` is never identity. The random player ID and secret resume token model remains.
 - Disconnect immediately releases held inputs and removes the player from collision/attack targeting.
-- Disconnecting while actively present in a running match resolves once as a knockout at that server tick: it increments the player's falls and awards the last valid attacker within the normal 4-second window, otherwise it is a self-fall. Disconnecting while already knocked out, respawning, paused, or in countdown does not add another fall.
+- Disconnecting never subtracts score, increments falls, awards a knockout, or changes existing statistics. The player is simply removed from active simulation while reserved.
 - The slot, score, chassis, accent, statistics, and identity remain reserved for 20 seconds.
 - With at least two connected players, the match continues while a disconnected player is reserved.
 - If fewer than two remain, the match pauses and displays the authoritative remaining reconnect time. The pause lasts while at least one reserved opponent still has a valid resume window.
 - During this pause, the match clock, combat simulation, arena contraction, attacks, cooldowns, and respawn timers freeze; only session reservation deadlines advance.
-- When no second player can validly resume, one connected player wins by forfeit. If no player remains, the match returns to the lobby without a winner and the room expires normally.
-- A valid resume reattaches to the same player. During a match, the player enters a fresh 2-second respawn delay with zero overload and then receives normal respawn invulnerability rather than appearing immediately inside combat. Existing score and statistics remain.
+- When no second player can validly resume, the interrupted match is declared `NO_CONTEST` and returns to the lobby without changing scores or statistics. No connected or disconnected player receives a win, loss, knockout, fall, or other penalty from the interruption.
+- A valid resume reattaches to the same player. During a match, the player warp-enters at the deterministic safest spawn with their existing overload, score, and statistics. Control returns after a 180-millisecond visual entry and normal 650-millisecond protection applies; reconnecting itself is not punished.
 - Invalid or expired tokens cannot claim a slot and produce a typed, actionable error.
 
 ### Results and rematch
@@ -349,6 +354,7 @@ Unit tests must prove:
 - attack rejection against invulnerable, knocked-out, disconnected, and out-of-range players;
 - platform geometry, contraction, off-platform air control, knockout boundary, credit window, and self-fall;
 - deterministic respawn selection, invulnerability, score target, timed win, and sudden death;
+- knockout control returns at 700 milliseconds, protection cancels on attack, and no escalating or negative-score penalty exists;
 - identical final state and ordered events for repeated simulation from the same seed and input sequence.
 
 ### Room and network
@@ -358,7 +364,7 @@ Tests must prove:
 - room creation, code collisions, capacity including reservations, chassis validation, ready reset on chassis change, start rules, host migration, reconnect expiry, room deletion, result-ready, rematch, and return-to-lobby;
 - two real Socket.IO clients can create, join, ready, start, exchange combat inputs, receive snapshots/hits, reach a result through an in-process-only `forceKnockout` test harness, and rematch;
 - malformed aim/action payloads, unauthorized host actions, input flooding, stale sequence numbers, invalid tokens, and late joins are rejected safely;
-- reconnect restores identity/score and re-enters through respawn; under-populated pause resolves to resume, forfeit, or no-winner cleanup as specified.
+- reconnect restores identity, score, statistics, and overload without awarding a fall/knockout; under-populated pause resolves to resume or `NO_CONTEST` cleanup as specified.
 
 ### Phaser and browser
 
@@ -368,6 +374,7 @@ Tests must prove:
 - snapshots create/update/remove fighter views, arena state, HUD values, and interpolation targets correctly;
 - local input predicts movement/attack start but never fabricates a hit or score;
 - `HIT`, `KNOCKOUT`, and `RESPAWN` events trigger the correct effect/audio contracts once;
+- idle/move blending, uninterrupted combo chaining, knockout-to-control timing, and animation continuity across snapshots meet the millisecond contracts above;
 - reduced-motion and mute settings alter presentation without changing game state;
 - resize/DPR handling preserves the full 1280×720 logical arena at 1440×900, 1280×720, 1024×768, and 900×600;
 - two isolated Playwright contexts complete create, join, chassis choice, ready, start, visible movement, one real attack exchange, forced-result test harness, result, and rematch without page or console errors;
@@ -379,6 +386,7 @@ Tests must prove:
 - Every client receives at least 250 snapshots, no unexpected `server:error`, and the server health endpoint stays responsive.
 - The load test completes three consecutive runs without open handles or reserved players leaking between runs.
 - On the development Mac, the 1440×900 browser gameplay scene maintains a measured median of at least 58 rendered frames per second and a 95th-percentile frame duration below 25 ms during an eight-fighter scripted effect burst.
+- A recorded ten-second action sequence covering idle, movement, full combo, heavy strike, dash, hit reaction, knockout, and respawn shows no rigid sliding, unintended pose reset, one-frame disappearance, or resize-triggered animation restart.
 - `npm run lan` performs a production build and starts the server in one command.
 - `/health` returns HTTP 200 on localhost and one discovered non-loopback RFC1918 LAN address.
 - Two real browser sessions complete a live match flow on the production build.
@@ -403,7 +411,7 @@ The redesign proceeds in vertical slices so a working LAN flow exists after ever
 2. Adapt room/session/protocol rules and server integration while preserving create/join/reconnect foundations.
 3. Mount a minimal Phaser arena against canonical snapshots and remove the hand-written Canvas renderer.
 4. Add fighter assets and animation states, then authoritative hit/knockout feedback, audio, camera, and particles.
-5. Replace lobby/HUD/result semantics, including visible field validation and reconnect/forfeit handling.
+5. Replace lobby/HUD/result semantics, including visible field validation and reconnect/`NO_CONTEST` handling.
 6. Complete load, browser, responsive, performance, README, and live-LAN gates.
 
 Obsolete code paths, schemas, fixtures, tests, docs, and assets are deleted as their replacements land. No dual-mode switch or legacy fallback is introduced.
