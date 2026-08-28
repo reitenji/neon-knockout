@@ -1,0 +1,191 @@
+import { randomBytes } from 'node:crypto';
+import { createServer, type Server as HttpServer } from 'node:http';
+import { resolve } from 'node:path';
+import express from 'express';
+import { Server } from 'socket.io';
+import type { MatchSnapshot, SessionWelcome, Team } from '../../shared/model.js';
+import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
+import { RoomManager, type RoomPublication } from '../rooms/roomManager.js';
+import { registerSocketHandlers, type GameSocket } from './socketHandlers.js';
+
+export interface GameServer {
+  start(): Promise<{ port: number; origin: string }>;
+  stop(): Promise<void>;
+  rooms: RoomManager;
+  testHarness: {
+    deliverCore(roomCode: string, team: Team): void;
+    disconnectPlayer(roomCode: string, playerId: string): void;
+    matchSnapshot(roomCode: string): MatchSnapshot | null;
+  } | null;
+}
+
+export type CreateGameServerOptions = Readonly<{
+  host?: string;
+  port?: number;
+  enableTestHarness?: boolean;
+  clientDirectory?: string | false;
+  logger?: Pick<Console, 'error'>;
+}>;
+
+type PlayerConnection = Readonly<{ roomCode: string; socketId: string }>;
+
+function updateSnapshot(snapshot: MatchSnapshot, publication: Extract<RoomPublication, { type: 'MATCH_EVENT' }>): MatchSnapshot {
+  const event = publication.event;
+  if (event.type === 'SCORE') return { ...snapshot, score: { ...event.score } };
+  if (event.type === 'PHASE') return { ...snapshot, phase: event.phase };
+  if (event.type === 'RESULT') {
+    return { ...snapshot, phase: 'FINISHED', score: { ...event.score }, winner: event.winner };
+  }
+  return snapshot;
+}
+
+export function createGameServer(options: CreateGameServerOptions = {}): GameServer {
+  const host = options.host ?? '0.0.0.0';
+  const requestedPort = options.port ?? 4173;
+  const logger = options.logger ?? console;
+  const now = (): number => performance.now();
+  const app = express();
+  const httpServer: HttpServer = createServer(app);
+  const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
+    transports: ['websocket']
+  });
+  const roomCodes = new Set<string>();
+  const snapshots = new Map<string, MatchSnapshot>();
+  const playerConnections = new Map<string, PlayerConnection>();
+  const pendingPublications = new Set<NodeJS.Immediate>();
+  const startedAt = now();
+  let scheduler: NodeJS.Timeout | null = null;
+  let lastAdvanceAt = startedAt;
+  let activeAddress: { port: number; origin: string } | null = null;
+  let stopping: Promise<void> | null = null;
+
+  const dispatch = (publication: RoomPublication): void => {
+    if (publication.type === 'ROOM_STATE') io.to(publication.roomCode).emit('room:state', publication.state);
+    if (publication.type === 'MATCH_STARTED') io.to(publication.roomCode).emit('match:started', publication.snapshot);
+    if (publication.type === 'MATCH_SNAPSHOT') io.to(publication.roomCode).emit('match:snapshot', publication.snapshot);
+    if (publication.type === 'MATCH_EVENT') io.to(publication.roomCode).emit('match:event', publication.event);
+  };
+
+  const publish = (publication: RoomPublication): void => {
+    if (publication.type === 'ROOM_STATE') roomCodes.add(publication.roomCode);
+    if (publication.type === 'ROOM_CLOSED') {
+      roomCodes.delete(publication.roomCode);
+      snapshots.delete(publication.roomCode);
+    }
+    if (publication.type === 'MATCH_STARTED' || publication.type === 'MATCH_SNAPSHOT') {
+      snapshots.set(publication.roomCode, publication.snapshot);
+    }
+    if (publication.type === 'MATCH_EVENT') {
+      const snapshot = snapshots.get(publication.roomCode);
+      if (snapshot) snapshots.set(publication.roomCode, updateSnapshot(snapshot, publication));
+    }
+    const immediate = setImmediate(() => {
+      pendingPublications.delete(immediate);
+      dispatch(publication);
+    });
+    pendingPublications.add(immediate);
+  };
+
+  const rooms = new RoomManager({ now, randomBytes, publish });
+
+  app.get('/health', (_request, response) => {
+    response.json({
+      status: 'ok',
+      rooms: roomCodes.size,
+      uptimeSeconds: Math.max(0, (now() - startedAt) / 1_000)
+    });
+  });
+
+  const clientDirectory = options.clientDirectory === undefined ? resolve(process.cwd(), 'dist/client') : options.clientDirectory;
+  if (clientDirectory !== false) {
+    app.use(express.static(clientDirectory));
+    app.use((request, response, next) => {
+      if (request.path === '/health' || request.path.startsWith('/socket.io')) {
+        next();
+        return;
+      }
+      response.sendFile(resolve(clientDirectory, 'index.html'), (error) => {
+        if (error) next(error);
+      });
+    });
+  }
+
+  registerSocketHandlers({
+    io,
+    rooms,
+    now,
+    logger,
+    onSession: (socket: GameSocket, welcome: SessionWelcome) => {
+      playerConnections.set(welcome.playerId, { roomCode: welcome.roomCode, socketId: socket.id });
+    },
+    onDisconnect: (socket: GameSocket) => {
+      for (const [playerId, connection] of playerConnections) {
+        if (connection.socketId === socket.id) playerConnections.delete(playerId);
+      }
+    }
+  });
+
+  const start = async (): Promise<{ port: number; origin: string }> => {
+    if (activeAddress) return activeAddress;
+    await new Promise<void>((resolveStart, rejectStart) => {
+      const onError = (error: Error): void => {
+        httpServer.off('listening', onListening);
+        rejectStart(error);
+      };
+      const onListening = (): void => {
+        httpServer.off('error', onError);
+        resolveStart();
+      };
+      httpServer.once('error', onError);
+      httpServer.once('listening', onListening);
+      httpServer.listen(requestedPort, host);
+    });
+    const address = httpServer.address();
+    if (!address || typeof address === 'string') throw new Error('Game server did not bind a TCP port.');
+    const originHost = host === '0.0.0.0' ? '127.0.0.1' : host;
+    activeAddress = { port: address.port, origin: `http://${originHost}:${address.port}` };
+    lastAdvanceAt = now();
+    scheduler = setInterval(() => {
+      const current = now();
+      rooms.advance(current - lastAdvanceAt);
+      lastAdvanceAt = current;
+    }, 1_000 / 30);
+    return activeAddress;
+  };
+
+  const stop = (): Promise<void> => {
+    if (stopping) return stopping;
+    stopping = (async () => {
+      if (scheduler) {
+        clearInterval(scheduler);
+        scheduler = null;
+      }
+      for (const immediate of pendingPublications) clearImmediate(immediate);
+      pendingPublications.clear();
+      if (activeAddress) {
+        await new Promise<void>((resolveClose) => io.close(() => resolveClose()));
+        if (httpServer.listening) {
+          await new Promise<void>((resolveClose, rejectClose) => {
+            httpServer.close((error) => error ? rejectClose(error) : resolveClose());
+          });
+        }
+      }
+      activeAddress = null;
+    })();
+    return stopping;
+  };
+
+  const testHarness = options.enableTestHarness
+    ? {
+        deliverCore: (roomCode: string, team: Team): void => rooms.deliverCore(roomCode, team),
+        disconnectPlayer: (roomCode: string, playerId: string): void => {
+          const connection = playerConnections.get(playerId);
+          if (!connection || connection.roomCode !== roomCode) return;
+          io.sockets.sockets.get(connection.socketId)?.disconnect(true);
+        },
+        matchSnapshot: (roomCode: string): MatchSnapshot | null => snapshots.get(roomCode) ?? null
+      }
+    : null;
+
+  return { start, stop, rooms, testHarness };
+}

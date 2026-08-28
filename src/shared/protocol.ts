@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import type { Ack, GameEvent, InputFrame, MatchSnapshot, RoomState, ServerError, SessionWelcome, Team } from './model';
-import { normalizeRoomCode } from './names';
+import type { Ack, GameEvent, InputFrame, MatchSnapshot, RoomState, ServerError, SessionWelcome, Team } from './model.js';
+import { normalizeRoomCode } from './names.js';
 
 const teamSchema = z.enum(['CYAN', 'AMBER']);
 const emptyPayloadSchema = z.object({}).strict();
@@ -42,12 +42,12 @@ export interface ClientToServerEvents {
   'room:create': (payload: RoomCreatePayload, acknowledge: (ack: Ack<SessionWelcome>) => void) => void;
   'room:join': (payload: RoomJoinPayload, acknowledge: (ack: Ack<SessionWelcome>) => void) => void;
   'session:resume': (payload: SessionResumePayload, acknowledge: (ack: Ack<SessionWelcome>) => void) => void;
-  'lobby:team': (payload: LobbyTeamPayload) => void;
-  'lobby:ready': (payload: LobbyReadyPayload) => void;
-  'match:start': (payload: z.infer<typeof matchStartSchema>) => void;
+  'lobby:team': (payload: LobbyTeamPayload, acknowledge: (ack: Ack<null>) => void) => void;
+  'lobby:ready': (payload: LobbyReadyPayload, acknowledge: (ack: Ack<null>) => void) => void;
+  'match:start': (payload: z.infer<typeof matchStartSchema>, acknowledge: (ack: Ack<null>) => void) => void;
   'match:input': (payload: MatchInputPayload) => void;
-  'result:ready': (payload: ResultReadyPayload) => void;
-  'result:lobby': (payload: z.infer<typeof resultLobbySchema>) => void;
+  'result:ready': (payload: ResultReadyPayload, acknowledge: (ack: Ack<null>) => void) => void;
+  'result:lobby': (payload: z.infer<typeof resultLobbySchema>, acknowledge: (ack: Ack<null>) => void) => void;
 }
 
 export interface ServerToClientEvents {
