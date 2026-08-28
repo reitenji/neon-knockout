@@ -156,21 +156,25 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
   const stop = (): Promise<void> => {
     if (stopping) return stopping;
     stopping = (async () => {
-      if (scheduler) {
-        clearInterval(scheduler);
-        scheduler = null;
-      }
-      for (const immediate of pendingPublications) clearImmediate(immediate);
-      pendingPublications.clear();
-      if (activeAddress) {
-        await new Promise<void>((resolveClose) => io.close(() => resolveClose()));
-        if (httpServer.listening) {
-          await new Promise<void>((resolveClose, rejectClose) => {
-            httpServer.close((error) => error ? rejectClose(error) : resolveClose());
-          });
+      try {
+        if (scheduler) {
+          clearInterval(scheduler);
+          scheduler = null;
         }
+        for (const immediate of pendingPublications) clearImmediate(immediate);
+        pendingPublications.clear();
+        if (activeAddress) {
+          await new Promise<void>((resolveClose) => io.close(() => resolveClose()));
+          if (httpServer.listening) {
+            await new Promise<void>((resolveClose, rejectClose) => {
+              httpServer.close((error) => error ? rejectClose(error) : resolveClose());
+            });
+          }
+        }
+        activeAddress = null;
+      } finally {
+        stopping = null;
       }
-      activeAddress = null;
     })();
     return stopping;
   };

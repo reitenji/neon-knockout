@@ -261,4 +261,18 @@ describe('Socket.IO game server flow', () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(errors.filter((error) => error.code === 'RATE_LIMITED')).toHaveLength(1);
   });
+
+  it('can restart and stop the same server instance more than once', async () => {
+    await server.stop();
+
+    const restarted = await server.start();
+    expect(await fetch(`${restarted.origin}/health`).then((response) => response.status)).toBe(200);
+
+    await server.stop();
+
+    const afterStop = await fetch(`${restarted.origin}/health`)
+      .then((response) => response.status)
+      .catch(() => 0);
+    expect(afterStop).toBe(0);
+  });
 });
