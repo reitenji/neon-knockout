@@ -1,0 +1,53 @@
+{
+  "name": "neon-relay",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "concurrently -k \"tsx watch src/server/main.ts\" \"vite --host 0.0.0.0\"",
+    "build:client": "vite build",
+    "build:server": "tsup src/server/main.ts --format esm --platform node --out-dir dist/server --clean false",
+    "build": "rimraf dist && npm run build:client && npm run build:server",
+    "start": "node dist/server/main.js",
+    "lan": "npm run build && npm start",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:e2e": "npm run build && playwright test",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.62.1",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.4.0",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
+    "concurrently": "^10.0.5",
+    "eslint": "^10.9.1",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.5",
+    "globals": "^17.11.0",
+    "jsdom": "^29.1.1",
+    "rimraf": "^6.1.3",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.12",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.68.0",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}
