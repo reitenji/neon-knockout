@@ -79,13 +79,46 @@ describe('PredictionBuffer', () => {
     expect(afterQuick.velocity.x).not.toBe(760);
   });
 
-  it('keeps full movement steering before heavy charge reaches its entry threshold', () => {
+  it('accumulates held heavy across frames and slows movement only after the entry threshold', () => {
     const prediction = new PredictionBuffer('p-1');
     const canonical = player({ position: { x: 640, y: 360 } });
 
-    const charging = prediction.predict(frame(0, { moveX: 1, heavy: true }), canonical, 100);
+    const belowThreshold = prediction.predict(frame(0, { moveX: 1, heavy: true }), canonical, 100);
+    const atThreshold = prediction.predict(frame(1, { moveX: -1, heavy: true }), canonical, 80);
 
-    expect(charging.velocity.x).toBe(240);
+    expect(belowThreshold.velocity.x).toBe(240);
+    expect(atThreshold.actionStart?.chargeMs).toBe(180);
+    expect(atThreshold.velocity.x).toBeCloseTo(134.4, 5);
+  });
+
+  it('lets dash cancel an uncommitted heavy charge and restarts charge from zero after dash', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+
+    prediction.predict(frame(0, { heavy: true }), canonical, 100);
+    const dash = prediction.predict(frame(1, { heavy: true, dash: true }), canonical, 16);
+    const restartedCharge = prediction.predict(frame(2, { heavy: true }), canonical, 140);
+
+    expect(dash.actionStart?.kind).toBe('DASH');
+    expect(restartedCharge.actionStart).toEqual({
+      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: 140
+    });
+  });
+
+  it('commits heavy on release after the threshold and blocks a following dash', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+
+    prediction.predict(frame(0, { heavy: true }), canonical, 100);
+    prediction.predict(frame(1, { heavy: true }), canonical, 80);
+    const release = prediction.predict(frame(2), canonical, 16);
+    const afterRelease = prediction.predict(frame(3, { dash: true }), canonical, 16);
+
+    expect(release.actionStart).toEqual({
+      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: 180
+    });
+    expect(afterRelease.actionStart).toBeNull();
+    expect(afterRelease.velocity.x).not.toBe(760);
   });
 
   it('does not predict dash or attack starts while canonical state forbids acting', () => {

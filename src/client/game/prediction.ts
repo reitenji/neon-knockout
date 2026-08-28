@@ -25,6 +25,7 @@ type PredictionRuntime = KinematicState & {
   respawnRemainingMs: number;
   action: MatchAction;
   heavyChargeMs: number;
+  heavyHeld: boolean;
 };
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -116,7 +117,8 @@ function runtimeOf(player: MatchPlayer): PredictionRuntime {
     hitstunRemainingMs: player.hitstunRemainingMs,
     respawnRemainingMs: player.respawnRemainingMs,
     action: player.action,
-    heavyChargeMs: player.action.kind === null ? player.action.chargeMs : 0
+    heavyChargeMs: player.action.kind === null ? player.action.chargeMs : 0,
+    heavyHeld: player.action.kind === null && player.action.chargeMs > 0
   };
 }
 
@@ -154,27 +156,35 @@ function advanceRuntime(
   const canStartAction = hitstunRemainingMs <= 0 && !committedAction && dashRemainingMs <= 0;
   let dashDirectionValue = runtime.dashDirection;
   let actionStart: MatchAction | null = null;
-
-  if (frame.dash && canStartAction && dashCooldownRemainingMs <= 0) {
-    dashDirectionValue = dashDirection(frame, runtime.facing);
-    dashRemainingMs = GAME.dashDurationMs;
-    dashCooldownRemainingMs = GAME.dashCooldownMs;
-    actionStart = { kind: 'DASH', phase: 'ACTIVE', comboStep: 0, chargeMs: 0 };
-  }
-
+  let commitsAction = false;
   let heavyChargeMs = runtime.heavyChargeMs;
-  if (canStartAction && !frame.dash && frame.heavy) {
+  const heavyRelease = runtime.heavyHeld && !frame.heavy;
+
+  if (frame.dash && canStartAction) {
+    heavyChargeMs = 0;
+    if (dashCooldownRemainingMs <= 0) {
+      dashDirectionValue = dashDirection(frame, runtime.facing);
+      dashRemainingMs = GAME.dashDurationMs;
+      dashCooldownRemainingMs = GAME.dashCooldownMs;
+      actionStart = { kind: 'DASH', phase: 'ACTIVE', comboStep: 0, chargeMs: 0 };
+      commitsAction = true;
+    }
+  } else if (canStartAction && frame.heavy) {
     heavyChargeMs = Math.min(GAME.heavyMaxChargeMs, heavyChargeMs + elapsed);
     actionStart = { kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs };
-  } else if (canStartAction && !frame.dash && frame.quick && heavyChargeMs === 0) {
+  } else if (canStartAction && heavyRelease && heavyChargeMs >= GAME.heavyEnterChargeMs) {
+    actionStart = { kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs };
+    commitsAction = true;
+  } else if (canStartAction && frame.quick && heavyChargeMs === 0) {
     actionStart = quickActionStart(canonicalPlayer);
+    commitsAction = true;
   } else if (!frame.heavy) {
     heavyChargeMs = 0;
   }
 
   const vertices = platformVertices(platformProgress);
   const outsidePlatform = !pointInConvexPolygon(runtime.position, vertices);
-  const charging = heavyChargeMs >= GAME.heavyEnterChargeMs;
+  const charging = canStartAction && frame.heavy && heavyChargeMs >= GAME.heavyEnterChargeMs;
   const movementInput = hitstunRemainingMs > 0
     ? { ...frame, moveX: 0, moveY: 0 }
     : frame;
@@ -201,8 +211,9 @@ function advanceRuntime(
       dashDirection: dashDirectionValue,
       hitstunRemainingMs,
       respawnRemainingMs: runtime.respawnRemainingMs,
-      action: actionStart ?? runtime.action,
-      heavyChargeMs
+      action: commitsAction && actionStart ? actionStart : runtime.action,
+      heavyChargeMs,
+      heavyHeld: frame.heavy
     },
     actionStart
   };
