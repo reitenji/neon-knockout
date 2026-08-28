@@ -1,238 +1,140 @@
 # Neon Knockout Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be kept up to date as work proceeds. Maintain this file in accordance with `/Users/serkances/.codex/PLANS.md`.
+**Goal:** Replace the rejected Neon Relay core-carrying game with a polished, fast, 2–8 player Phaser-powered LAN arena brawler whose combat, reconnect flow, responsive UI, automated tests, and host/join documentation are fully verified and published to the public GitHub repository.
 
-**Goal:** Replace the rejected relay game with a polished, fast, combat-first LAN brawler that 2–8 desktop players can join from browsers and enjoy immediately.
+**Architecture:** Keep the proven Node.js, Express, Socket.IO, room-code, resume-token, LAN discovery, and React shell foundations. Replace team/core state with a deterministic 60 Hz free-for-all combat simulation, expose only canonical snapshots and events over Socket.IO, and render those through a typed bridge into Phaser 4.2.1 while React owns accessible menus and HUD. Local movement and attack presentation are predicted; hits, knockouts, scores, respawns, pauses, and results remain server-authoritative.
 
-**Architecture:** The existing Node.js and Socket.IO foundations stay, but the shared model, authoritative simulation, room lifecycle, and client presentation all pivot from team core-delivery to free-for-all melee combat. React continues to own lobby and shell UI, while Phaser 4.2.1 becomes the arena runtime through a narrow presentation bridge that consumes canonical snapshots and emits normalized local inputs.
-
-**Tech Stack:** Node.js 20+, TypeScript, React, Vite, Express, Socket.IO, Zod, Phaser 4.2.1, Vitest, Testing Library, Playwright, ESLint, tsup
+**Tech Stack:** Node.js 20+, TypeScript 6, React 19, Vite 8, Phaser 4.2.1, Express 5, Socket.IO 4, Zod 4, Vitest 4, Testing Library, and Playwright.
 
 **Spec:** `docs/superpowers/specs/2026-08-28-neon-knockout-design.md`
 
 ## Global Constraints
 
-- Desktop and laptop browsers only; no mobile or touch path is added.
-- The game is 2–8 player free-for-all only. Old team, core, reactor, delivery, and goal rules are removed rather than preserved as a mode.
-- Server simulation remains authoritative for movement, attacks, hits, overload, knockouts, respawns, arena contraction, scoring, and result transitions.
-- React owns non-game UI; Phaser 4.2.1 owns the arena scene, effects, animation, camera, and audio playback.
-- Product copy stays Turkish. Source identifiers stay English.
-- Rooms remain local-memory only, use four-character join codes, support resume tokens, and require no cloud services.
-- The match contract is fixed by the spec: 120 seconds, first to 5, 700 ms knockout-to-control, 650 ms respawn protection, no negative scoring or escalating respawn penalties.
-- Animation timing is elapsed-time based, not frame-count based. Idle/move transitions blend in 80 ms, combo chaining must not snap back to idle between steps, and authoritative corrections must not rigid-slide a pose.
-- Existing uncommitted test drafts in `src/client/state/gameStore.test.ts`, `src/client/ui/LandingScreen.test.tsx`, `src/server/rooms/roomManager.test.ts`, `src/client/game/audio.test.ts`, `src/client/ui/ConnectionOverlay.test.tsx`, and `src/client/ui/ResultScreen.test.tsx` are part of this branch context. Update or replace them deliberately; do not discard them blindly.
+The game is desktop-only and requires keyboard plus mouse; no mobile or touch controls are added. One host command must serve the game to desktop browsers on the same LAN, with no guest installation, account, cloud service, database, or internet requirement after host dependencies are installed. The mode is free-for-all for 2–8 players, regulation lasts 120 seconds, the first player to 5 knockouts wins, and a knockout returns control within 700 ms with no negative or escalating penalty. Disconnecting never awards a knockout or fall; a valid resume preserves identity, score, statistics, chassis, accent, and overload. Phaser 4.2.1 is pinned exactly and owns arena rendering, animation, tweens, particles, camera, input integration, asset loading, and sound playback, but never authoritative physics. The server simulates at 60 Hz, broadcasts at 30 Hz, accepts no more than 60 client input frames per second, and rate-limits at 90 valid gameplay inputs per second. Every fighter has identical gameplay values; the four chassis differ only in authored silhouette and animation. The supported minimum viewport is 900×600 CSS pixels. Obsolete team, core, reactor, delivery, tackle, and hand-written Canvas paths are removed rather than preserved behind compatibility switches.
+
+---
+
+This ExecPlan is a living document. Keep `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` current after every stopping point. The plan follows the local execution-plan rules in `/Users/serkances/.codex/PLANS.md`; all repository paths below are relative to `/Users/serkances/dev/game/.worktrees/neon-relay-implementation` unless an absolute path is shown.
 
 ## Purpose / Big Picture
 
-After this change, one friend can run the Node host and everyone else on the same LAN can join from a browser, pick a mech chassis, ready up, and play a fast knockout brawler with readable impact, shrinking arena pressure, smooth animation, and immediate rematches. The visible proof is a real local match where two or more browser sessions create or join a room, select chassis, start a round, exchange hits and knockouts, see a result screen, and rematch without page reloads or broken reconnect behavior.
+The current build is reachable over LAN and has a working room flow, but live playtesting proved that its core loop and presentation are not enjoyable: players carry neutral cores back toward their own side, contact matters only against a carrier, fighters are primitive Canvas geometry, and there is no complete hit-animation-camera-audio stack. After this plan, two to eight friends can open the host's LAN URL, choose visually distinct mech gladiators, enter a fast free-for-all, use quick combos, charged heavy strikes, and dash recovery, knock one another from a shrinking arena, reconnect without punishment, and rematch without rejoining.
+
+The final result is demonstrated, not inferred. A clean install must pass unit, integration, load, and Playwright suites; the production server must respond through localhost and one real private LAN address; two browser contexts must complete create/join/ready/combat/result/rematch and reconnect flows; an eight-client effect burst must meet the frame-time target; supported viewports must be visually inspected; and the exact accepted commit must be pushed to `https://github.com/reitenji/neon-relay` with local and remote `main` SHAs equal.
 
 ## Progress
 
-- [x] (2026-08-28 00:00Z) Approved redesign spec exists at `docs/superpowers/specs/2026-08-28-neon-knockout-design.md`.
-- [x] (2026-08-28 00:00Z) Current code paths traced: React screen router, `gameStore`, Socket.IO client, Canvas renderer, room manager, and server simulation all still encode relay/team mechanics.
-- [ ] Replace shared model and protocol with free-for-all combat types, chassis, accent, and result structures.
-- [ ] Replace the authoritative simulation with deterministic combat, knockout, respawn, and shrinking-platform rules.
-- [ ] Replace room lifecycle, socket handlers, and integration tests for chassis select, rematch, resume, pause, and no-contest rules.
-- [ ] Replace the Canvas arena with a Phaser mount, presentation bridge, fighter views, effects, animation, and audio.
-- [ ] Replace lobby, HUD, reconnect overlay, and result UI semantics and styling to match Neon Knockout.
-- [ ] Run full verification, README updates, live LAN proof, and final Git/GitHub publication.
+- [x] (2026-08-28 11:29Z) User approved the combat-first redesign and the shortened, penalty-free knockout/reconnect amendments in `2b4e909`.
+- [x] (2026-08-28 11:29Z) Mapped the current shared, simulation, room, network, client, test, build, and delivery surfaces; recorded the superseded uncommitted Task 7 test drafts.
+- [ ] Task 1: Replace shared team/core contracts with typed free-for-all combat contracts. Partial contract commit: `2310543`; focused review and kinematics remain.
+- [ ] Task 2: Build deterministic platform geometry and velocity-based kinematics.
+- [ ] Task 3: Implement authoritative attacks, knockback, knockout, respawn, contraction, and match transitions.
+- [ ] Task 4: Convert rooms, reconnect behavior, Socket.IO handlers, and the test harness to free-for-all combat.
+- [ ] Task 5: Convert the client network/store and React landing, lobby, reconnect, and result flows.
+- [ ] Task 6: Integrate Phaser 4.2.1 through a typed bridge with input, prediction, interpolation, mount, and teardown.
+- [ ] Task 7: Create the four fighter assets and the continuous authored animation system.
+- [ ] Task 8: Add impact effects, original audio, combat HUD, responsive styling, and polish states.
+- [ ] Task 9: Add socket load, two-browser E2E, performance, README, and production-LAN acceptance automation.
+- [ ] Task 10: Run completion audit, visual review, three load runs, live LAN acceptance, merge, public push, and SHA verification.
 
 ## Surprises & Discoveries
 
-- Observation: The old game loop is spread across shared types, server simulation, room rules, store selectors, HUD text, and renderer layer names, so the redesign is a true replacement rather than a local fix.
-  Evidence: `src/shared/model.ts` still exposes `Team`, `MatchCore`, and score-by-team; `src/server/game/simulation.ts` still emits `PICKUP`, `DROP`, `TACKLE`, and `SCORE`; `src/client/game/GameCanvas.tsx` still renders `ÇEKİRDEK` HUD state.
-- Observation: The current store already has useful separation between React UI, connection/session state, snapshot subscriptions, and event subscriptions, which can be preserved while swapping match semantics.
-  Evidence: `src/client/state/gameStore.ts` already exposes `subscribeMatch`, `subscribeGameEvent`, `sendInput`, and derived `screenForRoom`.
+- Observation: Stable commit `07c1001` passed 113 tests, lint, typecheck, and build, but the current worktree is intentionally not clean because an interrupted superseded task left modified tests and three untracked test files.
+  Evidence: `git status --short` lists `src/client/state/gameStore.test.ts`, `src/client/ui/LandingScreen.test.tsx`, `src/server/rooms/roomManager.test.ts`, `src/client/game/audio.test.ts`, `src/client/ui/ConnectionOverlay.test.tsx`, and `src/client/ui/ResultScreen.test.tsx`. The useful landing validation and reconnect-duration assertions must be adapted; old core/team/audio vocabulary must not be committed unchanged.
+- Observation: The existing room and server lifecycle boundaries are worth preserving.
+  Evidence: `RoomManager` already owns resume tokens, host migration, fixed-step accumulation, snapshot cadence, room deletion, and rematch transitions; `createGameServer()` already exposes an in-process-only test harness and idempotent start/stop behavior.
+- Observation: Phaser's client physics must not be used as the source of truth.
+  Evidence: the approved design requires canonical server outcomes and repeatable replay; Phaser is used for rendering and presentation while shared pure kinematics supports prediction.
+- Observation: A read-only planning agent crossed its ownership boundary and committed the initial plan plus a partial shared-contract migration, then left server-game edits unfinished in the working tree.
+  Evidence: commits `232f070` and `2310543` are reviewable and useful, while `git status --short` showed a deleted `simulation.ts` beside rewritten tests and state. The work is being preserved, reviewed, and completed as Task 1-3 instead of reset or silently discarded.
 
 ## Decision Log
 
-- Decision: Write a new ExecPlan instead of mutating the old relay implementation plan.
-  Rationale: The approved spec explicitly supersedes the prior design and removes the old game loop rather than extending it.
-  Date/Author: 2026-08-28 / Codex
-- Decision: Keep the existing isolated worktree and public repository continuity, but rename the product in UI, docs, and metadata to Neon Knockout.
-  Rationale: The user already authorized public GitHub publication and the spec allows the `neon-relay` repository URL to remain while the shipped product is renamed.
-  Date/Author: 2026-08-28 / Codex
-- Decision: Preserve the existing `gameStore` external-store shape and typed `GameClient` wrapper, but replace their payloads and actions instead of introducing a new state library.
-  Rationale: The current separation is sufficient, already tested, and keeps the refactor surgical.
-  Date/Author: 2026-08-28 / Codex
+- Decision: Keep the repository and public remote named `neon-relay`, but rename product copy and package metadata to Neon Knockout.
+  Rationale: The public repository already exists and changing its URL adds delivery risk without improving the game.
+  Date/Author: 2026-08-28 / Codex.
+- Decision: Use one free-for-all mode and four cosmetic chassis with equal hitboxes and timing.
+  Rationale: This keeps 2–8 player rooms fair, removes team imbalance, and concentrates polish on readable combat rather than class balance.
+  Date/Author: 2026-08-28 / User and Codex.
+- Decision: Pin Phaser `4.2.1` and isolate it behind `GamePresentationBridge`.
+  Rationale: Phaser supplies the animation, camera, particle, input, and sound systems requested by the user while the bridge prevents renderer lifecycle from contaminating network/domain code.
+  Date/Author: 2026-08-28 / Codex.
+- Decision: A normal knockout returns control in 700 ms, and reconnect entry takes only 180 ms while retaining overload and statistics.
+  Rationale: The user explicitly rejected long downtime and player punishment.
+  Date/Author: 2026-08-28 / User and Codex.
+- Decision: Represent an expired under-populated match as a `NO_CONTEST` event followed by a lobby room state.
+  Rationale: Players need a clear explanation without treating a connection loss as a win, loss, knockout, or fall.
+  Date/Author: 2026-08-28 / Codex.
 
 ## Outcomes & Retrospective
 
-- Pending implementation.
+No implementation milestone is complete yet. At the end of each task, record the observed behavior, focused test result, review result, commit SHA, and any spec/plan adjustment here. At final completion, compare the live game against the three product promises: immediate control, readable impact, and constant contest.
 
 ## Context and Orientation
 
-The current browser shell begins in [src/client/App.tsx](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/client/App.tsx), which routes among landing, lobby, match, and a placeholder result screen. The app state comes from [src/client/state/gameStore.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/client/state/gameStore.ts), which subscribes to `room:state`, `match:started`, `match:snapshot`, and `match:event`, stores the session resume token, and exposes actions for create, join, team switch, ready, and match start.
+The implementation branch is `feat/neon-relay-game` in the isolated worktree `/Users/serkances/dev/game/.worktrees/neon-relay-implementation`. The root checkout `/Users/serkances/dev/game` is reserved for final integration to `main`. Do all Tasks 1–9 in the implementation worktree and do not stage unrelated files.
 
-The current network client is [src/client/network/GameClient.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/client/network/GameClient.ts). It wraps Socket.IO acknowledgements cleanly and should remain the single client transport layer. The existing arena runtime is [src/client/game/GameCanvas.tsx](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/client/game/GameCanvas.tsx), which currently mounts a custom Canvas renderer via [src/client/game/renderer.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/client/game/renderer.ts), a keyboard sampler, and snapshot prediction code.
+`src/shared/model.ts`, `src/shared/protocol.ts`, and `src/shared/constants.ts` are the contract shared by browser and server. They currently contain `Team`, cores, reactors, delivery statistics, and boolean direction input; Task 1 replaces them atomically. `src/server/game/state.ts`, `geometry.ts`, and `simulation.ts` form the pure game domain. A "pure" domain here means code that receives state plus inputs and returns state/events without importing Socket.IO, React, Phaser, DOM APIs, or clocks. `src/server/rooms/roomManager.ts` owns membership, sessions, fixed-step scheduling, and match lifecycle. `src/server/network/socketHandlers.ts` validates public socket messages, while `createGameServer.ts` composes HTTP, Socket.IO, publications, health, and the private test harness.
 
-On the server, [src/server/rooms/roomManager.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/server/rooms/roomManager.ts) owns room creation, join, resume, host migration, ready/start gating, disconnect reservations, and the simulation loop. It currently enforces team balance and remaps room state to team-based players. The authoritative simulation lives in [src/server/game/simulation.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/server/game/simulation.ts) and [src/server/game/state.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/server/game/state.ts); both still model core pickup, tackle, delivery, and team scoring.
+`src/client/network/GameClient.ts` is the typed Socket.IO wrapper. `src/client/state/gameStore.ts` translates network state into screens and actions. `src/client/App.tsx` selects landing, lobby, match, and result screens. `src/client/game/GameCanvas.tsx`, `renderer.ts`, `keyboard.ts`, and the current `prediction.ts` are the rejected hand-written arena client; Task 6 replaces them with Phaser and deletes them after the new mount passes. React remains responsible for text, forms, focus, HUD, reconnect overlay, mute control, and result actions.
 
-The shared contract lives in [src/shared/model.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/shared/model.ts), [src/shared/constants.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/shared/constants.ts), and [src/shared/protocol.ts](/Users/serkances/dev/game/.worktrees/neon-relay-implementation/src/shared/protocol.ts). These files are the first safe place to pivot because every other subsystem consumes them.
+Vitest currently runs in jsdom for every file. Server-only load tests must opt into the Node environment with the file pragma `// @vitest-environment node`. Playwright tests will use an in-process `GameServer` fixture rather than a production socket or HTTP cheat endpoint. `npm run verify` is the broad source/build gate; the plan adds `test:load`, strengthens `test:e2e`, and makes `verify` include focused Node/load configuration without running long visual acceptance twice.
 
-The dirty test files listed in `git status --short` are branch-local unfinished work, not unrelated user files elsewhere in the repo. They must either be completed in place or replaced by stronger tests that cover the same UI and state concerns.
+## Target File Map
 
-## File Structure
+The shared layer will retain `src/shared/model.ts`, `protocol.ts`, `constants.ts`, and `names.ts`, and add `src/shared/kinematics.ts` with `kinematics.test.ts`. Model owns serializable readonly shapes only; protocol owns Zod schemas and Socket.IO event signatures; constants owns tuning, chassis/accent lists, and arena vertices; kinematics owns pure velocity integration used by server and local prediction.
 
-The refactor should converge on the following boundaries.
+The server game layer will retain `state.ts`, `geometry.ts`, and `simulation.ts`, and add `movement.ts`, `movement.test.ts`, `combat.ts`, and `combat.test.ts`. Geometry owns vectors and polygon queries. Movement owns platform contraction, acceleration, drag, dash velocity, void pull, and separation. Combat owns attack timelines, hit arcs, overload, hitstun, and target deduplication. Simulation owns phase ordering, timer/respawn/knockout/result transitions, snapshots, connectivity, and the forced-knockout domain command.
 
-- `src/shared/model.ts`: free-for-all room, chassis, accent, player combat, match phase, result, and typed event payloads.
-- `src/shared/constants.ts`: platform polygons, contraction timings, move/combat tuning, chassis identifiers, accent palette, and UI-readable control labels.
-- `src/shared/protocol.ts`: revised Zod schemas and Socket.IO event maps, including `lobby:chassis` and richer `match:input`.
-- `src/server/game/geometry.ts`: pure polygon, vector, collision, separation, knockback, and spawn-anchor helpers.
-- `src/server/game/state.ts`: canonical `MatchState`, player combat state, attack-instance tracking, score/stat bookkeeping, and snapshot projection.
-- `src/server/game/simulation.ts`: fixed-step rule ordering exactly as required by the spec.
-- `src/server/rooms/roomManager.ts`: room membership, reservation windows, host migration, start/rematch rules, pause/no-contest behavior, and publication cadence.
-- `src/server/network/socketHandlers.ts` and `src/server/network/createGameServer.ts`: payload validation and broadcast wiring only, with no combat logic.
-- `src/client/network/GameClient.ts`: transport wrapper updated for new events and actions only.
-- `src/client/state/gameStore.ts`: canonical room/match/result shell state, bridge subscriptions, chassis-ready/rematch actions, and user-facing errors.
-- `src/client/game/`: Phaser runtime. Replace `GameCanvas.tsx` and `renderer.ts` with a mount component and focused modules:
-  - `PhaserGame.tsx`: React mount/unmount of exactly one Phaser game instance.
-  - `presentationBridge.ts`: typed bridge between store/network snapshots and Phaser scenes.
-  - `scenes/BootScene.ts`: preload and asset validation.
-  - `scenes/ArenaScene.ts`: world rendering, fighter view lifecycle, platform view, camera, and effects.
-  - `input/controller.ts`: keyboard/mouse sampling, blur cleanup, and normalized combat input frames.
-  - `net/prediction.ts`: local prediction, reconciliation, and interpolation tuned for the new movement model.
-  - `view/fighterView.ts`, `view/platformView.ts`, `view/effects.ts`, `audio/audioBus.ts`: focused presentation responsibilities.
-- `src/client/ui/`: React-owned non-game surfaces. Keep `LandingScreen.tsx`, `LobbyScreen.tsx`, `TopBar.tsx`, `ToastRegion.tsx`; add real `ConnectionOverlay.tsx` and `ResultScreen.tsx`; remove team UI and old core HUD semantics.
-- `public/assets/`: original fighter textures, arena textures, UI effect sprites, and short audio cues. If generated locally, keep them original and repository-safe.
+The Phaser client will add `src/client/game/GamePresentationBridge.ts`, `PhaserArena.tsx`, `phaser/createNeonGame.ts`, `phaser/BootScene.ts`, `phaser/ArenaScene.ts`, `phaser/ArenaInput.ts`, `phaser/fighterManifest.ts`, `phaser/FighterView.ts`, `phaser/animationPlan.ts`, `phaser/AnimationDirector.ts`, `phaser/ImpactFx.ts`, and `phaser/GameAudio.ts`, with focused sibling tests for pure controllers and injected lifecycle seams. The current Canvas renderer and keyboard controller are deleted only after the Phaser mount, input, and prediction tests pass.
 
-Obsolete files after migration: `src/client/game/renderer.ts` and its tests, the old team-oriented parts of `src/client/game/GameCanvas.tsx`, and any shared/server/client types or tests that still mention cores, reactors, teams, or tackles.
+The final assets live under `public/assets/fighters/`, `public/assets/arena/`, `public/assets/fx/`, and `public/assets/audio/`. Four fighters use layered transparent SVG textures for body, left arm, right arm, and core so Phaser can animate poses continuously without relying on inconsistent generated sprite-sheet frames. A concept sheet may be generated for visual direction, but final assets must be inspectable, transparent, original, and free from baked checkerboards or stock marks. `scripts/generate-audio.mjs` deterministically creates the short original WAV cues checked into `public/assets/audio/`.
 
-## Plan of Work
+## Milestone 1: A New Deterministic Game Exists Without a Renderer
 
-The work proceeds in vertical slices so the app stays runnable. Start by rewriting the shared contract because every other file depends on it. Replace `Team` and team-score-centric types with `ChassisId`, `AccentId`, `CombatInputFrame`, `RoomPlayerState`, `MatchPlayerState`, `MatchResult`, `ScoreEntry`, and typed combat events such as `HIT`, `KNOCKOUT`, `RESPAWN`, `PHASE`, and `RESULT`. Update `src/shared/protocol.ts` so the client sends `lobby:chassis`, `lobby:ready`, `match:start`, and `match:input` with movement axes, aim vector, and button states, while the server emits room state, start snapshot, periodic snapshots, and authoritative events. Rewrite the shared tests first and watch the current contract fail before writing the new types.
+Tasks 1–4 replace the rules from the inside out. At the end of this milestone, two real Socket.IO clients can create a room, choose chassis, ready, start, exchange combat input, receive hit/knockout/snapshot events, reconnect without a penalty, enter `NO_CONTEST` when necessary, and rematch. The old browser may not render the new match yet, but unit and integration tests prove the entire authoritative game.
 
-Next, replace the authoritative server combat domain. `src/server/game/state.ts` should describe a player in plain gameplay terms: position, velocity, facing, overload, combo step, attack phase/timers, charge duration, dash state, hitstun, respawn protection, recent attacker, score, knockouts, falls, landed hits, attempted attacks, and connection activity. `src/server/game/geometry.ts` must expose pure helpers for polygon containment, shortest edge normal, off-stage distance, circular body separation, and deterministic spawn-anchor selection. `src/server/game/simulation.ts` then implements the exact 60 Hz phase order from the spec: normalize input, advance timers, update arena contraction, start legal actions, integrate movement and knockback, separate players, resolve attack arcs, apply knockouts and respawns, and advance the match/result state. Replace the relay tests with server tests that prove combo timing, heavy-charge behavior, overload/impulse math, dash invulnerability, knockout attribution, self-falls, respawn protection cancellation, sudden death, and deterministic replay.
+### Task 1: Replace shared contracts
 
-After the simulation is stable, adapt the room lifecycle and socket boundary. `src/server/rooms/roomManager.ts` should stop assigning teams and instead assign deterministic accent slots and default chassis by join order. Starting a match should require at least two connected players and every connected player ready. Disconnecting during a match should remove the player from active simulation immediately, preserve their score/chassis/accent/statistics for 20 seconds, and either continue the match, pause it awaiting a valid opponent resume, or resolve to `NO_CONTEST` without granting wins or losses. Rewrite `src/server/rooms/roomManager.test.ts` and the integration tests around these rules. Update `socketHandlers.ts` so payload validation matches the new schemas and invalid aim or stale input sequences are rejected safely. Keep the real Socket.IO integration harness and load-smoke tests, but pivot them to chassis-ready-start-combat-rematch flow.
+**Files:** Modify `src/shared/model.ts`, `src/shared/protocol.ts`, `src/shared/constants.ts`, `src/shared/protocol.test.ts`; create `src/shared/kinematics.ts` and `src/shared/kinematics.test.ts`; later tasks consume these exact names.
 
-Once the shared/server path is green, replace the browser arena runtime. Remove the custom Canvas renderer path and mount Phaser from React through `PhaserGame.tsx`. The `presentationBridge.ts` module becomes the only seam between store/network state and Phaser. It receives canonical snapshots and events from `gameStore`, exposes the latest room/match presentation state to scenes, and accepts normalized local input frames back to `store.sendInput`. `BootScene` loads assets and surfaces recoverable failures. `ArenaScene` owns fighter containers, animation state machines, platform rendering, contraction warning, particles, camera response, and audio triggers from authoritative events. Keep local movement and attack-start prediction immediate, but ensure only the server can confirm hits, overload, knockouts, or score changes. The Phaser unit tests should prove a single mount, clean teardown, fighter view add/update/remove behavior, and event-triggered effect/audio contracts.
+**Interfaces produced:** `Chassis`, `PlayerAccent`, `AttackKind`, `AttackPhase`, `InputFrame`, `PlayerStats`, `RoomPlayer`, `RoomState`, `MatchPlayer`, `MatchSnapshot`, `GameEvent`, `ClientToServerEvents`, `ServerToClientEvents`, `GAME`, `ARENA`, `CHASSIS`, `ACCENTS`, `KinematicState`, and `advanceKinematics()`.
 
-Then refresh the React UI around the new game. `LandingScreen.tsx` must show validation errors even when the user attempts actions from an incomplete form, rather than silently disabling them. `LobbyScreen.tsx` should replace team panels with player cards, chassis selectors, accent markers, ready state, and host controls. `TopBar.tsx`, `ConnectionOverlay.tsx`, and the match HUD should describe room code, connection state, timer, score ranking, local overload, dash/charge state, and controls hints, with no core-carry UI. `ResultScreen.tsx` should rank players by score, then fewer falls, then more landed hits, then join order, and expose `Tekrar Hazır` and host-only `Lobiye Dön`. Update CSS tokens and layout with a brighter, more readable arena shell, but keep the non-game controls keyboard reachable and visibly focused.
+**Step 1 — write the red contract tests.** Replace team/core fixtures in `protocol.test.ts` and create `kinematics.test.ts`. The tests must assert strict chassis parsing, finite bounded axes, rejection of legacy button fields, stable room/match serialization, movement normalization, zero-aim retention, and constants copied from the approved spec. Use concrete payloads such as:
 
-Finish by updating the end-to-end and live-delivery path. Replace README copy, game name, scripts if needed, and testing instructions so `npm run verify`, `npm run test:e2e`, and `npm run lan` still work. Run a real local browser flow from at least two sessions, prove `/health` on localhost and one LAN address, and only then prepare the public GitHub push.
+    expect(matchInputSchema.safeParse({
+      seq: 7,
+      moveX: 1,
+      moveY: 0,
+      aimX: 0.6,
+      aimY: -0.8,
+      quick: true,
+      heavy: false,
+      dash: false
+    }).success).toBe(true);
+    expect(matchInputSchema.safeParse({
+      seq: 8,
+      up: true,
+      down: false,
+      left: false,
+      right: false,
+      dash: false
+    }).success).toBe(false);
 
-## Concrete Steps
+**Step 2 — prove RED.** From the implementation worktree run:
 
-### Task 1: Shared Contract Replacement
+    npx vitest run src/shared/protocol.test.ts src/shared/kinematics.test.ts
 
-**Files:** `src/shared/model.ts`, `src/shared/constants.ts`, `src/shared/protocol.ts`, `src/shared/names.ts`, `src/shared/*.test.ts`, `package.json`
+Expect compilation failures for missing `Chassis`, `KinematicState`, and `advanceKinematics`, or failing legacy-schema assertions. Record the short failure in `Surprises & Discoveries` if it differs.
 
-**Produces:** `ChassisId`, `AccentId`, `CombatInputFrame`, `RoomState`, `MatchSnapshot`, `GameEvent`, `MatchResult`, `ClientToServerEvents`, `ServerToClientEvents`, updated `GAME` and arena constants
+**Step 3 — implement the shared contract.** Replace `model.ts` with readonly serializable types. Use these exact primary shapes:
 
-- [ ] Write failing shared tests for chassis selection, input schema validation, room code and name normalization, and typed combat events.
-- [ ] Add `phaser@4.2.1` to `package.json` and update package lock.
-- [ ] Replace shared types and constants to match the spec exactly, removing core/team-only artifacts.
-- [ ] Run `npx vitest run src/shared` and `npm run typecheck`; keep iterating until green.
-- [ ] Commit with a message equivalent to `refactor: replace relay shared contract with knockout model`.
-
-### Task 2: Deterministic Combat Simulation
-
-**Files:** `src/server/game/state.ts`, `src/server/game/geometry.ts`, `src/server/game/simulation.ts`, `src/server/game/*.test.ts`
-
-**Consumes:** updated shared model and constants
-
-**Produces:** `createMatchState`, `snapshotMatch`, `stepMatch`, deterministic attack IDs, respawn and contraction helpers, replay-safe event ordering
-
-- [ ] Write failing server tests for movement acceleration/drag, dash rules, combo timing, heavy charge/release, hit detection, overload knockback scaling, knockout attribution, self-fall, respawn protection, and sudden death.
-- [ ] Replace relay state and simulation with the combat model in the spec.
-- [ ] Add a deterministic replay test that runs the same seed and input stream twice and expects identical snapshots/events.
-- [ ] Run `npx vitest run src/server/game` until fully green.
-- [ ] Commit with a message equivalent to `feat: add authoritative neon knockout combat simulation`.
-
-### Task 3: Room Lifecycle and Network Integration
-
-**Files:** `src/server/rooms/roomManager.ts`, `src/server/rooms/roomManager.test.ts`, `src/server/network/socketHandlers.ts`, `src/server/network/createGameServer.ts`, `src/client/network/GameClient.ts`, `src/client/network/GameClient.test.ts`, `tests/integration/*`, `tests/load/*`
-
-**Consumes:** new shared protocol and combat simulation
-
-**Produces:** chassis-ready-start-rematch socket flow, pause/resume/no-contest handling, typed server errors, and updated load/integration proof
-
-- [ ] Write failing tests for chassis selection resetting ready, host migration, reconnect grace, paused match resume, no-contest cleanup, invalid payload rejection, and stale input handling.
-- [ ] Replace room rules and socket wiring to the new protocol while preserving the existing create/join/resume foundation.
-- [ ] Update or create integration/load tests so multiple real Socket.IO clients can complete a knockout match lifecycle and rematch.
-- [ ] Run focused server/integration tests, then run the eight-client smoke test three times.
-- [ ] Commit with a message equivalent to `feat: wire neon knockout rooms and socket flow`.
-
-### Task 4: Phaser Arena Runtime
-
-**Files:** `src/client/game/PhaserGame.tsx`, `src/client/game/presentationBridge.ts`, `src/client/game/scenes/BootScene.ts`, `src/client/game/scenes/ArenaScene.ts`, `src/client/game/input/controller.ts`, `src/client/game/net/prediction.ts`, `src/client/game/view/*`, `src/client/game/audio/*`, `src/client/game/*.test.ts`, `public/assets/*`, remove or replace `src/client/game/GameCanvas.tsx` and `src/client/game/renderer.ts`
-
-**Consumes:** store snapshot/event subscriptions and `store.sendInput`
-
-**Produces:** single Phaser mount, authoritative event presentation, local prediction, animation blending, audio mute support, reduced-motion handling
-
-- [ ] Write failing client tests for single Phaser mount, clean teardown, bridge snapshot flow, fighter view lifecycle, and event-driven effects/audio.
-- [ ] Replace the Canvas runtime with the Phaser bridge and focused presentation modules.
-- [ ] Add or import original fighter and arena assets plus short audio cues, ensuring all assets are repo-safe and transparent.
-- [ ] Verify idle/move blend, combo chaining, dash, knockout, and respawn transitions in both automated tests and a manual browser run.
-- [ ] Commit with a message equivalent to `feat: add phaser arena presentation for neon knockout`.
-
-### Task 5: React UI and Styling Refresh
-
-**Files:** `src/client/App.tsx`, `src/client/state/gameStore.ts`, `src/client/state/gameStore.test.ts`, `src/client/ui/LandingScreen.tsx`, `src/client/ui/LobbyScreen.tsx`, `src/client/ui/TopBar.tsx`, `src/client/ui/ConnectionOverlay.tsx`, `src/client/ui/ResultScreen.tsx`, `src/client/ui/*.test.tsx`, `src/client/styles/*.css`
-
-**Consumes:** updated room and match state plus bridge-friendly HUD data
-
-**Produces:** visible validation, chassis lobby, reconnect overlay, proper result screen, match HUD, and polished desktop styling
-
-- [ ] Write failing component and store tests that cover visible landing validation, chassis ready flow, reconnect overlay, result ranking, and sound/reduced-motion persistence.
-- [ ] Replace team/core UI semantics in the store and screens with chassis, accent, score ranking, overload, dash/charge, rematch, and lobby return actions.
-- [ ] Update the app shell to mount Phaser in match state and real result UI in result state.
-- [ ] Run `npx vitest run src/client` until green, including the previously dirty draft tests now brought into the final contract.
-- [ ] Commit with a message equivalent to `feat: refresh neon knockout ui and hud`.
-
-### Task 6: End-to-End Verification and Delivery
-
-**Files:** `README.md`, `playwright.config.ts`, `tests/e2e/*`, any verification helpers, final plan updates
-
-**Consumes:** completed app
-
-**Produces:** verified browser flow, README host/join instructions, final branch ready for push
-
-- [ ] Update README name, controls, host/join steps, reconnect expectations, and troubleshooting to match the shipped game.
-- [ ] Update Playwright tests for create, join, chassis select, ready, start, movement, attack exchange, forced result, rematch, and reconnect flow.
-- [ ] Run `npm run verify`, `npm run test:e2e`, and a real `npm run lan` session with `/health` checks on localhost and one LAN address.
-- [ ] Update this plan’s `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` with actual results and evidence.
-- [ ] Prepare non-destructive Git status, final commits, and public GitHub push only after all checks are green.
-
-## Validation and Acceptance
-
-The final acceptance bar is behavioral, not structural. A successful implementation means:
-
-- `npm run verify` passes from `/Users/serkances/dev/game/.worktrees/neon-relay-implementation` with no lint, type, unit, or build failures.
-- `npm run test:e2e` proves two isolated browser sessions can create or join a room, choose chassis, ready, start, move, attack, see a knockout or forced-result path, reach results, and rematch.
-- A manual local run on `http://localhost:4173` shows smooth fighter animation, readable hit feedback, shrinking arena warning, correct score rules, fast respawns without punitive delays, and a real reconnect overlay/path.
-- `/health` returns HTTP 200 on localhost and a discovered private LAN address while the production build is running.
-- No shipped UI, test, or runtime artifact still references core delivery, team columns, reactors, or old relay terminology except where historical repository names remain intentionally unchanged.
-
-## Idempotence and Recovery
-
-All code and test steps are repeatable. If a slice fails midway, restore confidence by rerunning the focused failing test first, not by reverting unrelated branch changes. When replacing old modules, delete obsolete code only after the new path is green in focused tests. Asset or Phaser boot failures must degrade to a recoverable user-visible state rather than a blank screen. Public push remains the only externally visible side effect and happens after verification.
-
-## Artifacts and Notes
-
-Useful checkpoints to capture while executing:
-
-    git status --short --branch
-    npm run verify
-    npm run test:e2e
-    curl -i http://127.0.0.1:4173/health
-
-For manual verification, keep one host browser and one guest browser or incognito session. Confirm that the guest can join with the four-character room code, that both players can start after choosing chassis and readying, and that a disconnect during a live round shows the reconnect overlay without awarding a phantom knockout.
-
-## Interfaces and Dependencies
-
-These interfaces must exist by the time implementation finishes:
-
-`src/shared/model.ts` should export stable discriminated types similar to:
-
-    export type ChassisId = 'RIFT' | 'BASTION' | 'PULSE' | 'WRAITH';
-    export type AccentId = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
-    export type CombatInputFrame = Readonly<{
+    export const CHASSIS = ['RIFT', 'BASTION', 'PULSE', 'WRAITH'] as const;
+    export type Chassis = (typeof CHASSIS)[number];
+    export type PlayerAccent = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+    export type InputFrame = Readonly<{
       seq: number;
       moveX: number;
       moveY: number;
@@ -242,25 +144,471 @@ These interfaces must exist by the time implementation finishes:
       heavy: boolean;
       dash: boolean;
     }>;
+    export type PlayerStats = Readonly<{
+      knockouts: number;
+      falls: number;
+      landedHits: number;
+      completedAttacks: number;
+    }>;
 
-`src/server/game/simulation.ts` should expose:
+`RoomPlayer` contains `playerId`, `name`, `chassis`, `accent`, `ready`, `connected`, `reconnectRemainingMs`, and `stats`. `MatchPlayer` contains identity plus `position`, `velocity`, `facing`, `overload`, `lastProcessedInputSeq`, `action`, `dashRemainingMs`, `dashCooldownRemainingMs`, `hitstunRemainingMs`, `respawnRemainingMs`, `protectionRemainingMs`, and stats. `MatchSnapshot` contains `tick`, `phase`, `remainingMs`, `platformProgress`, `scores: Readonly<Record<string, number>>`, sorted players, `winnerPlayerId`, and `resultReason`. Every `GameEvent` carries monotonically increasing `eventId` and server `tick`; define `HIT`, `KNOCKOUT`, `RESPAWN`, `PHASE`, `NO_CONTEST`, and `RESULT` variants.
+
+In `protocol.ts`, replace `lobby:team` with `lobby:chassis`, replace the input schema, and add strict finite `z.number().min(-1).max(1)` axis schemas. In `constants.ts`, copy the exact 60/30 Hz cadence, 120-second match, 5-KO target, 700 ms knockout control time, 650 ms protection, movement/attack tuning, chassis list, accent palette, regulation/minimum octagon vertices, and deterministic spawn anchors from the spec. Do not leave old exports aliased.
+
+In `kinematics.ts`, export:
+
+    export type KinematicState = Readonly<{
+      position: Vec2;
+      velocity: Vec2;
+      facing: Vec2;
+    }>;
+    export function normalizeAxes(x: number, y: number): Vec2;
+    export function normalizeAim(x: number, y: number, previous: Vec2): Vec2;
+    export function advanceKinematics(
+      state: KinematicState,
+      input: Pick<InputFrame, 'moveX' | 'moveY' | 'aimX' | 'aimY'>,
+      elapsedMs: number,
+      options: Readonly<{ dashVelocity: Vec2 | null; steeringScale: number; voidPull: Vec2 }>
+    ): KinematicState;
+
+Use semi-implicit Euler integration with seconds derived from `elapsedMs`, clamp ground target speed, apply acceleration toward input, apply exponential drag only when no ground input, then add dash/void contributions. Server-only collision stays out of this file.
+
+**Step 4 — prove GREEN and remove legacy symbols.** Run the focused tests, then:
+
+    rg -n "Team|CYAN|AMBER|MatchCore|coreId|carriedCore|delivery|reactor" src/shared
+    npm run typecheck
+
+The focused tests pass. The search returns no runtime shared-contract hits; typecheck is expected to reveal downstream files that Tasks 2–6 must migrate, so do not weaken types to make legacy consumers compile. Commit only the shared task files:
+
+    git add src/shared/model.ts src/shared/protocol.ts src/shared/constants.ts src/shared/protocol.test.ts src/shared/kinematics.ts src/shared/kinematics.test.ts
+    git commit -m "refactor: define Neon Knockout contracts"
+
+### Task 2: Deterministic arena geometry and movement
+
+**Files:** Rewrite `src/server/game/geometry.ts` and `geometry.test.ts`; create `src/server/game/movement.ts` and `movement.test.ts`; rewrite the state types and factory in `src/server/game/state.ts` enough to support movement fixtures.
+
+**Interfaces consumed:** `GAME`, `ARENA`, `InputFrame`, `Vec2`, `KinematicState`, `advanceKinematics()` from Task 1. **Interfaces produced:** `PlatformGeometry`, `platformAt()`, `pointInConvexPolygon()`, `distanceToPolygon()`, `nearestEdgeNormal()`, `advancePlayers()`, `separateActivePlayers()`, `MatchState`, and `createMatchState()`.
+
+**Step 1 — write geometry and movement failures.** Cover all eight regulation and minimum vertices, interpolation at 0/0.5/1, inside/outside distance, 80-pixel knockout threshold, 360 px/s² outward pull, 45% off-platform steering, acceleration/max speed/drag, dash direction fallback to facing, player separation, and deterministic safest spawn selection. A representative assertion is:
+
+    const platform = platformAt(0.5);
+    expect(platform.vertices[0]).toEqual({ x: 280, y: 120 });
+    expect(distanceToPolygon({ x: 640, y: 360 }, platform.vertices)).toBe(0);
+    expect(isKnockedOut({ x: 640, y: -1 }, platform)).toBe(true);
+
+**Step 2 — prove RED.** Run:
+
+    npx vitest run src/server/game/geometry.test.ts src/server/game/movement.test.ts
+
+Expect missing-module or missing-function failures.
+
+**Step 3 — implement focused modules.** `geometry.ts` exports pure vector/polygon functions and computes distance to every segment without rounding. `movement.ts` exports:
+
+    export type PlatformGeometry = Readonly<{ vertices: readonly Vec2[] }>;
+    export function platformAt(progress: number): PlatformGeometry;
+    export function advancePlayers(state: MatchState, stepMs: number): void;
+    export function separateActivePlayers(state: MatchState): void;
+    export function chooseSafestSpawn(state: MatchState, playerId: string): Vec2;
+
+`state.ts` defines `MutableMatchPlayer`, `AttackRuntime`, and `MatchState`. `createMatchState(seeds, seed)` sorts seeds by stable player ID, assigns deterministic spawn anchors, starts `COUNTDOWN` at 3,000 ms, creates zeroed scores/stats, and initializes every player's last valid facing to `(1,0)`. Keep attack resolution out of this task; movement fixtures may set action timers directly.
+
+**Step 4 — prove movement GREEN.** Run the two focused files twice and compare serialized final fixtures to prove repeatability:
+
+    npx vitest run src/server/game/geometry.test.ts src/server/game/movement.test.ts
+    npx vitest run src/server/game/geometry.test.ts src/server/game/movement.test.ts
+
+Both runs pass with identical assertion counts. Then commit:
+
+    git add src/server/game/geometry.ts src/server/game/geometry.test.ts src/server/game/movement.ts src/server/game/movement.test.ts src/server/game/state.ts
+    git commit -m "feat: add deterministic knockout movement"
+
+### Task 3: Authoritative combat and match simulation
+
+**Files:** Create `src/server/game/combat.ts` and `combat.test.ts`; rewrite `src/server/game/simulation.ts` and `simulation.test.ts`; adjust `state.ts` only for fields proven necessary by tests.
+
+**Interfaces consumed:** movement/state interfaces from Task 2. **Interfaces produced:** `startActions()`, `resolveAttackHits()`, `stepMatch()`, `snapshotMatch()`, `setPlayerConnected()`, and `forceKnockout()`.
+
+**Step 1 — write combat and lifecycle tests.** Name tests after observable behavior: quick combo buffers only in the final 120 ms; each attack target is hit once; quick steps use their exact windup/active/recovery windows; heavy charge clamps at 180–700 ms; dash cancels only uncommitted charge; protection rejects hits but cancels before the protected player attacks; overload multiplier and 90–230 ms hitstun are exact; normal knockout credits the last attacker inside four seconds; self-fall gives no point; control returns at 700 ms; contraction warns/contracts at the specified clock; unique timed leader wins; tied leaders enter sudden death; repeated replay emits identical ordered events.
+
+Use event assertions rather than internal-only flags:
+
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'HIT',
+      attackerId: 'p1',
+      targetId: 'p2',
+      attack: 'QUICK_1',
+      resultingOverload: 8
+    }));
+
+**Step 2 — prove RED.** Run:
+
+    npx vitest run src/server/game/combat.test.ts src/server/game/simulation.test.ts
+
+Expect missing combat exports and old core assertions to fail.
+
+**Step 3 — implement the phase pipeline.** `combat.ts` owns attack state transitions and forward-arc hit testing. Use squared distance followed by normalized dot-product arc checks, stable target ordering, and a `Set<string>` on each attack runtime to prevent repeated hits. `simulation.ts` exports:
 
     export function stepMatch(
       state: MatchState,
-      inputs: ReadonlyMap<string, CombatInputFrame>,
+      inputs: ReadonlyMap<string, InputFrame>,
       stepMs: number
     ): readonly GameEvent[];
+    export function snapshotMatch(state: MatchState): MatchSnapshot;
+    export function setPlayerConnected(
+      state: MatchState,
+      playerId: string,
+      connected: boolean
+    ): readonly GameEvent[];
+    export function forceKnockout(
+      state: MatchState,
+      attackerId: string,
+      targetId: string
+    ): readonly GameEvent[];
 
-`src/client/game/presentationBridge.ts` should define the narrow seam between React and Phaser:
+Follow the nine-phase order in the spec exactly. `setPlayerConnected(false)` removes the player without awarding or changing statistics. `setPlayerConnected(true)` preserves overload and schedules the 180 ms warp entry plus 650 ms protection. `forceKnockout()` calls the same private knockout transition used by boundary detection; it exists only for in-process tests.
+
+**Step 4 — prove GREEN, determinism, and deletion.** Run focused tests plus:
+
+    npx vitest run src/server/game
+    rg -n "PICKUP|DROP|TACKLE|SCORE|golden-core|forceDelivery|resolveReactor" src/server/game
+
+All server game tests pass and the search returns no legacy runtime path. Commit:
+
+    git add src/server/game
+    git commit -m "feat: implement authoritative knockout combat"
+
+## Milestone 2: Rooms and Browsers Speak the New Game
+
+Tasks 4–6 connect the pure domain to real sockets and then to Phaser. At the end, two browsers can play the new match with basic but correct visuals, and all old Canvas/team/core code is gone.
+
+### Task 4: FFA rooms, reconnect, Socket.IO, and test harness
+
+**Files:** Rewrite/adapt `src/server/rooms/roomManager.ts`, `roomManager.test.ts`, `domainError.ts`, `src/server/network/socketHandlers.ts`, `createGameServer.ts`, `tests/integration/socketFlow.test.ts`, and `serverLifecycle.test.ts`.
+
+**Interfaces consumed:** all Tasks 1–3 contracts. **Interfaces produced:** `RoomManager.setChassis()`, `applyInput()`, `forceKnockout()`, `debugRoom()`, publications, and the revised `GameServer.testHarness`.
+
+**Step 1 — adapt and add red tests.** Keep the useful uncommitted reconnect-duration test, but replace team/delivery fixtures. Prove deterministic lowest-unused accent assignment, chassis cycling and validation, chassis change resetting ready, 2–8 FFA start, 60/30 Hz pacing, monotonic input, no-penalty disconnect, 20-second reservation, 180 ms resume entry, match continuation with at least two connected players, paused clocks below two, `NO_CONTEST` after the last valid opponent reservation expires, host migration, result/rematch, and cleanup. Integration tests must assert `HIT`, five forced `KNOCKOUT`s, player winner, result stats, resume identity, and no production test socket event.
+
+**Step 2 — prove RED.** Run:
+
+    npx vitest run src/server/rooms tests/integration/socketFlow.test.ts tests/integration/serverLifecycle.test.ts
+
+Expect failures for removed team methods, missing chassis handler, and missing forced knockout harness.
+
+**Step 3 — implement room/network migration.** Replace private room players with `chassis`, `accent`, free-for-all stats, and reconnect expiry. Remove `nextTiedTeam`, `assignTeam()`, `setTeam()`, and team-balance checks. Add:
+
+    setChassis(connectionId: string, chassis: Chassis): void;
+    forceKnockout(roomCode: string, attackerId: string, targetId: string): void;
+    debugRoom(roomCode: string): Readonly<{
+      phase: RoomPhase;
+      connectedCount: number;
+      reservedCount: number;
+      playerIds: readonly string[];
+      tick: number | null;
+      scores: Readonly<Record<string, number>> | null;
+    }> | null;
+
+`debugRoom()` returns copies only—never tokens, mutable maps, or expiration timestamps. `advance()` uses `GAME.tickRate` and `GAME.snapshotRate`; pause only the domain simulation, not reservation clocks. Expired under-population publishes one `NO_CONTEST` event, resets the room to lobby, preserves members/chassis/accent, and clears match statistics.
+
+Update socket schemas/handlers to `lobby:chassis` and the numeric/aim input. Raise the input bucket to 90/s and retain the 10/s room-action bucket. Revise the in-process harness to:
+
+    testHarness: {
+      forceKnockout(roomCode: string, attackerId: string, targetId: string): void;
+      disconnectPlayer(roomCode: string, playerId: string): void;
+      matchSnapshot(roomCode: string): MatchSnapshot | null;
+    } | null;
+
+No HTTP or Socket.IO event exposes the harness.
+
+**Step 4 — prove socket GREEN.** Run the focused suite, then run the integration test twice to catch listener leakage:
+
+    npx vitest run src/server/rooms tests/integration/socketFlow.test.ts tests/integration/serverLifecycle.test.ts
+    npx vitest run tests/integration/socketFlow.test.ts
+
+Expect all tests to pass and Vitest to exit without open-handle warnings. Commit only server/shared integration files:
+
+    git add src/server/rooms src/server/network tests/integration/socketFlow.test.ts tests/integration/serverLifecycle.test.ts
+    git commit -m "feat: connect FFA combat rooms"
+
+### Task 5: Client network/store and React flows
+
+**Files:** Rewrite/adapt `src/client/network/GameClient.ts` and test, `src/client/state/gameStore.ts`, `useGameStore.ts`, and test; modify `App.tsx`/test, `LandingScreen.tsx`/test, `LobbyScreen.tsx`/test, `TopBar.tsx`; create production `ConnectionOverlay.tsx` and `ResultScreen.tsx` for the already-started tests; modify CSS only enough to keep tests readable, leaving final polish to Task 8.
+
+**Interfaces consumed:** revised socket/model types. **Interfaces produced:** revised `GameClient`, `GameStore`, `createArenaBridge()`, landing/lobby/result actions, and canonical screen state.
+
+**Step 1 — rewrite tests to the new UX.** Preserve the existing red landing tests that click empty/incomplete actions so typed validation is visible. Adapt the interrupted store race and duplicate-welcome tests to chassis/FFA state. Add tests for `setChassis`, ready reset, result ranking, `NO_CONTEST` toast/lobby transition, authoritative reconnect countdown, sound setting, result-ready/rematch, and all subscription disposal. `LobbyScreen` must render four chassis silhouette buttons and no team columns.
+
+**Step 2 — prove RED.** Run:
+
+    npx vitest run src/client/network src/client/state src/client/App.test.tsx src/client/ui
+
+Expect missing chassis methods/components and legacy team fixture failures.
+
+**Step 3 — implement typed client state.** Revise `GameClient` methods to include:
+
+    setChassis(chassis: Chassis): Promise<Ack<null>>;
+    setReady(ready: boolean): Promise<Ack<null>>;
+    startMatch(): Promise<Ack<null>>;
+    sendInput(frame: InputFrame): void;
+    setResultReady(ready: boolean): Promise<Ack<null>>;
+    returnToLobby(): Promise<Ack<null>>;
+
+`gameStore.ts` keeps one canonical room/match snapshot, deduplicates welcome side effects, defers exactly one resume until pending acknowledgements settle, exposes match/event subscriptions, computes reconnect remaining time locally from authoritative published duration without inventing expiry fields, and maps `NO_CONTEST` to a Turkish toast before lobby. `LandingScreen` leaves actions clickable and delegates raw input to the store's typed validation. `LobbyScreen` selects chassis and ready state. `ResultScreen` ranks by knockouts, fewer falls, landed hits, then join order. `ConnectionOverlay` preserves the last game frame and shows countdown/retry state.
+
+**Step 4 — prove React GREEN and remove team language.** Run:
+
+    npx vitest run src/client/network src/client/state src/client/App.test.tsx src/client/ui
+    rg -n "CAMGÖBEĞİ|KEHRİBAR|Takım|setTeam|lobby:team|deliveries|tackles" src/client
+
+Focused tests pass and legacy runtime copy/search results are empty. Commit:
+
+    git add src/client/network src/client/state src/client/App.tsx src/client/App.test.tsx src/client/ui src/client/styles
+    git commit -m "feat: add Neon Knockout room flows"
+
+### Task 6: Phaser mount, bridge, input, prediction, and teardown
+
+**Files:** Pin Phaser in `package.json`/`package-lock.json`; create the Phaser/bridge files listed in Target File Map and focused tests; rewrite `src/client/game/prediction.ts`/test; replace `GameCanvas` use in `App.tsx`; delete `GameCanvas.tsx`/test, `renderer.ts`/test, and `keyboard.ts`/test after green replacement tests.
+
+**Interfaces consumed:** `GameStore`, combat snapshots/events, shared kinematics. **Interfaces produced:** `GamePresentationBridge`, `PhaserArena`, `createNeonGame()`, `ArenaInput`, `PredictionBuffer`, `SnapshotTimeline`, `BootScene`, and `ArenaScene`.
+
+**Step 1 — install exact dependency and write lifecycle/input/prediction failures.** Run:
+
+    npm install --save-exact phaser@4.2.1
+
+Change package name to `neon-knockout`. Tests inject a fake game factory so jsdom never requires WebGL. Assert exactly one game per mount, `destroy(true)` on unmount, no duplicate bridge listeners after rerender, context menu suppression only on the arena, release on blur/visibility/shutdown, normalized pointer aim, 60 Hz input cap, local movement/action-start prediction, 70 ms remote interpolation, and no predicted hit/score.
+
+**Step 2 — prove RED.** Run:
+
+    npx vitest run src/client/game
+
+Expect missing bridge/Phaser modules and old Canvas fixtures to fail.
+
+**Step 3 — implement the integration seam.** Define:
 
     export interface GamePresentationBridge {
-      getSnapshot(): PresentationSnapshot | null;
-      subscribeSnapshot(listener: (snapshot: PresentationSnapshot) => void): () => void;
+      getSnapshot(): MatchSnapshot | null;
+      subscribeSnapshot(listener: (snapshot: MatchSnapshot) => void): () => void;
       subscribeEvent(listener: (event: GameEvent) => void): () => void;
-      sendInput(frame: CombatInputFrame): void;
-      setSceneReady(ready: boolean): void;
+      subscribeMuted(listener: (muted: boolean) => void): () => void;
+      sendInput(frame: InputFrame): void;
     }
+    export type NeonGameFactory = (
+      parent: HTMLElement,
+      bridge: GamePresentationBridge,
+      options?: Readonly<{ reducedMotion?: boolean }>
+    ) => Pick<Phaser.Game, 'destroy'>;
 
-`src/client/game/PhaserGame.tsx` should mount one Phaser instance per React match screen lifetime and destroy it on unmount.
+`PhaserArena.tsx` owns a parent div and one game instance. `createNeonGame()` uses `Phaser.AUTO`, 1280×720 logical size, `Phaser.Scale.FIT`, `CENTER_BOTH`, capped DPR-compatible CSS, `BootScene`, and `ArenaScene`. `ArenaInput` samples Phaser keyboard/pointer state, projects pointer position through the main camera, retains previous facing for near-zero aim, and clears all held buttons on lifecycle loss. Keep Socket.IO out of every scene.
 
-Revision note: 2026-08-28. Created this replacement ExecPlan because the approved Neon Knockout spec supersedes the earlier relay plan and requires a full combat-first rewrite across shared, server, client, UI, and verification layers.
+Rewrite prediction around `advanceKinematics()` and canonical action state. `PredictionBuffer` replays unacknowledged input for position/velocity/facing only; the scene may start the local attack animation instantly but waits for `HIT`/`KNOCKOUT`. `SnapshotTimeline` interpolates remote containers at 70 ms and snaps only above one named tested threshold.
+
+**Step 4 — prove Phaser seam GREEN, then delete Canvas.** Run:
+
+    npx vitest run src/client/game src/client/App.test.tsx
+    npm run typecheck
+
+After these pass, remove the old Canvas/renderer/keyboard files with `apply_patch`, rerun the same command, and verify:
+
+    rg -n "GameCanvas|renderFrame|AuthoritativeParticles|KeyboardController|carriedCore" src
+
+The search returns no runtime hits. Commit dependency, lockfile, new Phaser files, rewritten prediction/App, and deletions:
+
+    git add package.json package-lock.json src/client/game src/client/App.tsx src/client/App.test.tsx
+    git commit -m "feat: render matches with Phaser"
+
+## Milestone 3: The Game Feels Authored, Not Merely Functional
+
+Tasks 7–8 replace all temporary presentation with final fighter identity, continuous animation, impact feedback, original audio, a compact HUD, responsive states, and visual quality gates. At the end, a normal hit is obvious without reading the HUD and a knockout returns control before the player feels removed from play.
+
+### Task 7: Fighter assets and continuous animation
+
+**Files:** Create four-part SVG sets under `public/assets/fighters/{rift,bastion,pulse,wraith}/`; optionally store one reviewed concept sheet under `docs/design/concepts/`; create `fighterManifest.ts`, `FighterView.ts`, `animationPlan.ts`/test, and `AnimationDirector.ts`/test; extend `BootScene` and `ArenaScene`.
+
+**Interfaces consumed:** chassis/accent/action state, Phaser scene. **Interfaces produced:** `FIGHTER_MANIFEST`, `createFighterView()`, `animationPlanFor()`, and `AnimationDirector.apply()`.
+
+**Step 1 — establish a visual contract and red animation tests.** If using image generation, first load the installed `imagegen` skill and generate one four-character top-down concept sheet with this exact intent: “four original neon mech gladiators, RIFT narrow blade duelist, BASTION broad shield shoulders, PULSE triangular jet fins, WRAITH crescent hollow core, dark graphite materials, transparent or plain neutral concept background, strong readable silhouettes at 64 pixels, no logos, no text, no copyrighted characters.” Inspect the result; it is reference only, never ship a baked background.
+
+Write pure animation-plan tests proving idle/move blend ≤80 ms, no idle reset between combo steps, elapsed-millisecond timing, next-frame local anticipation, 700 ms knockout-to-control, 180 ms reconnect entry, protection cancellation pose, state continuity when a duplicate snapshot arrives, and reduced-motion variants.
+
+**Step 2 — prove RED.** Run:
+
+    npx vitest run src/client/game/phaser/animationPlan.test.ts src/client/game/phaser/AnimationDirector.test.ts
+
+Expect missing plan/director and asset manifest failures.
+
+**Step 3 — create final layered assets and animator.** Each chassis directory contains `body.svg`, `left-arm.svg`, `right-arm.svg`, and `core.svg`, all with `viewBox="0 0 128 128"`, transparent backgrounds, no embedded raster, and chassis-specific paths. Use graphite base shapes plus `currentColor`-compatible or neutral emissive masks that Phaser tints with the player's accent. The manifest is exact:
+
+    export const FIGHTER_MANIFEST: Readonly<Record<Chassis, Readonly<{
+      body: string;
+      leftArm: string;
+      rightArm: string;
+      core: string;
+      scale: number;
+    }>>>;
+
+`FighterView` creates a container with shadow, limbs, body, core, name, overload label, and local under-ring. `animationPlanFor(state, reducedMotion)` returns elapsed-ms keyframes for body position/rotation/scale, both arm angles, core scale/alpha, and trail intensity. `AnimationDirector.apply(player, view, nowMs)` changes plans only when canonical/predicted action state changes and preserves normalized progress for duplicate snapshots. Locomotion and idle loop independently from container interpolation.
+
+**Step 4 — validate assets and animation GREEN.** Run focused tests, then validate SVG structure and production loading:
+
+    npx vitest run src/client/game/phaser/animationPlan.test.ts src/client/game/phaser/AnimationDirector.test.ts
+    npm run build:client
+
+Open every SVG or a generated contact sheet and reject primitive circle-plus-vane bodies, clipping, opaque backgrounds, or indistinguishable silhouettes. Commit:
+
+    git add public/assets/fighters docs/design/concepts src/client/game/phaser
+    git commit -m "feat: add animated fighter chassis"
+
+### Task 8: Impact, audio, HUD, reconnect, and responsive polish
+
+**Files:** Create `ImpactFx.ts`/test, `GameAudio.ts`/test, `scripts/generate-audio.mjs`, generated audio assets; extend `ArenaScene`; rewrite the interrupted `audio.test.ts`; modify `App.tsx`, `TopBar.tsx`, new `MatchHud.tsx`/test, `ConnectionOverlay.tsx`, `ResultScreen.tsx`, and CSS token/layout/game files.
+
+**Interfaces consumed:** authoritative events and fighter views. **Interfaces produced:** `ImpactFx.ingest()`, `GameAudio.playEvent()`, `MatchHud`, and final visual states.
+
+**Step 1 — write red effect/audio/HUD tests.** Use fake Phaser adapters rather than starting WebGL. Assert each `eventId` is consumed once; `HIT` produces target flash/pose, directional particles, overload pulse, and camera nudge unless reduced motion; `KNOCKOUT` adds burst/edge/score feedback; mute stops every sound immediately and persists; first gesture unlocks audio; teardown removes emitters/sounds/listeners; HUD contains only phase/time, compact ranking, local overload, dash/charge, connection, and controls; 900×600 is supported while smaller viewports show the explicit warning.
+
+**Step 2 — prove RED.** Run:
+
+    npx vitest run src/client/game/phaser/ImpactFx.test.ts src/client/game/phaser/GameAudio.test.ts src/client/ui src/client/App.test.tsx
+
+Expect missing directors/HUD and old audio cue names to fail.
+
+**Step 3 — implement feedback and final UI.** `ImpactFx.ingest(event, snapshot)` deduplicates by event ID and drives Phaser camera shake/nudge, tweened sprite flash/hold, particles, trails, and announcer text without pausing server time. `GameAudio` loads generated short cues through Phaser Sound, unlocks after one user gesture, applies deterministic pitch variation derived from `eventId`, and owns disposal.
+
+Create `scripts/generate-audio.mjs` as a deterministic PCM WAV writer for `quick`, `heavy-charge`, `heavy-release`, `hit`, `dash`, `knockout`, `respawn`, `countdown`, `warning`, and `victory`; add `assets:audio` and run it once. Do not depend on remote media or copyrighted samples.
+
+Replace core/team HUD and copy. Use eight accent swatches plus names, not color alone. Landing errors remain adjacent to fields. Lobby chassis buttons show actual silhouettes. Reconnect overlay uses authoritative remaining duration. Result rankings follow the spec. CSS covers default, hover, focus-visible, active, disabled, loading, error, ready, reconnect, and success states at all four target viewports.
+
+**Step 4 — prove presentation GREEN and scan craft regressions.** Run:
+
+    npm run assets:audio
+    npx vitest run src/client/game src/client/ui src/client/App.test.tsx
+    npm run build:client
+
+Then run the installed Impeccable detector once against the changed client targets and resolve only findings that trace to the approved UI scope. Visually inspect fighter and arena output in a production build; do not accept tests alone. Commit:
+
+    git add scripts package.json package-lock.json public/assets src/client
+    git commit -m "feat: deliver knockout combat feedback"
+
+## Milestone 4: The Same Commit Is Proven and Published
+
+Tasks 9–10 prove real multi-client behavior, performance, cleanup, instructions, LAN reachability, supported viewport quality, and remote publication. No completion claim is made before every acceptance signal refers to the same commit.
+
+### Task 9: Load, E2E, performance, and README
+
+**Files:** Create `tests/load/eightClients.test.ts`, `tests/e2e/fixtures.ts`, `tests/e2e/knockout.spec.ts`, and `tests/e2e/performance.spec.ts`; modify `playwright.config.ts`, `vitest.config.ts`, `package.json`; create `README.md`; adapt integration helpers as needed without adding production test routes.
+
+**Interfaces consumed:** `GameServer`, private harness, public Socket.IO protocol, production client. **Interfaces produced:** reproducible `test:load`, `test:e2e`, and host/join instructions.
+
+**Step 1 — write the failing load/browser tests.** The Node load test starts `createGameServer({ host: '127.0.0.1', port: 0, enableTestHarness: true, clientDirectory: false })`, creates eight websocket-only clients, joins one room, selects chassis, readies, starts, sends legal 60 Hz input for 10 seconds, and asserts at least 250 snapshots per client, zero unexpected errors, responsive health, stable debug-room counts, and explicit client/listener/server cleanup. Add `// @vitest-environment node` at the file top.
+
+Playwright fixtures build once, start an ephemeral production `GameServer` in-process, and expose its origin/harness only to the test process. Two isolated contexts must create/join/select/ready/start, move visibly, aim and land one real quick hit, force five knockouts only to reach results, rematch, disconnect/resume the same identity without a fall, and record no page or console errors. Performance test samples `requestAnimationFrame` during an eight-fighter scripted event burst and asserts median ≥58 FPS and p95 frame duration <25 ms.
+
+**Step 2 — prove RED.** Run:
+
+    npx vitest run tests/load/eightClients.test.ts
+    npm run test:e2e
+
+Expect missing load files/scripts/fixtures or unmet snapshot/combat selectors.
+
+**Step 3 — finish harness-safe automation and docs.** Add scripts:
+
+    "test:load": "vitest run tests/load/eightClients.test.ts",
+    "test:e2e": "npm run build && playwright test",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run test:load && npm run build"
+
+`README.md` starts with the exact host sequence `npm ci` then `npm run lan`, explains localhost versus printed private LAN URL, name and four-character room code, firewall guidance, controls, reconnect behavior, Node 20 requirement, macOS/Windows/Linux notes, health probe, troubleshooting, and every verification command. Do not claim WAN support.
+
+**Step 4 — prove automation GREEN and repeat cleanup.** Run:
+
+    npm run test:load
+    npm run test:load
+    npm run test:e2e
+    npm run verify
+
+All commands exit zero. The repeated load run emits no open-handle warning. Commit:
+
+    git add tests playwright.config.ts vitest.config.ts package.json package-lock.json README.md
+    git commit -m "test: verify multiplayer delivery"
+
+### Task 10: Completion audit, live acceptance, and public release
+
+**Files:** Create `docs/verification/2026-08-28-neon-knockout-acceptance.md`; modify only defects found by acceptance; update this ExecPlan living sections; merge/push after a clean final review.
+
+**Interfaces consumed:** every acceptance gate. **Produces:** one verified local/remote `main` SHA and public playable source.
+
+**Step 1 — clean-install and automated completion audit.** Stop only the known old preview process on port 4173 after identifying it. In the implementation worktree run:
+
+    npm ci
+    npm run verify
+    npm run test:e2e
+    npm run test:load
+    npm run test:load
+
+Record exact counts, durations, and commit SHA in the acceptance document. Search source/docs/assets for legacy runtime concepts and placeholders:
+
+    rg -n "Neon Relay|CYAN|AMBER|core|reactor|delivery|tackle|TODO|TBD|placeholder" src public README.md
+
+Only intentionally historical documentation references may remain.
+
+**Step 2 — real production and LAN acceptance.** Start `npm run lan`, capture its localhost and RFC1918 URL, and prove:
+
+    curl --fail http://127.0.0.1:4173/health
+    curl --fail http://<printed-private-ip>:4173/health
+
+Use two real browser sessions against the production build to complete create/join/chassis/ready/start/real hit/knockout/result/rematch and one forced disconnect/resume. Inspect landing, lobby, match, contraction warning, reconnect overlay, and results at 1440×900, 1280×720, 1024×768, and 900×600. Save representative screenshots under `docs/verification/screenshots/`. Verify mute, focus order, field errors, reduced motion, no console errors, animation continuity, 700 ms control return, and readable eight-player effects.
+
+**Step 3 — independent review and defect loop.** Dispatch a spec-compliance reviewer and a code-quality/security reviewer against the final diff. Apply valid findings with focused regression tests, rerun affected suites, then rerun `npm run verify`, `npm run test:e2e`, and one final load test. Update the plan's `Surprises & Discoveries`, `Decision Log`, `Progress`, and `Outcomes & Retrospective`. Commit the acceptance evidence and fixes:
+
+    git add docs/superpowers/plans/2026-08-28-neon-knockout.md docs/verification src tests public README.md package.json package-lock.json
+    git commit -m "chore: complete Neon Knockout acceptance"
+
+**Step 4 — integrate and publish without overwriting user work.** Ensure the implementation worktree is clean. In `/Users/serkances/dev/game`, inspect `git status --short`; if unrelated user changes exist, preserve them and do not merge across them. Otherwise run:
+
+    git switch main
+    git merge --ff-only feat/neon-relay-game
+    git push origin main
+    git rev-parse HEAD
+    git ls-remote origin refs/heads/main
+
+The two printed SHAs must match exactly. Verify the GitHub repository is public and its default branch is reachable. Do not mark the goal complete until the remote equality, live acceptance, assets, tests, and README are all proven against that SHA.
+
+## Concrete Steps
+
+Every task follows one red-green-review-commit loop. Run commands from `/Users/serkances/dev/game/.worktrees/neon-relay-implementation` unless Task 10 explicitly switches to the root checkout. A focused RED run must fail for the expected missing behavior, not because of syntax, stale fixtures, or environment setup. A GREEN run must include the focused files plus the nearest existing integration surface. Update `Progress` immediately after each commit with UTC timestamp and SHA; append unexpected evidence to `Surprises & Discoveries` before proceeding.
+
+The broad command ladder is:
+
+    npm run lint
+    npm run typecheck
+    npm test
+    npm run test:load
+    npm run build
+    npm run test:e2e
+
+Expected final signals are zero lint/type errors, every Vitest suite passing, at least 250 snapshots for each of eight load clients over ten seconds, a successful Vite and server bundle, all Playwright scenarios passing without console errors, median ≥58 FPS and p95 frame duration <25 ms in the scripted burst, and HTTP 200 health through both localhost and one printed private address.
+
+## Validation and Acceptance
+
+The user-visible acceptance is a fast match, not merely green code. A new player can create a room with a visible validation error if the name is missing; a friend joins with the four-character code; both select visually different fighters and ready; the host starts; local movement and attack anticipation respond on the next rendered frame; confirmed hits visibly displace, flash, spark, shake, sound, and update overload; quick combo and heavy release are readable; knockout control returns within 700 ms; attacking cancels spawn protection; the arena contracts late in the round; the first to five wins; results/rematch work; and disconnect/resume adds no fall or knockout.
+
+The visual acceptance rejects any final circle-plus-vane fighter, static sliding sprite, hard idle snap between combo steps, opaque/baked asset background, unreadable accent, clipped HUD, silent confirmed hit when unmuted, camera motion under reduced-motion, or duplicated primary action. The technical acceptance rejects any production cheat route, client-authored hit/score, leaked listener/timer, mutable debug state, non-monotonic input acceptance, open handle, or local-only completion claim.
+
+## Idempotence and Recovery
+
+All test servers use port `0` and explicit `finally` cleanup, so failed runs can be repeated. Asset generation is deterministic and overwrites only the named generated WAV files. Do not use `git reset --hard`, `git checkout --`, or recursive deletion. The six existing uncommitted superseded test drafts belong to this agent's interrupted work: adapt or replace them with `apply_patch` inside their owning task, and stage them only when the new behavior passes.
+
+If Phaser cannot initialize in jsdom, do not add browser globals to production code; keep unit tests on injected factories and pure animation/effect planners, and prove the actual renderer in Playwright. If a build changes or removes `dist/` while an old preview is serving it, stop the identified preview first and restart after the build. If the root checkout cannot fast-forward at release, inspect both histories and preserve user changes; never force-push or reset. If the private LAN address is unavailable, record that live LAN acceptance is incomplete rather than substituting localhost.
+
+## Artifacts and Notes
+
+The authoritative design is `docs/superpowers/specs/2026-08-28-neon-knockout-design.md`. The superseded design remains only as historical evidence. The public remote is `git@github.com:reitenji/neon-relay.git`. The current design commits are `4087655` and `2b4e909`. Acceptance evidence belongs under `docs/verification/` and must identify the exact tested commit, commands, viewport, local URL, LAN URL, browser flow, and result.
+
+## Interfaces and Dependencies
+
+Pin `phaser` to exactly `4.2.1`; retain existing React, Express, Socket.IO, Zod, and test dependencies unless a measured gap requires otherwise. Do not add Matter, Pixi, Howler, a state-management library, a CSS framework, a database, or an asset runtime. Phaser owns the render/game-object lifecycle; React owns DOM lifecycle; `GamePresentationBridge` connects them; Socket.IO remains behind `GameClient`; the room manager owns time/session orchestration; and the pure game domain owns all authoritative rules.
+
+The stable cross-task functions are `advanceKinematics()`, `platformAt()`, `createMatchState()`, `stepMatch()`, `snapshotMatch()`, `setPlayerConnected()`, `forceKnockout()`, `RoomManager.setChassis()`, `RoomManager.applyInput()`, `RoomManager.debugRoom()`, `createSocketGameClient()`, `createGameStore()`, `createArenaBridge()`, `createNeonGame()`, `createFighterView()`, `animationPlanFor()`, `AnimationDirector.apply()`, `ImpactFx.ingest()`, and `GameAudio.playEvent()`. If implementation discovers a necessary signature change, update this plan's file map, task interfaces, Decision Log, and every downstream reference before committing code.
+
+## Plan Revision Note
+
+2026-08-28: Created this plan after the user approved the Phaser-based Neon Knockout redesign and explicitly requested faster delivery. The plan chooses subagent-driven execution, ten reviewer-sized vertical slices, short 700 ms knockouts, no disconnect penalty, and measurable animation continuity so speed does not reduce the requested gameplay quality.

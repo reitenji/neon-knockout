@@ -1,7 +1,7 @@
 # Neon Knockout — Combat-First LAN Game Redesign
 
 **Date:** 2026-08-28
-**Status:** Approved design, pending written-spec review
+**Status:** Approved design and implementation contract
 **Supersedes:** `2026-08-28-neon-relay-design.md`
 **Audience:** Implementation agents, reviewers, and acceptance testers
 
