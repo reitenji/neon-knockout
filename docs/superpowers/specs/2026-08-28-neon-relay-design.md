@@ -1,7 +1,7 @@
 # Neon Relay — LAN Multiplayer Game Design
 
 **Date:** 2026-08-28  
-**Status:** Approved direction  
+**Status:** Superseded by `2026-08-28-neon-knockout-design.md` after live playtest feedback
 **Audience:** Implementation agents and reviewers
 
 ## 1. Product Summary
