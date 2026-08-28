@@ -1,30 +1,50 @@
-export type Team = 'CYAN' | 'AMBER';
-
 export type RoomPhase = 'LOBBY' | 'COUNTDOWN' | 'MATCH' | 'RESULT';
 
 export type MatchPhase = 'COUNTDOWN' | 'REGULATION' | 'PAUSED' | 'SUDDEN_DEATH' | 'FINISHED';
 
+export type MatchResultReason = 'TARGET_SCORE' | 'TIME' | 'SUDDEN_DEATH' | 'NO_CONTEST';
+
+export type Chassis = 'RIFT' | 'BASTION' | 'PULSE' | 'WRAITH';
+
+export type AttackKind = 'QUICK_1' | 'QUICK_2' | 'QUICK_3' | 'HEAVY';
+
+export type AttackPhase = 'IDLE' | 'WINDUP' | 'ACTIVE' | 'RECOVERY';
+
 export type Vec2 = Readonly<{ x: number; y: number }>;
 
-export type Rect = Readonly<{ x: number; y: number; width: number; height: number }>;
+export type Polygon = readonly Vec2[];
 
-export type InputFrame = Readonly<{
+export type CombatInputFrame = Readonly<{
   seq: number;
-  up: boolean;
-  down: boolean;
-  left: boolean;
-  right: boolean;
+  moveX: number;
+  moveY: number;
+  aimX: number;
+  aimY: number;
+  quick: boolean;
+  heavy: boolean;
   dash: boolean;
 }>;
 
-export type PlayerStats = Readonly<{ deliveries: number; tackles: number }>;
+export type InputFrame = CombatInputFrame;
+
+export type PlayerStats = Readonly<{
+  knockouts: number;
+  falls: number;
+  landedHits: number;
+  attackAttempts: number;
+  attackHits: number;
+}>;
 
 export type RoomPlayer = Readonly<{
   playerId: string;
   name: string;
-  team: Team;
+  chassis: Chassis;
+  accentIndex: number;
   ready: boolean;
+  resultReady: boolean;
   connected: boolean;
+  reconnectRemainingMs: number | null;
+  score: number;
   stats: PlayerStats;
 }>;
 
@@ -32,48 +52,92 @@ export type RoomState = Readonly<{
   roomCode: string;
   phase: RoomPhase;
   hostPlayerId: string;
+  pauseRemainingMs: number | null;
+  result:
+    | Readonly<{
+        winnerPlayerId: string | null;
+        reason: MatchResultReason;
+      }>
+    | null;
   players: readonly RoomPlayer[];
 }>;
 
 export type MatchPlayer = Readonly<{
   playerId: string;
   name: string;
-  team: Team;
+  chassis: Chassis;
+  accentIndex: number;
   position: Vec2;
-  carriedCoreId: string | null;
-  lastProcessedInputSeq: number;
+  velocity: Vec2;
+  facing: Vec2;
+  overload: number;
+  score: number;
+  comboStep: 0 | 1 | 2 | 3;
+  attackKind: AttackKind | null;
+  attackPhase: AttackPhase;
+  attackPhaseRemainingMs: number;
+  chargeMs: number;
   dashRemainingMs: number;
   dashCooldownRemainingMs: number;
-  stunRemainingMs: number;
+  hitstunRemainingMs: number;
+  respawnRemainingMs: number;
+  invulnerableRemainingMs: number;
+  lastProcessedInputSeq: number;
+  connected: boolean;
   stats: PlayerStats;
 }>;
-
-export type MatchCore = Readonly<{
-  coreId: string;
-  position: Vec2;
-  carrierId: string | null;
-  golden: boolean;
-}>;
-
-export type Score = Readonly<Record<Team, number>>;
 
 export type MatchSnapshot = Readonly<{
   tick: number;
   phase: MatchPhase;
   remainingMs: number;
-  score: Score;
+  pauseRemainingMs: number | null;
+  contraction: number;
   players: readonly MatchPlayer[];
-  cores: readonly MatchCore[];
-  winner: Team | null;
+  winnerPlayerId: string | null;
+  resultReason: MatchResultReason | null;
 }>;
 
-export type GameEvent =
-  | Readonly<{ type: 'PICKUP'; playerId: string; coreId: string }>
-  | Readonly<{ type: 'DROP'; playerId: string; coreId: string; position: Vec2 }>
-  | Readonly<{ type: 'TACKLE'; attackerId: string; targetPlayerId: string; coreId: string }>
-  | Readonly<{ type: 'SCORE'; team: Team; playerId: string; coreId: string; score: Score }>
-  | Readonly<{ type: 'PHASE'; phase: MatchPhase }>
-  | Readonly<{ type: 'RESULT'; winner: Team | null; score: Score }>;
+export type MatchEvent =
+  | Readonly<{
+      type: 'HIT';
+      attackerId: string;
+      targetId: string;
+      attack: AttackKind;
+      impactPosition: Vec2;
+      impulse: number;
+      overload: number;
+      tick: number;
+    }>
+  | Readonly<{
+      type: 'KNOCKOUT';
+      attackerId: string | null;
+      targetId: string;
+      scoreAwardedTo: string | null;
+      score: Readonly<Record<string, number>>;
+      tick: number;
+    }>
+  | Readonly<{
+      type: 'RESPAWN';
+      playerId: string;
+      position: Vec2;
+      tick: number;
+    }>
+  | Readonly<{
+      type: 'PHASE';
+      phase: MatchPhase;
+      remainingMs: number;
+      tick: number;
+    }>
+  | Readonly<{
+      type: 'RESULT';
+      winnerPlayerId: string | null;
+      reason: MatchResultReason;
+      score: Readonly<Record<string, number>>;
+      tick: number;
+    }>;
+
+export type GameEvent = MatchEvent;
 
 export type SessionWelcome = Readonly<{
   playerId: string;
