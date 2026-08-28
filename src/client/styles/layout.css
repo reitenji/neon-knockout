@@ -1,8 +1,6 @@
 .app-shell {
   position: relative;
   isolation: isolate;
-  min-width: 900px;
-  min-height: 600px;
   height: 100dvh;
   padding: var(--space-3) var(--space-6) var(--space-4);
   display: grid;
@@ -10,6 +8,39 @@
   gap: var(--space-3);
   overflow: hidden;
   background-color: var(--color-bg);
+}
+
+.viewport-warning {
+  width: 100vw;
+  min-height: 100dvh;
+  padding: var(--space-4);
+  display: grid;
+  place-items: center;
+  background: var(--color-bg);
+}
+
+.viewport-warning__frame {
+  width: min(520px, calc(100vw - 32px));
+  padding: clamp(24px, 7vw, 48px);
+  text-align: center;
+}
+
+.viewport-warning__frame > * {
+  position: relative;
+  z-index: 1;
+}
+
+.viewport-warning__frame h1 {
+  margin: 0;
+  color: var(--color-warning);
+  font-size: clamp(1.45rem, 5vw, 2.15rem);
+}
+
+.viewport-warning__frame p {
+  margin: var(--space-4) auto 0;
+  max-width: 34rem;
+  color: var(--color-text-muted);
+  line-height: 1.55;
 }
 
 .app-shell::before {
