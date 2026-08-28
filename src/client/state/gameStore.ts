@@ -112,6 +112,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
   let disposed = false;
   let resumeAttemptedForConnection = false;
   let resumeQueued = false;
+  let acknowledgementsInFlight = 0;
   let toastId = 0;
   let pausePublishedAt = 0;
   let pausePublishedDuration: number | null = null;
@@ -186,14 +187,27 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
     }));
     return true;
   };
+  const beginAcknowledgement = (action: Exclude<PendingAction, null>): boolean => {
+    if (!beginAction(action)) return false;
+    acknowledgementsInFlight += 1;
+    return true;
+  };
+  const finishAcknowledgement = (action: Exclude<PendingAction, null>): void => {
+    acknowledgementsInFlight -= 1;
+    if (!disposed && state.pendingAction === action) {
+      patch((current) => ({ ...current, pendingAction: null }));
+    }
+    void flushResume();
+  };
   const attemptResume = async (): Promise<void> => {
     if (disposed || resumeAttemptedForConnection) return;
-    if (state.pendingAction !== null) { resumeQueued = true; return; }
+    if (acknowledgementsInFlight > 0 || state.pendingAction !== null) { resumeQueued = true; return; }
     const roomCode = storage.getItem(LAST_ROOM_KEY);
     const resumeToken = roomCode ? storage.getItem(resumeKey(roomCode)) : null;
     if (!roomCode || !resumeToken) return;
     resumeAttemptedForConnection = true;
     patch((current) => ({ ...current, pendingAction: 'resume', lastError: null, errorAction: null }));
+    acknowledgementsInFlight += 1;
     try {
       const acknowledgement = await client.resumeSession(roomCode, resumeToken);
       if (disposed) return;
@@ -207,9 +221,10 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       }
       persistWelcome(acknowledgement.data);
     } catch { if (!disposed) setUnexpectedFailure('resume'); }
+    finally { finishAcknowledgement('resume'); }
   };
   async function flushResume(): Promise<void> {
-    if (!resumeQueued || state.pendingAction !== null || state.connectionState !== 'connected') return;
+    if (!resumeQueued || acknowledgementsInFlight > 0 || state.pendingAction !== null || state.connectionState !== 'connected') return;
     resumeQueued = false;
     await attemptResume();
   }
@@ -221,7 +236,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       }
       patch((current) => ({ ...current, connectionState }));
       if (connectionState === 'connected') {
-        if (state.pendingAction !== null) resumeQueued = true;
+        if (acknowledgementsInFlight > 0 || state.pendingAction !== null) resumeQueued = true;
         else void attemptResume();
       }
     }),
@@ -231,16 +246,14 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       const screen = screenForRoom(room);
       patch((current) => ({
         ...current, room, screen, match: screen === 'LOBBY' ? null : current.match,
-        pendingAction: null, lastError: null, errorAction: null
+        lastError: null, errorAction: null
       }));
-      void flushResume();
     }),
     client.subscribe('match:started', (match) => {
       publishMatch(match);
       patch((current) => ({
-        ...current, match, screen: 'MATCH', pendingAction: null, lastError: null, errorAction: null
+        ...current, match, screen: 'MATCH', lastError: null, errorAction: null
       }));
-      void flushResume();
     }),
     client.subscribe('match:snapshot', (match) => {
       const shouldNotify = coarseMatchChanged(state.match, match);
@@ -271,11 +284,12 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
   const runAcknowledgedAction = async (
     action: Exclude<PendingAction, null>, invoke: () => Promise<Ack<null>>
   ): Promise<void> => {
-    if (!beginAction(action)) return;
+    if (!beginAcknowledgement(action)) return;
     try {
       const acknowledgement = await invoke();
       if (!disposed && !acknowledgement.ok) setFailure(action, acknowledgement.error);
     } catch { if (!disposed) setUnexpectedFailure(action); }
+    finally { finishAcknowledgement(action); }
   };
 
   const actions: GameStore['actions'] = {
@@ -284,13 +298,14 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       if (state.pendingAction !== null) return;
       const normalizedName = normalizeNameOrNull(name);
       if (!normalizedName) { setFailure('create-room', invalidNameError()); return; }
-      if (!beginAction('create-room')) return;
+      if (!beginAcknowledgement('create-room')) return;
       try {
         const acknowledgement = await client.createRoom(normalizedName);
         if (disposed) return;
         if (!acknowledgement.ok) { setFailure('create-room', acknowledgement.error); return; }
         persistWelcome(acknowledgement.data);
       } catch { if (!disposed) setUnexpectedFailure('create-room'); }
+      finally { finishAcknowledgement('create-room'); }
     },
     async joinRoom(name: string, code: string): Promise<void> {
       if (state.pendingAction !== null) return;
@@ -298,13 +313,14 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       if (!normalizedName) { setFailure('join-room', invalidNameError()); return; }
       const normalizedCode = normalizeCodeOrNull(code);
       if (!normalizedCode) { setFailure('join-room', invalidRoomCodeError()); return; }
-      if (!beginAction('join-room')) return;
+      if (!beginAcknowledgement('join-room')) return;
       try {
         const acknowledgement = await client.joinRoom(normalizedName, normalizedCode);
         if (disposed) return;
         if (!acknowledgement.ok) { setFailure('join-room', acknowledgement.error); return; }
         persistWelcome(acknowledgement.data);
       } catch { if (!disposed) setUnexpectedFailure('join-room'); }
+      finally { finishAcknowledgement('join-room'); }
     },
     setChassis(chassis): Promise<void> { return runAcknowledgedAction('chassis', () => client.setChassis(chassis)); },
     setReady(ready): Promise<void> { return runAcknowledgedAction('ready', () => client.setReady(ready)); },
@@ -353,6 +369,7 @@ export function createArenaBridge(store: GameStore): ArenaBridge {
     subscribeEvent: store.subscribeGameEvent,
     subscribeMuted(listener) {
       let previous = store.getSnapshot().soundMuted;
+      listener(previous);
       return store.subscribe(() => {
         const next = store.getSnapshot().soundMuted;
         if (next === previous) return;

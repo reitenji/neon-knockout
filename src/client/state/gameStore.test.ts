@@ -103,7 +103,9 @@ describe('createGameStore', () => {
     client.emit('session:welcome', successWelcome());
     const canonical = roomState({ players: [player({ chassis: 'RIFT', ready: true })] });
     client.emit('room:state', canonical);
-    await store.actions.setChassis('PULSE');
+    let settleChassis!: (acknowledgement: Ack<null>) => void;
+    client.setChassis.mockImplementation(() => new Promise((resolve) => { settleChassis = resolve; }));
+    const pendingChassis = store.actions.setChassis('PULSE');
     expect(client.setChassis).toHaveBeenCalledWith('PULSE');
     expect(store.getSnapshot().room).toBe(canonical);
     expect(store.getSnapshot().room?.players[0]).toMatchObject({ chassis: 'RIFT', ready: true });
@@ -111,6 +113,9 @@ describe('createGameStore', () => {
     const replacement = roomState({ players: [player({ chassis: 'PULSE', ready: false })] });
     client.emit('room:state', replacement);
     expect(store.getSnapshot().room).toBe(replacement);
+    expect(store.getSnapshot().pendingAction).toBe('chassis');
+    settleChassis({ ok: true, data: null });
+    await pendingChassis;
     expect(store.getSnapshot().pendingAction).toBeNull();
   });
 
@@ -129,11 +134,19 @@ describe('createGameStore', () => {
     client.emit('connection', 'connected');
     expect(client.resumeSession).not.toHaveBeenCalled();
     client.emit('room:state', roomState());
-    await vi.waitFor(() => expect(client.resumeSession).toHaveBeenCalledOnce());
+    await Promise.resolve();
+    expect(client.resumeSession).not.toHaveBeenCalled();
+    expect(store.getSnapshot().pendingAction).toBe('ready');
     client.emit('room:state', roomState());
-    expect(client.resumeSession).toHaveBeenCalledOnce();
+    client.emit('connection', 'connected');
+    expect(client.resumeSession).not.toHaveBeenCalled();
     settleReady({ ok: true, data: null });
     await pendingReady;
+    await vi.waitFor(() => expect(client.resumeSession).toHaveBeenCalledOnce());
+    client.emit('room:state', roomState());
+    client.emit('connection', 'connected');
+    await Promise.resolve();
+    expect(client.resumeSession).toHaveBeenCalledOnce();
   });
 
   it('deduplicates acknowledgement and event delivery of the same welcome', async () => {
@@ -143,11 +156,17 @@ describe('createGameStore', () => {
       client.emit('session:welcome', welcome);
       return { ok: true, data: welcome };
     });
-    const listener = vi.fn();
-    store.subscribe(listener);
+    let previousSession = store.getSnapshot().session;
+    const sessionTransitions: Array<typeof previousSession> = [];
+    store.subscribe(() => {
+      const currentSession = store.getSnapshot().session;
+      if (currentSession === previousSession) return;
+      previousSession = currentSession;
+      sessionTransitions.push(currentSession);
+    });
     await store.actions.createRoom('Ada');
     expect(store.getSnapshot().session?.playerId).toBe('player-1');
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(sessionTransitions).toHaveLength(1);
     expect(storage.writes.filter(([key]) => key === 'neon-relay:AB2Z:resume')).toHaveLength(1);
   });
 
@@ -200,11 +219,30 @@ describe('createGameStore', () => {
     const bridge = createArenaBridge(store);
     const listener = vi.fn();
     const unsubscribe = bridge.subscribeMuted(listener);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenLastCalledWith(false);
     store.actions.toggleSound();
     store.actions.dismissToast(999);
     expect(storage.getItem('neon-relay:muted')).toBe('true');
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(true);
+    unsubscribe();
+    store.actions.toggleSound();
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('delivers persisted mute immediately and disposes that subscription idempotently', () => {
+    const storage = new MemoryStorage();
+    storage.setItem('neon-relay:muted', 'true');
+    const { store } = createFixture(new FakeGameClient(), storage);
+    const bridge = createArenaBridge(store);
+    const listener = vi.fn();
+
+    const unsubscribe = bridge.subscribeMuted(listener);
+
     expect(listener).toHaveBeenCalledOnce();
     expect(listener).toHaveBeenCalledWith(true);
+    unsubscribe();
     unsubscribe();
     store.actions.toggleSound();
     expect(listener).toHaveBeenCalledOnce();
