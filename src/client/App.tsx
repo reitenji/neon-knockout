@@ -4,6 +4,8 @@ import type { GameStore } from './state/gameStore.js';
 import { useGameStore } from './state/useGameStore.js';
 import { LandingScreen } from './ui/LandingScreen.js';
 import { LobbyScreen } from './ui/LobbyScreen.js';
+import { ConnectionOverlay } from './ui/ConnectionOverlay.js';
+import { ResultScreen } from './ui/ResultScreen.js';
 import { ToastRegion } from './ui/ToastRegion.js';
 import { TopBar } from './ui/TopBar.js';
 
@@ -27,16 +29,6 @@ function useSupportedViewport(): boolean {
   return useSyncExternalStore(subscribeToViewport, viewportIsSupported, () => true);
 }
 
-function ResultPlaceholder() {
-  return (
-    <section className="screen future-screen" aria-label="Bekliyor">
-      <div className="tech-frame future-screen__frame">
-        <strong>Bekliyor</strong>
-      </div>
-    </section>
-  );
-}
-
 export function App({ store }: AppProps) {
   const state = useGameStore(store);
   const viewportSupported = useSupportedViewport();
@@ -51,7 +43,7 @@ export function App({ store }: AppProps) {
       <main className="viewport-warning">
         <section className="viewport-warning__frame tech-frame" role="alert" aria-labelledby="viewport-warning-title">
           <h1 id="viewport-warning-title">Pencere çok küçük</h1>
-          <p>Neon Relay en az 900 × 600 masaüstü alanı gerektirir. Pencereyi büyüt.</p>
+          <p>Neon Knockout en az 900 × 600 masaüstü alanı gerektirir. Pencereyi büyüt.</p>
         </section>
       </main>
     );
@@ -69,15 +61,33 @@ export function App({ store }: AppProps) {
         {state.screen === 'LOBBY' ? (
           <LobbyScreen
             state={state}
-            onSetTeam={store.actions.setTeam}
+            onSetChassis={store.actions.setChassis}
             onToggleReady={store.actions.setReady}
             onStart={store.actions.startMatch}
             onCopyRoomCode={store.actions.copyRoomCode}
           />
         ) : null}
 
-        {state.screen === 'MATCH' ? <GameCanvas store={store} localPlayerId={state.session?.playerId ?? ''} /> : null}
-        {state.screen === 'RESULT' ? <ResultPlaceholder /> : null}
+        {state.screen === 'MATCH' ? (
+          <>
+            <GameCanvas store={store} localPlayerId={state.session?.playerId ?? ''} />
+            {(state.connectionState !== 'connected' && state.connectionState !== 'idle') || state.reconnectRemainingMs !== null ? (
+              <ConnectionOverlay
+                connectionState={state.connectionState}
+                remainingMs={state.reconnectRemainingMs}
+                onRetry={store.actions.connect}
+              />
+            ) : null}
+          </>
+        ) : null}
+        {state.screen === 'RESULT' ? (
+          <ResultScreen
+            state={state}
+            onToggleReady={store.actions.setResultReady}
+            onStart={store.actions.startMatch}
+            onReturnToLobby={store.actions.returnToLobby}
+          />
+        ) : null}
       </main>
 
       <ToastRegion toasts={state.toasts} onDismiss={store.actions.dismissToast} />

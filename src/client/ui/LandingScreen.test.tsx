@@ -16,11 +16,34 @@ const landingState: ClientState = {
   errorAction: null,
   copyFeedback: 'idle',
   toasts: [],
-  soundMuted: false
+  soundMuted: false,
+  reconnectRemainingMs: null
 };
 
 describe('LandingScreen', () => {
   afterEach(cleanup);
+
+  it('submits the raw empty name so store validation can explain why room creation failed', () => {
+    const create = vi.fn(async () => undefined);
+    render(<LandingScreen state={landingState} onCreateRoom={create} onJoinRoom={async () => undefined} />);
+
+    const createButton = screen.getByRole('button', { name: 'Oda Kur' });
+    expect(createButton).toBeEnabled();
+    fireEvent.click(createButton);
+    expect(create).toHaveBeenCalledWith('');
+  });
+
+  it('submits incomplete join values so typed inline validation replaces a silent disabled action', () => {
+    const join = vi.fn(async () => undefined);
+    render(<LandingScreen state={landingState} onCreateRoom={async () => undefined} onJoinRoom={join} />);
+
+    fireEvent.change(screen.getByLabelText('Oyuncu adı'), { target: { value: 'Ada' } });
+    fireEvent.change(screen.getByLabelText('Oda kodu'), { target: { value: 'T' } });
+    const joinButton = screen.getByRole('button', { name: 'Odaya Katıl' });
+    expect(joinButton).toBeEnabled();
+    fireEvent.click(joinButton);
+    expect(join).toHaveBeenCalledWith('Ada', 'T');
+  });
 
   it('keeps entered values after a rejected join', async () => {
     const join = vi.fn<(name: string, roomCode: string) => Promise<void>>(async () => undefined);
@@ -94,7 +117,7 @@ describe('LandingScreen', () => {
       <LandingScreen state={landingState} onCreateRoom={async () => undefined} onJoinRoom={async () => undefined} />
     );
 
-    expect(screen.getByRole('heading', { name: 'NEON RELAY' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'NEON KNOCKOUT' })).toBeVisible();
     expect(screen.getByLabelText('Oyuncu adı')).toHaveClass('focus-ring');
     expect(screen.getByLabelText('Oda kodu')).toHaveClass('focus-ring');
     expect(screen.getByRole('button', { name: 'Oda Kur' })).toHaveClass('focus-ring');

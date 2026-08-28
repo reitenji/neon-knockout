@@ -14,8 +14,6 @@ function ActionMark({ pending, idle }: Readonly<{ pending: boolean; idle: string
 export function LandingScreen({ state, onCreateRoom, onJoinRoom }: LandingScreenProps) {
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
-  const namePresent = Array.from(playerName.trim()).length >= 2;
-  const roomCodePresent = roomCode.trim().length === 4;
   const anyPending = state.pendingAction !== null;
   const createPending = state.pendingAction === 'create-room';
   const joinPending = state.pendingAction === 'join-room';
@@ -26,12 +24,12 @@ export function LandingScreen({ state, onCreateRoom, onJoinRoom }: LandingScreen
 
   const submitCreate = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    if (!namePresent || anyPending) return;
+    if (anyPending) return;
     void onCreateRoom(playerName);
   };
 
   const submitJoin = (): void => {
-    if (!namePresent || !roomCodePresent || anyPending) return;
+    if (anyPending) return;
     void onJoinRoom(playerName, roomCode);
   };
 
@@ -44,7 +42,7 @@ export function LandingScreen({ state, onCreateRoom, onJoinRoom }: LandingScreen
 
         <div className="landing-heading">
           <p className="eyebrow">LAN ARENA</p>
-          <h1 id="landing-title">NEON RELAY</h1>
+          <h1 id="landing-title">NEON KNOCKOUT</h1>
         </div>
 
         <form className="landing-form" onSubmit={submitCreate} noValidate>
@@ -65,7 +63,7 @@ export function LandingScreen({ state, onCreateRoom, onJoinRoom }: LandingScreen
           <button
             className="command-button command-button--cyan focus-ring"
             type="submit"
-            disabled={!namePresent || anyPending}
+            disabled={anyPending}
             aria-busy={createPending}
           >
             <span>Oda Kur</span>
@@ -91,7 +89,7 @@ export function LandingScreen({ state, onCreateRoom, onJoinRoom }: LandingScreen
           <button
             className="command-button command-button--amber focus-ring"
             type="button"
-            disabled={!namePresent || !roomCodePresent || anyPending}
+            disabled={anyPending}
             aria-busy={joinPending}
             onClick={submitJoin}
           >

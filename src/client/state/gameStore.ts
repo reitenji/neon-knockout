@@ -1,33 +1,17 @@
 import type {
-  GameEvent,
-  InputFrame,
-  MatchSnapshot,
-  RoomPlayer,
-  RoomState,
-  ServerError,
-  SessionWelcome,
-  Team
+  Ack, Chassis, GameEvent, InputFrame, MatchSnapshot, RoomPlayer, RoomState, ServerError, SessionWelcome
 } from '../../shared/model.js';
 import { normalizePlayerName, normalizeRoomCode } from '../../shared/names.js';
 import type { GameClient, GameClientConnectionState } from '../network/GameClient.js';
 
 export type GameScreen = 'LANDING' | 'LOBBY' | 'MATCH' | 'RESULT';
-export type PendingAction = 'create-room' | 'join-room' | 'resume' | 'team' | 'ready' | 'start' | null;
+export type PendingAction =
+  | 'create-room' | 'join-room' | 'resume' | 'chassis' | 'ready' | 'start' | 'result-ready' | 'return-lobby' | null;
 export type ErrorAction = Exclude<PendingAction, null> | 'server' | null;
 export type CopyFeedback = 'idle' | 'copied' | 'failed';
 
-export type Toast = Readonly<{
-  id: number;
-  message: string;
-  tone: 'info' | 'warning' | 'error';
-}>;
-
-export type ClientSession = Readonly<{
-  playerId: string;
-  roomCode: string;
-  resumeToken: string;
-}>;
-
+export type Toast = Readonly<{ id: number; message: string; tone: 'info' | 'warning' | 'error' }>;
+export type ClientSession = Readonly<{ playerId: string; roomCode: string; resumeToken: string }>;
 export type ClientState = Readonly<{
   screen: GameScreen;
   connectionState: GameClientConnectionState;
@@ -40,6 +24,7 @@ export type ClientState = Readonly<{
   copyFeedback: CopyFeedback;
   toasts: readonly Toast[];
   soundMuted: boolean;
+  reconnectRemainingMs: number | null;
 }>;
 
 export interface GameStore {
@@ -54,77 +39,69 @@ export interface GameStore {
     connect(): void;
     createRoom(name: string): Promise<void>;
     joinRoom(name: string, code: string): Promise<void>;
-    setTeam(team: Team): Promise<void>;
+    setChassis(chassis: Chassis): Promise<void>;
     setReady(ready: boolean): Promise<void>;
     startMatch(): Promise<void>;
+    setResultReady(ready: boolean): Promise<void>;
+    returnToLobby(): Promise<void>;
     copyRoomCode(): Promise<void>;
     toggleSound(): void;
     dismissToast(id: number): void;
   };
 }
 
+export interface ArenaBridge {
+  getSnapshot(): MatchSnapshot | null;
+  subscribeSnapshot(listener: (snapshot: MatchSnapshot) => void): () => void;
+  subscribeEvent(listener: (event: GameEvent) => void): () => void;
+  subscribeMuted(listener: (muted: boolean) => void): () => void;
+  sendInput(frame: InputFrame): void;
+}
+
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type ClipboardLike = Pick<Clipboard, 'writeText'>;
-
-type GameStoreOptions = Readonly<{
-  client: GameClient;
-  storage: StorageLike;
-  clipboard: ClipboardLike;
-}>;
+type GameStoreOptions = Readonly<{ client: GameClient; storage: StorageLike; clipboard: ClipboardLike }>;
 
 const LAST_ROOM_KEY = 'neon-relay:last-room';
 const SOUND_KEY = 'neon-relay:muted';
+const RECONNECT_TICK_MS = 200;
+const NO_CONTEST_MESSAGE = 'Rakip yeniden bağlanamadığı için maç geçersiz sayıldı.';
 
-function resumeKey(roomCode: string): string {
-  return `neon-relay:${roomCode}:resume`;
-}
-
+function resumeKey(roomCode: string): string { return `neon-relay:${roomCode}:resume`; }
 function screenForRoom(room: RoomState | null): GameScreen {
   if (!room) return 'LANDING';
   if (room.phase === 'LOBBY') return 'LOBBY';
   if (room.phase === 'RESULT') return 'RESULT';
   return 'MATCH';
 }
-
-function actionError(action: ErrorAction, error: ServerError, current: ClientState): ClientState {
-  return {
-    ...current,
-    pendingAction: null,
-    lastError: error,
-    errorAction: action
-  };
-}
-
 function invalidNameError(): ServerError {
-  return {
-    code: 'INVALID_NAME',
-    message: 'Oyuncu adı 2–16 görünür karakter olmalıdır.',
-    recoverable: true
-  };
+  return { code: 'INVALID_NAME', message: 'Oyuncu adı 2–16 görünür karakter olmalıdır.', recoverable: true };
 }
-
 function invalidRoomCodeError(): ServerError {
-  return {
-    code: 'INVALID_ROOM_CODE',
-    message: 'Oda kodu geçersiz.',
-    recoverable: true
-  };
+  return { code: 'INVALID_ROOM_CODE', message: 'Oda kodu geçersiz.', recoverable: true };
 }
-
 function normalizeNameOrNull(name: string): string | null {
-  try {
-    return normalizePlayerName(name);
-  } catch {
-    return null;
-  }
+  try { return normalizePlayerName(name); } catch { return null; }
 }
-
 function normalizeCodeOrNull(code: string): string | null {
-  try {
-    return normalizeRoomCode(code);
-  } catch {
-    return null;
-  }
+  try { return normalizeRoomCode(code); } catch { return null; }
+}
+function sameSession(left: ClientSession | null, right: ClientSession): boolean {
+  return left?.playerId === right.playerId && left.roomCode === right.roomCode && left.resumeToken === right.resumeToken;
+}
+function scoresChanged(previous: MatchSnapshot | null, next: MatchSnapshot): boolean {
+  if (!previous) return true;
+  const keys = new Set([...Object.keys(previous.scores), ...Object.keys(next.scores)]);
+  for (const key of keys) if (previous.scores[key] !== next.scores[key]) return true;
+  return false;
+}
+function coarseMatchChanged(previous: MatchSnapshot | null, next: MatchSnapshot): boolean {
+  return !previous || previous.phase !== next.phase || previous.winnerPlayerId !== next.winnerPlayerId ||
+    previous.resultReason !== next.resultReason || scoresChanged(previous, next);
+}
+function once(remove: () => void): () => void {
+  let active = true;
+  return () => { if (!active) return; active = false; remove(); };
 }
 
 export function createGameStore({ client, storage, clipboard }: GameStoreOptions): GameStore {
@@ -134,99 +111,87 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
   const unsubscribeClient: Array<() => void> = [];
   let disposed = false;
   let resumeAttemptedForConnection = false;
+  let resumeQueued = false;
   let toastId = 0;
-  let latestMatch: MatchSnapshot | null = null;
+  let pausePublishedAt = 0;
+  let pausePublishedDuration: number | null = null;
+  let reconnectTimer: number | null = null;
   let state: ClientState = {
-    screen: 'LANDING',
-    connectionState: client.getConnectionState(),
-    room: null,
-    match: null,
-    session: null,
-    pendingAction: null,
-    lastError: null,
-    errorAction: null,
-    copyFeedback: 'idle',
-    toasts: [],
-    soundMuted: storage.getItem(SOUND_KEY) === 'true'
+    screen: 'LANDING', connectionState: client.getConnectionState(), room: null, match: null, session: null,
+    pendingAction: null, lastError: null, errorAction: null, copyFeedback: 'idle', toasts: [],
+    soundMuted: storage.getItem(SOUND_KEY) === 'true', reconnectRemainingMs: null
   };
 
-  const emit = (): void => {
-    if (disposed) return;
-    for (const listener of listeners) listener();
-  };
-
-  const replace = (next: ClientState): void => {
+  const emit = (): void => { if (!disposed) for (const listener of listeners) listener(); };
+  const replace = (next: ClientState, notify = true): void => {
     if (disposed || Object.is(next, state)) return;
     state = next;
-    emit();
+    if (notify) emit();
   };
-
-  const patch = (recipe: (current: ClientState) => ClientState): void => replace(recipe(state));
-
+  const patch = (recipe: (current: ClientState) => ClientState, notify = true): void => replace(recipe(state), notify);
+  const clearReconnectTimer = (): void => {
+    if (reconnectTimer !== null) window.clearInterval(reconnectTimer);
+    reconnectTimer = null;
+  };
+  const updateReconnectCountdown = (): void => {
+    if (pausePublishedDuration === null) return;
+    const remaining = Math.max(0, pausePublishedDuration - (Date.now() - pausePublishedAt));
+    if (remaining !== state.reconnectRemainingMs) patch((current) => ({ ...current, reconnectRemainingMs: remaining }));
+    if (remaining === 0) clearReconnectTimer();
+  };
+  const acceptReconnectDuration = (duration: number | null): void => {
+    clearReconnectTimer();
+    pausePublishedDuration = duration;
+    pausePublishedAt = Date.now();
+    if (duration === null) {
+      if (state.reconnectRemainingMs !== null) patch((current) => ({ ...current, reconnectRemainingMs: null }));
+      return;
+    }
+    if (state.reconnectRemainingMs !== duration) patch((current) => ({ ...current, reconnectRemainingMs: duration }));
+    if (duration > 0) reconnectTimer = window.setInterval(updateReconnectCountdown, RECONNECT_TICK_MS);
+  };
   const publishMatch = (match: MatchSnapshot): void => {
     if (disposed) return;
-    latestMatch = match;
     for (const listener of matchListeners) listener(match);
   };
-
   const publishGameEvent = (event: GameEvent): void => {
     if (disposed) return;
     for (const listener of gameEventListeners) listener(event);
   };
-
-  const coarseMatchChanged = (previous: MatchSnapshot | null, next: MatchSnapshot): boolean =>
-    previous === null ||
-    previous.phase !== next.phase ||
-    previous.score.CYAN !== next.score.CYAN ||
-    previous.score.AMBER !== next.score.AMBER ||
-    previous.winner !== next.winner;
-
   const persistWelcome = (welcome: SessionWelcome): void => {
-    const session: ClientSession = {
-      playerId: welcome.playerId,
-      roomCode: welcome.roomCode,
-      resumeToken: welcome.resumeToken
-    };
+    const session = { playerId: welcome.playerId, roomCode: welcome.roomCode, resumeToken: welcome.resumeToken };
+    if (sameSession(state.session, session)) return;
     storage.setItem(resumeKey(welcome.roomCode), welcome.resumeToken);
     storage.setItem(LAST_ROOM_KEY, welcome.roomCode);
+    resumeQueued = false;
+    resumeAttemptedForConnection = true;
     patch((current) => ({ ...current, session, lastError: null, errorAction: null }));
   };
-
   const forgetRoom = (roomCode: string): void => {
     storage.removeItem(resumeKey(roomCode));
     if (storage.getItem(LAST_ROOM_KEY) === roomCode) storage.removeItem(LAST_ROOM_KEY);
   };
-
   const setFailure = (action: ErrorAction, error: ServerError): void => {
-    patch((current) => actionError(action, error, current));
+    patch((current) => ({ ...current, pendingAction: null, lastError: error, errorAction: action }));
+    void flushResume();
   };
-
   const setUnexpectedFailure = (action: ErrorAction): void => {
-    setFailure(action, {
-      code: 'CLIENT_ERROR',
-      message: 'Beklenmeyen bir istemci hatası oluştu.',
-      recoverable: true
-    });
+    setFailure(action, { code: 'CLIENT_ERROR', message: 'Beklenmeyen bir istemci hatası oluştu.', recoverable: true });
   };
-
   const beginAction = (action: Exclude<PendingAction, null>): boolean => {
     if (state.pendingAction !== null) return false;
     patch((current) => ({
-      ...current,
-      pendingAction: action,
-      lastError: null,
-      errorAction: null,
+      ...current, pendingAction: action, lastError: null, errorAction: null,
       copyFeedback: action === 'create-room' || action === 'join-room' ? 'idle' : current.copyFeedback
     }));
     return true;
   };
-
   const attemptResume = async (): Promise<void> => {
-    if (resumeAttemptedForConnection || state.pendingAction !== null) return;
+    if (disposed || resumeAttemptedForConnection) return;
+    if (state.pendingAction !== null) { resumeQueued = true; return; }
     const roomCode = storage.getItem(LAST_ROOM_KEY);
     const resumeToken = roomCode ? storage.getItem(resumeKey(roomCode)) : null;
     if (!roomCode || !resumeToken) return;
-
     resumeAttemptedForConnection = true;
     patch((current) => ({ ...current, pendingAction: 'resume', lastError: null, errorAction: null }));
     try {
@@ -234,151 +199,123 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       if (disposed) return;
       if (!acknowledgement.ok) {
         forgetRoom(roomCode);
-        patch((current) => ({
-          ...actionError('resume', acknowledgement.error, current),
-          screen: 'LANDING',
-          room: null,
-          match: null,
-          session: null
-        }));
+        replace({
+          ...state, screen: 'LANDING', room: null, match: null, session: null, pendingAction: null,
+          lastError: acknowledgement.error, errorAction: 'resume', reconnectRemainingMs: null
+        });
         return;
       }
       persistWelcome(acknowledgement.data);
-    } catch {
-      if (!disposed) setUnexpectedFailure('resume');
-    }
+    } catch { if (!disposed) setUnexpectedFailure('resume'); }
   };
-
+  async function flushResume(): Promise<void> {
+    if (!resumeQueued || state.pendingAction !== null || state.connectionState !== 'connected') return;
+    resumeQueued = false;
+    await attemptResume();
+  }
   unsubscribeClient.push(
     client.subscribe('connection', (connectionState) => {
-      if (connectionState !== 'connected') resumeAttemptedForConnection = false;
+      if (connectionState !== 'connected') {
+        resumeAttemptedForConnection = false;
+        resumeQueued = false;
+      }
       patch((current) => ({ ...current, connectionState }));
-      if (connectionState === 'connected') void attemptResume();
+      if (connectionState === 'connected') {
+        if (state.pendingAction !== null) resumeQueued = true;
+        else void attemptResume();
+      }
     }),
-    client.subscribe('session:welcome', (welcome) => persistWelcome(welcome)),
+    client.subscribe('session:welcome', persistWelcome),
     client.subscribe('room:state', (room) => {
+      acceptReconnectDuration(room.pauseRemainingMs);
+      const screen = screenForRoom(room);
       patch((current) => ({
-        ...current,
-        room,
-        screen: screenForRoom(room),
-        pendingAction: null,
-        lastError: null,
-        errorAction: null
+        ...current, room, screen, match: screen === 'LOBBY' ? null : current.match,
+        pendingAction: null, lastError: null, errorAction: null
       }));
+      void flushResume();
     }),
     client.subscribe('match:started', (match) => {
       publishMatch(match);
       patch((current) => ({
-        ...current,
-        match,
-        screen: 'MATCH',
-        pendingAction: null,
-        lastError: null,
-        errorAction: null
+        ...current, match, screen: 'MATCH', pendingAction: null, lastError: null, errorAction: null
       }));
+      void flushResume();
     }),
     client.subscribe('match:snapshot', (match) => {
+      const shouldNotify = coarseMatchChanged(state.match, match);
       publishMatch(match);
-      if (coarseMatchChanged(state.match, match)) patch((current) => ({ ...current, match }));
+      patch((current) => ({ ...current, match }), shouldNotify);
     }),
-    client.subscribe('match:event', (event) => publishGameEvent(event)),
+    client.subscribe('match:event', (event) => {
+      publishGameEvent(event);
+      if (event.type === 'RESULT' && event.reason === 'NO_CONTEST') {
+        patch((current) => ({
+          ...current,
+          toasts: [...current.toasts, { id: ++toastId, message: NO_CONTEST_MESSAGE, tone: 'warning' }]
+        }));
+      }
+    }),
     client.subscribe('server:error', (error) => {
       const action = state.pendingAction ?? 'server';
       patch((current) => ({
-        ...actionError(action, error, current),
-        toasts:
-          action === 'server'
-            ? [...current.toasts, { id: ++toastId, message: error.message, tone: error.recoverable ? 'warning' : 'error' }]
-            : current.toasts
+        ...current, pendingAction: null, lastError: error, errorAction: action,
+        toasts: action === 'server'
+          ? [...current.toasts, { id: ++toastId, message: error.message, tone: error.recoverable ? 'warning' : 'error' }]
+          : current.toasts
       }));
+      void flushResume();
     })
   );
 
+  const runAcknowledgedAction = async (
+    action: Exclude<PendingAction, null>, invoke: () => Promise<Ack<null>>
+  ): Promise<void> => {
+    if (!beginAction(action)) return;
+    try {
+      const acknowledgement = await invoke();
+      if (!disposed && !acknowledgement.ok) setFailure(action, acknowledgement.error);
+    } catch { if (!disposed) setUnexpectedFailure(action); }
+  };
+
   const actions: GameStore['actions'] = {
-    connect(): void {
-      client.connect();
-    },
+    connect(): void { client.connect(); },
     async createRoom(name: string): Promise<void> {
       if (state.pendingAction !== null) return;
       const normalizedName = normalizeNameOrNull(name);
-      if (!normalizedName) {
-        setFailure('create-room', invalidNameError());
-        return;
-      }
+      if (!normalizedName) { setFailure('create-room', invalidNameError()); return; }
       if (!beginAction('create-room')) return;
       try {
         const acknowledgement = await client.createRoom(normalizedName);
         if (disposed) return;
-        if (!acknowledgement.ok) {
-          setFailure('create-room', acknowledgement.error);
-          return;
-        }
+        if (!acknowledgement.ok) { setFailure('create-room', acknowledgement.error); return; }
         persistWelcome(acknowledgement.data);
-      } catch {
-        if (!disposed) setUnexpectedFailure('create-room');
-      }
+      } catch { if (!disposed) setUnexpectedFailure('create-room'); }
     },
     async joinRoom(name: string, code: string): Promise<void> {
       if (state.pendingAction !== null) return;
       const normalizedName = normalizeNameOrNull(name);
-      if (!normalizedName) {
-        setFailure('join-room', invalidNameError());
-        return;
-      }
+      if (!normalizedName) { setFailure('join-room', invalidNameError()); return; }
       const normalizedCode = normalizeCodeOrNull(code);
-      if (!normalizedCode) {
-        setFailure('join-room', invalidRoomCodeError());
-        return;
-      }
+      if (!normalizedCode) { setFailure('join-room', invalidRoomCodeError()); return; }
       if (!beginAction('join-room')) return;
       try {
         const acknowledgement = await client.joinRoom(normalizedName, normalizedCode);
         if (disposed) return;
-        if (!acknowledgement.ok) {
-          setFailure('join-room', acknowledgement.error);
-          return;
-        }
+        if (!acknowledgement.ok) { setFailure('join-room', acknowledgement.error); return; }
         persistWelcome(acknowledgement.data);
-      } catch {
-        if (!disposed) setUnexpectedFailure('join-room');
-      }
+      } catch { if (!disposed) setUnexpectedFailure('join-room'); }
     },
-    async setTeam(team: Team): Promise<void> {
-      if (!beginAction('team')) return;
-      try {
-        const acknowledgement = await client.setTeam(team);
-        if (!disposed && !acknowledgement.ok) setFailure('team', acknowledgement.error);
-      } catch {
-        if (!disposed) setUnexpectedFailure('team');
-      }
-    },
-    async setReady(ready: boolean): Promise<void> {
-      if (!beginAction('ready')) return;
-      try {
-        const acknowledgement = await client.setReady(ready);
-        if (!disposed && !acknowledgement.ok) setFailure('ready', acknowledgement.error);
-      } catch {
-        if (!disposed) setUnexpectedFailure('ready');
-      }
-    },
-    async startMatch(): Promise<void> {
-      if (!beginAction('start')) return;
-      try {
-        const acknowledgement = await client.startMatch();
-        if (!disposed && !acknowledgement.ok) setFailure('start', acknowledgement.error);
-      } catch {
-        if (!disposed) setUnexpectedFailure('start');
-      }
-    },
+    setChassis(chassis): Promise<void> { return runAcknowledgedAction('chassis', () => client.setChassis(chassis)); },
+    setReady(ready): Promise<void> { return runAcknowledgedAction('ready', () => client.setReady(ready)); },
+    startMatch(): Promise<void> { return runAcknowledgedAction('start', () => client.startMatch()); },
+    setResultReady(ready): Promise<void> { return runAcknowledgedAction('result-ready', () => client.setResultReady(ready)); },
+    returnToLobby(): Promise<void> { return runAcknowledgedAction('return-lobby', () => client.returnToLobby()); },
     async copyRoomCode(): Promise<void> {
       const roomCode = state.room?.roomCode;
       if (!roomCode) return;
-      try {
-        await clipboard.writeText(roomCode);
-        patch((current) => ({ ...current, copyFeedback: 'copied' }));
-      } catch {
-        patch((current) => ({ ...current, copyFeedback: 'failed' }));
-      }
+      try { await clipboard.writeText(roomCode); patch((current) => ({ ...current, copyFeedback: 'copied' })); }
+      catch { patch((current) => ({ ...current, copyFeedback: 'failed' })); }
     },
     toggleSound(): void {
       patch((current) => {
@@ -387,62 +324,54 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
         return { ...current, soundMuted };
       });
     },
-    dismissToast(id: number): void {
-      patch((current) => ({ ...current, toasts: current.toasts.filter((toast) => toast.id !== id) }));
-    }
+    dismissToast(id): void { patch((current) => ({ ...current, toasts: current.toasts.filter((toast) => toast.id !== id) })); }
   };
 
   return {
-    getSnapshot(): ClientState {
-      return state;
-    },
-    getLatestMatch(): MatchSnapshot | null {
-      return latestMatch;
-    },
-    subscribe(listener: () => void): () => void {
-      if (disposed) return () => undefined;
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeMatch(listener: (snapshot: MatchSnapshot) => void): () => void {
-      if (disposed) return () => undefined;
-      matchListeners.add(listener);
-      return () => matchListeners.delete(listener);
-    },
-    subscribeGameEvent(listener: (event: GameEvent) => void): () => void {
-      if (disposed) return () => undefined;
-      gameEventListeners.add(listener);
-      return () => gameEventListeners.delete(listener);
-    },
-    sendInput(frame: InputFrame): void {
-      if (!disposed) client.sendInput(frame);
-    },
-    dispose(): void {
+    getSnapshot: () => state,
+    getLatestMatch: () => state.match,
+    subscribe(listener) { if (disposed) return () => undefined; listeners.add(listener); return once(() => listeners.delete(listener)); },
+    subscribeMatch(listener) { if (disposed) return () => undefined; matchListeners.add(listener); return once(() => matchListeners.delete(listener)); },
+    subscribeGameEvent(listener) { if (disposed) return () => undefined; gameEventListeners.add(listener); return once(() => gameEventListeners.delete(listener)); },
+    sendInput(frame) { if (!disposed) client.sendInput(frame); },
+    dispose() {
       if (disposed) return;
-      for (const unsubscribe of unsubscribeClient) unsubscribe();
-      listeners.clear();
-      matchListeners.clear();
-      gameEventListeners.clear();
-      client.disconnect();
       disposed = true;
+      clearReconnectTimer();
+      for (const unsubscribe of unsubscribeClient) unsubscribe();
+      listeners.clear(); matchListeners.clear(); gameEventListeners.clear();
+      client.disconnect();
     },
     actions
+  };
+}
+
+export function createArenaBridge(store: GameStore): ArenaBridge {
+  return {
+    getSnapshot: store.getLatestMatch,
+    subscribeSnapshot: store.subscribeMatch,
+    subscribeEvent: store.subscribeGameEvent,
+    subscribeMuted(listener) {
+      let previous = store.getSnapshot().soundMuted;
+      return store.subscribe(() => {
+        const next = store.getSnapshot().soundMuted;
+        if (next === previous) return;
+        previous = next;
+        listener(next);
+      });
+    },
+    sendInput: store.sendInput
   };
 }
 
 export function selectSelfPlayer(state: ClientState): RoomPlayer | null {
   const playerId = state.session?.playerId;
   if (!playerId || !state.room) return null;
-  return state.room.players.find((player) => player.playerId === playerId) ?? null;
+  return state.room.players.find((candidate) => candidate.playerId === playerId) ?? null;
 }
 
 export function selectCanStart(state: ClientState): boolean {
-  if (!state.room || state.room.phase !== 'LOBBY') return false;
-  const connectedPlayers = state.room.players.filter((player) => player.connected);
-  return (
-    connectedPlayers.length >= 2 &&
-    connectedPlayers.some((player) => player.team === 'CYAN') &&
-    connectedPlayers.some((player) => player.team === 'AMBER') &&
-    connectedPlayers.every((player) => player.ready)
-  );
+  if (!state.room || (state.room.phase !== 'LOBBY' && state.room.phase !== 'RESULT')) return false;
+  const connected = state.room.players.filter((player) => player.connected);
+  return connected.length >= 2 && connected.every((player) => player.ready);
 }

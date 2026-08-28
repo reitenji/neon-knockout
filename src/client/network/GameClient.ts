@@ -1,5 +1,5 @@
 import { io, type Socket } from 'socket.io-client';
-import type { Ack, GameEvent, InputFrame, MatchSnapshot, RoomState, ServerError, SessionWelcome, Team } from '../../shared/model.js';
+import type { Ack, Chassis, GameEvent, InputFrame, MatchSnapshot, RoomState, ServerError, SessionWelcome } from '../../shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
 
 export type GameClientConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -22,7 +22,7 @@ export interface GameClient {
   createRoom(name: string): Promise<Ack<SessionWelcome>>;
   joinRoom(name: string, roomCode: string): Promise<Ack<SessionWelcome>>;
   resumeSession(roomCode: string, resumeToken: string): Promise<Ack<SessionWelcome>>;
-  setTeam(team: Team): Promise<Ack<null>>;
+  setChassis(chassis: Chassis): Promise<Ack<null>>;
   setReady(ready: boolean): Promise<Ack<null>>;
   startMatch(): Promise<Ack<null>>;
   sendInput(input: InputFrame): void;
@@ -136,8 +136,8 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     resumeSession(roomCode: string, resumeToken: string): Promise<Ack<SessionWelcome>> {
       return withAckTimeout((acknowledge) => socket.emit('session:resume', { roomCode, resumeToken }, acknowledge));
     },
-    setTeam(team: Team): Promise<Ack<null>> {
-      return withAckTimeout((acknowledge) => socket.emit('lobby:team', { team }, acknowledge));
+    setChassis(chassis: Chassis): Promise<Ack<null>> {
+      return withAckTimeout((acknowledge) => socket.emit('lobby:chassis', { chassis }, acknowledge));
     },
     setReady(ready: boolean): Promise<Ack<null>> {
       return withAckTimeout((acknowledge) => socket.emit('lobby:ready', { ready }, acknowledge));
