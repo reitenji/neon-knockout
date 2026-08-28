@@ -1,13 +1,13 @@
-import type { Chassis, Vec2 } from './model.js';
+import type { Vec2 } from './model.js';
+
+export { CHASSIS } from './model.js';
 
 const freezePoint = (point: Vec2): Readonly<Vec2> => Object.freeze(point);
 
 const freezePoints = (points: readonly Vec2[]): readonly Readonly<Vec2>[] =>
   Object.freeze(points.map((point) => freezePoint(point)));
 
-export const CHASSIS_ORDER: readonly Chassis[] = Object.freeze(['RIFT', 'BASTION', 'PULSE', 'WRAITH']);
-
-export const ACCENT_PALETTE = Object.freeze([
+export const ACCENTS = Object.freeze([
   '#6EE7F2',
   '#FF8A5B',
   '#9EF25B',

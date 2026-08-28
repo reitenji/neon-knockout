@@ -1,17 +1,18 @@
 import { z } from 'zod';
+import { CHASSIS } from './model.js';
 import type {
   Ack,
   Chassis,
   GameEvent,
+  InputFrame,
   MatchSnapshot,
   RoomState,
   ServerError,
   SessionWelcome
 } from './model.js';
-import type { CombatInputFrame } from './model.js';
 import { normalizeRoomCode } from './names.js';
 
-const chassisSchema = z.enum(['RIFT', 'BASTION', 'PULSE', 'WRAITH']);
+const chassisSchema = z.enum(CHASSIS);
 const emptyPayloadSchema = z.object({}).strict();
 const finiteAxisSchema = z.number().finite().min(-1).max(1);
 const roomCodeSchema = z.string().transform((value, context) => {
@@ -34,8 +35,8 @@ export const matchInputSchema = z
     seq: z.number().int().nonnegative(),
     moveX: finiteAxisSchema,
     moveY: finiteAxisSchema,
-    aimX: z.number().finite(),
-    aimY: z.number().finite(),
+    aimX: finiteAxisSchema,
+    aimY: finiteAxisSchema,
     quick: z.boolean(),
     heavy: z.boolean(),
     dash: z.boolean()
@@ -49,7 +50,7 @@ export type RoomJoinPayload = z.infer<typeof roomJoinSchema>;
 export type SessionResumePayload = z.infer<typeof sessionResumeSchema>;
 export type LobbyChassisPayload = Readonly<{ chassis: Chassis }>;
 export type LobbyReadyPayload = z.infer<typeof lobbyReadySchema>;
-export type MatchInputPayload = CombatInputFrame;
+export type MatchInputPayload = InputFrame;
 export type ResultReadyPayload = z.infer<typeof resultReadySchema>;
 
 export interface ClientToServerEvents {
