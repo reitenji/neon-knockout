@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import type { MatchSnapshot, Vec2 } from '../../../shared/model.js';
+import type { Vec2 } from '../../../shared/model.js';
 import { buildArenaVisualModel, type ArenaVisualState } from './arenaVisualPlan.js';
 
 export interface ArenaView {
