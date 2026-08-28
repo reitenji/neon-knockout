@@ -28,10 +28,12 @@ export type MutablePlayerStats = {
 };
 
 export type AttackRuntime = {
+  attackId: number;
   kind: AttackKind;
   phase: AttackPhase;
   phaseRemainingMs: number;
   facing: Vec2;
+  chargeMs: number;
   hitPlayerIds: Set<string>;
 };
 
@@ -54,6 +56,7 @@ export type MutableMatchPlayer = {
   dashDirection: Vec2;
   hitstunRemainingMs: number;
   respawnRemainingMs: number;
+  resetOverloadOnRespawn: boolean;
   protectionRemainingMs: number;
   connected: boolean;
   lastProcessedInputSeq: number;
@@ -69,6 +72,8 @@ export type MutableMatchPlayer = {
 
 export type MatchState = {
   tick: number;
+  nextEventId: number;
+  nextAttackId: number;
   seed: number;
   nowMs: number;
   phase: MatchPhase;
@@ -131,6 +136,7 @@ export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: 
       dashDirection: { x: 1, y: 0 },
       hitstunRemainingMs: 0,
       respawnRemainingMs: 0,
+      resetOverloadOnRespawn: false,
       protectionRemainingMs: 0,
       connected: playerSeed.connected ?? true,
       lastProcessedInputSeq: -1,
@@ -148,6 +154,8 @@ export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: 
 
   return {
     tick: 0,
+    nextEventId: 1,
+    nextAttackId: 1,
     seed,
     nowMs: seed,
     phase: 'COUNTDOWN',

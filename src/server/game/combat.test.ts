@@ -1,0 +1,220 @@
+import { describe, expect, it } from 'vitest';
+
+import { GAME } from '../../shared/constants.js';
+import { advanceCombatTimers, resolveAttackHits, startActions } from './combat.js';
+import { createMatchState, type MatchState, type MutableMatchPlayer } from './state.js';
+
+const input = (seq: number, overrides: Partial<MutableMatchPlayer['latestInput']> = {}) => ({
+  seq, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides
+});
+
+function createState(): MatchState {
+  const state = createMatchState([
+    { playerId: 'p3', name: 'Grace', chassis: 'PULSE', accent: 2 },
+    { playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0 },
+    { playerId: 'p2', name: 'Linus', chassis: 'BASTION', accent: 1 }
+  ], 7);
+  state.phase = 'REGULATION';
+  state.players.p1.position = { x: 600, y: 360 };
+  state.players.p2.position = { x: 650, y: 360 };
+  state.players.p3.position = { x: 660, y: 360 };
+  return state;
+}
+
+function beginQuick(state: MatchState, playerId = 'p1'): void {
+  state.players[playerId].latestInput = input(0, { quick: true });
+  startActions(state);
+}
+
+describe('authoritative combat', () => {
+  it.each([
+    { step: 1, kind: 'QUICK_1', windup: 70, active: 60, recovery: 100 },
+    { step: 2, kind: 'QUICK_2', windup: 65, active: 65, recovery: 120 },
+    { step: 3, kind: 'QUICK_3', windup: 115, active: 70, recovery: 205 }
+  ] as const)('uses the exact windup, active, and recovery windows for quick step $step', ({ step, kind, windup, active, recovery }) => {
+    const state = createState();
+    const player = state.players.p1;
+    player.comboStep = (step - 1) as 0 | 1 | 2;
+    beginQuick(state);
+    expect(player.attack).toMatchObject({ kind, phase: 'WINDUP', phaseRemainingMs: windup });
+    advanceCombatTimers(state, windup - 1);
+    expect(player.attack).toMatchObject({ phase: 'WINDUP', phaseRemainingMs: 1 });
+    advanceCombatTimers(state, 1);
+    expect(player.attack).toMatchObject({ phase: 'ACTIVE', phaseRemainingMs: active });
+    advanceCombatTimers(state, active);
+    expect(player.attack).toMatchObject({ phase: 'RECOVERY', phaseRemainingMs: recovery });
+    advanceCombatTimers(state, recovery);
+    startActions(state);
+    expect(player.attack).toBeNull();
+  });
+
+  it('buffers a combo only from recovery and advances no further than quick step three', () => {
+    const state = createState();
+    const player = state.players.p1;
+    beginQuick(state);
+    player.latestInput = input(1);
+    startActions(state);
+    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
+    player.latestInput = input(2, { quick: true });
+    startActions(state);
+    expect(player.bufferedQuick).toBe(false);
+    player.latestInput = input(3);
+    startActions(state);
+    advanceCombatTimers(state, GAME.quickCombo[0].activeMs);
+    player.latestInput = input(4, { quick: true });
+    startActions(state);
+    expect(player.bufferedQuick).toBe(true);
+    player.latestInput = input(5);
+    advanceCombatTimers(state, GAME.quickCombo[0].recoveryMs);
+    startActions(state);
+    expect(player.attack?.kind).toBe('QUICK_2');
+    player.comboStep = 3;
+    player.attack = null;
+    player.previousQuick = false;
+    player.latestInput = input(6, { quick: true });
+    startActions(state);
+    expect(player.attack?.kind).toBe('QUICK_1');
+  });
+
+  it('hits each in-range target once per attack in distance and stable-id order', () => {
+    const state = createState();
+    state.players.p2.position = { x: 650, y: 360 };
+    state.players.p3.position = { x: 650, y: 360 };
+    beginQuick(state);
+    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
+    const first = resolveAttackHits(state);
+    const repeated = resolveAttackHits(state);
+    expect(first.map((event) => event.type === 'HIT' ? event.targetId : '')).toEqual(['p2', 'p3']);
+    expect(repeated).toEqual([]);
+    expect(state.players.p1.stats.landedHits).toBe(1);
+  });
+
+  it('rejects targets behind the forward arc and beyond the squared range check', () => {
+    const state = createState();
+    state.players.p2.position = { x: 600 - GAME.quickCombo[0].range + 1, y: 360 };
+    state.players.p3.position = { x: 600 + GAME.quickCombo[0].range + 1, y: 360 };
+    beginQuick(state);
+    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
+    expect(resolveAttackHits(state)).toEqual([]);
+  });
+
+  it('rejects protection and dash invulnerability without hit feedback', () => {
+    const state = createState();
+    beginQuick(state);
+    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
+    state.players.p2.protectionRemainingMs = 1;
+    state.players.p3.dashInvulnerabilityRemainingMs = 1;
+    expect(resolveAttackHits(state)).toEqual([]);
+    expect(state.players.p2.overload).toBe(0);
+    expect(state.players.p3.overload).toBe(0);
+  });
+
+  it('cancels spawn protection before the protected player starts an attack', () => {
+    const state = createState();
+    const player = state.players.p1;
+    player.protectionRemainingMs = GAME.respawnProtectionMs;
+    beginQuick(state);
+    expect(player.attack?.kind).toBe('QUICK_1');
+    expect(player.protectionRemainingMs).toBe(0);
+  });
+
+  it('captures the latest normalized aim when an attack starts', () => {
+    const state = createState();
+    const player = state.players.p1;
+    player.facing = { x: 1, y: 0 };
+    player.latestInput = input(0, { aimX: 0, aimY: -1, quick: true });
+    startActions(state);
+    expect(player.attack?.facing).toEqual({ x: 0, y: -1 });
+  });
+
+  it('requires 180 ms heavy charge, caps power at 700 ms, and captures release power', () => {
+    const tooEarly = createState();
+    tooEarly.players.p1.latestInput = input(0, { heavy: true });
+    advanceCombatTimers(tooEarly, GAME.heavyEnterChargeMs - 1);
+    startActions(tooEarly);
+    tooEarly.players.p1.latestInput = input(1);
+    startActions(tooEarly);
+    expect(tooEarly.players.p1.attack).toBeNull();
+    const minimum = createState();
+    minimum.players.p1.latestInput = input(0, { heavy: true });
+    advanceCombatTimers(minimum, GAME.heavyEnterChargeMs);
+    startActions(minimum);
+    minimum.players.p1.latestInput = input(1);
+    startActions(minimum);
+    expect(minimum.players.p1.attack).toMatchObject({ kind: 'HEAVY', chargeMs: 180 });
+    const maximum = createState();
+    maximum.players.p1.latestInput = input(0, { heavy: true });
+    advanceCombatTimers(maximum, GAME.heavyMaxChargeMs + 500);
+    startActions(maximum);
+    maximum.players.p1.latestInput = input(1);
+    startActions(maximum);
+    expect(maximum.players.p1.attack).toMatchObject({ kind: 'HEAVY', chargeMs: 700 });
+  });
+
+  it('lets dash cancel only an uncommitted charge', () => {
+    const state = createState();
+    const player = state.players.p1;
+    player.latestInput = input(0, { heavy: true });
+    advanceCombatTimers(state, GAME.heavyEnterChargeMs);
+    startActions(state);
+    expect(player.charging).toBe(true);
+    player.latestInput = input(1, { heavy: true, dash: true });
+    startActions(state);
+    expect(player.chargeMs).toBe(0);
+    expect(player.charging).toBe(false);
+    player.previousHeavy = true;
+    player.latestInput = input(2);
+    player.chargeMs = GAME.heavyMaxChargeMs;
+    startActions(state);
+    expect(player.attack?.kind).toBe('HEAVY');
+    player.latestInput = input(3, { dash: true });
+    startActions(state);
+    expect(player.attack?.kind).toBe('HEAVY');
+    expect(player.previousDash).toBe(true);
+  });
+
+  it('does not precharge a held heavy button during a committed attack timeline', () => {
+    const state = createState();
+    const player = state.players.p1;
+    player.previousHeavy = true;
+    player.chargeMs = GAME.heavyMaxChargeMs;
+    player.latestInput = input(1);
+    startActions(state);
+    player.latestInput = input(2, { heavy: true });
+    advanceCombatTimers(state, GAME.heavyWindupMs + GAME.heavyActiveMs + GAME.heavyRecoveryMs);
+    expect(player.attack).toBeNull();
+    expect(player.chargeMs).toBe(0);
+  });
+
+  it('applies exact overload impulse and the 90 ms minimum hitstun', () => {
+    const state = createState();
+    state.players.p3.connected = false;
+    beginQuick(state);
+    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
+    const events = resolveAttackHits(state);
+    const expectedImpulse = 280 * (1 + (8 / 150) * 0.9);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'HIT', attackerId: 'p1', targetId: 'p2', attack: 'QUICK_1',
+      resultingOverload: 8, impulse: expectedImpulse
+    }));
+    expect(state.players.p2.velocity.x).toBeCloseTo(expectedImpulse, 8);
+    expect(state.players.p2.hitstunRemainingMs).toBe(90);
+  });
+
+  it('caps overload and applies the exact 230 ms maximum hitstun for a full heavy', () => {
+    const state = createState();
+    state.players.p3.connected = false;
+    state.players.p2.overload = GAME.maxOverload;
+    const attacker = state.players.p1;
+    attacker.previousHeavy = true;
+    attacker.chargeMs = GAME.heavyMaxChargeMs;
+    attacker.latestInput = input(1);
+    startActions(state);
+    advanceCombatTimers(state, GAME.heavyWindupMs);
+    const events = resolveAttackHits(state);
+    expect(events).toContainEqual(expect.objectContaining({
+      type: 'HIT', attack: 'HEAVY', impulse: 760 * 1.9, resultingOverload: 150
+    }));
+    expect(state.players.p2.hitstunRemainingMs).toBe(230);
+  });
+});
