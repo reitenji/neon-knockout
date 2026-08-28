@@ -31,7 +31,7 @@ The final result is demonstrated, not inferred. A clean install must pass unit, 
 - [x] (2026-08-28 11:56Z) Task 1: Replaced shared team/core contracts with reviewed free-for-all combat contracts and browser-safe kinematics (`0120139`, `3c3f328`).
 - [x] (2026-08-28 12:14Z) Task 2: Built reviewed deterministic platform geometry, velocity movement, dash lifecycle, separation, and safe spawns (`0f3ce03`, `3668441`).
 - [x] (2026-08-28 12:50Z) Task 3: Implemented reviewed authoritative combat, knockback, knockout/respawn, contraction, sudden death, reconnect, and results (`073ba54`, `79da4b8`).
-- [ ] Task 4: Convert rooms, reconnect behavior, Socket.IO handlers, and the test harness to free-for-all combat.
+- [x] (2026-08-28 13:23Z) Task 4: Converted rooms, reconnect, Socket.IO, rate limits, no-contest, host migration, and the private harness to reviewed FFA combat (`74eb73d`, `645ccb8`).
 - [ ] Task 5: Convert the client network/store and React landing, lobby, reconnect, and result flows.
 - [ ] Task 6: Integrate Phaser 4.2.1 through a typed bridge with input, prediction, interpolation, mount, and teardown.
 - [ ] Task 7: Create the four fighter assets and the continuous authored animation system.
@@ -70,7 +70,7 @@ The final result is demonstrated, not inferred. A clean install must pass unit, 
 
 ## Outcomes & Retrospective
 
-Task 1 produced the exact serializable combat/input/protocol surface, exact shared limits, and pure prediction kinematics. Its 10 focused tests passed; an independent review found three contract mismatches, all fixed in `3c3f328` and confirmed by scoped re-review. Task 2 produced deterministic octagon geometry, movement, void recovery, separation, safe spawns, and a fully timed/invulnerable dash; its 14 focused tests passed twice after an independent review caught and verified the dash timer fix in `3668441`. Task 3 delivered 46 passing server-game tests for combo/heavy combat, hits, overload, ring-outs, 700 ms return, contraction, reconnect, sudden death, and results; review-found same-tick scoring defects were fixed and re-reviewed in `79da4b8`. At final completion, compare the live game against the three product promises: immediate control, readable impact, and constant contest.
+Task 1 produced the exact serializable combat/input/protocol surface, exact shared limits, and pure prediction kinematics. Its 10 focused tests passed; an independent review found three contract mismatches, all fixed in `3c3f328` and confirmed by scoped re-review. Task 2 produced deterministic octagon geometry, movement, void recovery, separation, safe spawns, and a fully timed/invulnerable dash; its 14 focused tests passed twice after an independent review caught and verified the dash timer fix in `3668441`. Task 3 delivered 46 passing server-game tests for combo/heavy combat, hits, overload, ring-outs, 700 ms return, contraction, reconnect, sudden death, and results; review-found same-tick scoring defects were fixed and re-reviewed in `79da4b8`. Task 4 delivered 20 passing room/integration tests plus two clean repeated socket flows; review-found staggered reservation viability was fixed in `645ccb8`, and reconnect now holds one deterministic warp anchor. At final completion, compare the live game against the three product promises: immediate control, readable impact, and constant contest.
 
 ## Context and Orientation
 
