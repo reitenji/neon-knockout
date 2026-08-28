@@ -61,26 +61,36 @@ export function separatePlayers(
   const minimumDistance = GAME.playerRadius * 2;
 
   for (let pass = 0; pass < 2; pass += 1) {
+    const passPositions = playerIds.map((playerId) => players[playerId].position);
+    const corrections = playerIds.map(() => ({ x: 0, y: 0 }));
+
     for (let leftIndex = 0; leftIndex < playerIds.length; leftIndex += 1) {
       for (let rightIndex = leftIndex + 1; rightIndex < playerIds.length; rightIndex += 1) {
-        const left = players[playerIds[leftIndex]];
-        const right = players[playerIds[rightIndex]];
-        const dx = right.position.x - left.position.x;
-        const dy = right.position.y - left.position.y;
+        const leftPosition = passPositions[leftIndex];
+        const rightPosition = passPositions[rightIndex];
+        const dx = rightPosition.x - leftPosition.x;
+        const dy = rightPosition.y - leftPosition.y;
         const distance = Math.hypot(dx, dy);
         if (distance >= minimumDistance) continue;
 
         const direction = distance === 0 ? { x: 1, y: 0 } : { x: dx / distance, y: dy / distance };
         const correction = (minimumDistance - distance) / 2;
-        left.position = pushCircle(
-          left.position,
-          { x: -direction.x, y: -direction.y },
-          correction,
-          GAME.playerRadius,
-          ARENA.obstacles
-        );
-        right.position = pushCircle(right.position, direction, correction, GAME.playerRadius, ARENA.obstacles);
+        corrections[leftIndex].x -= direction.x * correction;
+        corrections[leftIndex].y -= direction.y * correction;
+        corrections[rightIndex].x += direction.x * correction;
+        corrections[rightIndex].y += direction.y * correction;
       }
+    }
+
+    for (let playerIndex = 0; playerIndex < playerIds.length; playerIndex += 1) {
+      const correction = corrections[playerIndex];
+      players[playerIds[playerIndex]].position = pushCircle(
+        passPositions[playerIndex],
+        correction,
+        Math.hypot(correction.x, correction.y),
+        GAME.playerRadius,
+        ARENA.obstacles
+      );
     }
   }
 }

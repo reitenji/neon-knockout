@@ -35,4 +35,27 @@ describe('game geometry', () => {
     expect(players['p-a'].position).toEqual({ x: 80, y: 100 });
     expect(players['p-b'].position).toEqual({ x: 120, y: 100 });
   });
+
+  it('fully separates three players sharing one center within two passes', () => {
+    const players = {
+      'p-c': { position: { x: 300, y: 300 } },
+      'p-a': { position: { x: 300, y: 300 } },
+      'p-b': { position: { x: 300, y: 300 } }
+    };
+
+    separatePlayers(players);
+
+    const pairs = [
+      ['p-a', 'p-b'],
+      ['p-a', 'p-c'],
+      ['p-b', 'p-c']
+    ] as const;
+    for (const [leftId, rightId] of pairs) {
+      const left = players[leftId].position;
+      const right = players[rightId].position;
+      expect(Math.hypot(right.x - left.x, right.y - left.y)).toBeGreaterThanOrEqual(
+        GAME.playerRadius * 2 - 1e-9
+      );
+    }
+  });
 });
