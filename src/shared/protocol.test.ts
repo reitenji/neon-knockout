@@ -110,9 +110,9 @@ describe('shared input boundary protocol', () => {
       result: null,
       players: [
         {
-          playerId: 'p1', name: 'Ada', chassis: 'RIFT', accentIndex: 0, ready: true, connected: true,
+          playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0, ready: true, connected: true,
           reconnectRemainingMs: null,
-          stats: { knockouts: 1, falls: 0, landedHits: 2, attackAttempts: 3, attackHits: 2 }
+          stats: { knockouts: 1, falls: 0, landedHits: 2, completedAttacks: 3 }
         }
       ]
     };
@@ -121,16 +121,16 @@ describe('shared input boundary protocol', () => {
       phase: 'REGULATION',
       remainingMs: GAME.regulationMs,
       platformProgress: 0,
-      scores: [{ playerId: 'p1', name: 'Ada', score: 1, knockouts: 1, falls: 0, landedHits: 2, accuracy: 2 / 3 }],
+      scores: { p1: 1 },
       players: [
         {
-          playerId: 'p1', name: 'Ada', chassis: 'RIFT', accentIndex: 0,
+          playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0,
           position: { x: 640, y: 360 }, velocity: { x: 0, y: 0 }, facing: { x: 1, y: 0 }, overload: 8,
           lastProcessedInputSeq: 7,
           action: { kind: 'QUICK_1', phase: 'ACTIVE', comboStep: 1, chargeMs: 0 },
           dashRemainingMs: 0, dashCooldownRemainingMs: 0, hitstunRemainingMs: 0, respawnRemainingMs: 0,
           protectionRemainingMs: 0,
-          stats: { knockouts: 1, falls: 0, landedHits: 2, attackAttempts: 3, attackHits: 2 }
+          stats: { knockouts: 1, falls: 0, landedHits: 2, completedAttacks: 3 }
         }
       ],
       winnerPlayerId: null,
@@ -143,7 +143,8 @@ describe('shared input boundary protocol', () => {
 
   it('exports the approved cadence, protection, palette, and arena geometry', () => {
     expect(GAME).toMatchObject({
-      tickRate: 60, snapshotRate: 30, regulationMs: 120_000, targetScore: 5,
+      tickRate: 60, snapshotRate: 30, regulationMs: 120_000, targetScore: 5, minPlayers: 2,
+      maxInputFramesPerSecond: 60, inputRateLimitPerSecond: 90,
       knockoutToControlMs: 700, respawnProtectionMs: 650
     });
     expect(ACCENTS).toHaveLength(8);

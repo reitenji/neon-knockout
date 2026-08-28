@@ -33,15 +33,14 @@ export type PlayerStats = Readonly<{
   knockouts: number;
   falls: number;
   landedHits: number;
-  attackAttempts: number;
-  attackHits: number;
+  completedAttacks: number;
 }>;
 
 export type RoomPlayer = Readonly<{
   playerId: string;
   name: string;
   chassis: Chassis;
-  accentIndex: PlayerAccent;
+  accent: PlayerAccent;
   ready: boolean;
   connected: boolean;
   reconnectRemainingMs: number | null;
@@ -68,7 +67,7 @@ export type MatchPlayer = Readonly<{
   playerId: string;
   name: string;
   chassis: Chassis;
-  accentIndex: PlayerAccent;
+  accent: PlayerAccent;
   position: Vec2;
   velocity: Vec2;
   facing: Vec2;
@@ -83,22 +82,12 @@ export type MatchPlayer = Readonly<{
   stats: PlayerStats;
 }>;
 
-export type MatchScoreEntry = Readonly<{
-  playerId: string;
-  name: string;
-  score: number;
-  knockouts: number;
-  falls: number;
-  landedHits: number;
-  accuracy: number;
-}>;
-
 export type MatchSnapshot = Readonly<{
   tick: number;
   phase: MatchPhase;
   remainingMs: number;
   platformProgress: number;
-  scores: readonly MatchScoreEntry[];
+  scores: Readonly<Record<string, number>>;
   players: readonly MatchPlayer[];
   winnerPlayerId: string | null;
   resultReason: MatchResultReason | null;
