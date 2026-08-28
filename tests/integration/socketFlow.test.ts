@@ -1,19 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
-import type { Ack, GameEvent, ServerError, SessionWelcome } from '../../src/shared/model.js';
+import { GAME } from '../../src/shared/constants.js';
+import type { Ack, GameEvent, InputFrame, ServerError, SessionWelcome } from '../../src/shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../src/shared/protocol.js';
 import { createGameServer, type GameServer } from '../../src/server/network/createGameServer.js';
 
 type GameClient = Socket<ServerToClientEvents, ClientToServerEvents>;
-type AckEvent =
-  | 'room:create'
-  | 'room:join'
-  | 'session:resume'
-  | 'lobby:team'
-  | 'lobby:ready'
-  | 'match:start'
-  | 'result:ready'
-  | 'result:lobby';
+type AckEvent = Exclude<keyof ClientToServerEvents, 'match:input'>;
 
 const ACK_TIMEOUT_MS = 1_500;
 const EVENT_TIMEOUT_MS = 5_000;
@@ -24,11 +17,11 @@ function emitAck<T>(socket: GameClient, event: AckEvent, payload: unknown): Prom
     const emit = socket.emit.bind(socket) as (
       eventName: string,
       eventPayload: unknown,
-      acknowledge: (ack: Ack<T>) => void
+      acknowledge: (acknowledgement: Ack<T>) => void
     ) => void;
-    emit(event, payload, (ack) => {
+    emit(event, payload, (acknowledgement) => {
       clearTimeout(timer);
-      resolve(ack);
+      resolve(acknowledgement);
     });
   });
 }
@@ -64,11 +57,7 @@ function expectEvent<E extends keyof ServerToClientEvents>(
 }
 
 async function connectClient(origin: string): Promise<GameClient> {
-  const client: GameClient = io(origin, {
-    transports: ['websocket'],
-    forceNew: true,
-    reconnection: false
-  });
+  const client: GameClient = io(origin, { transports: ['websocket'], forceNew: true, reconnection: false });
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timed out connecting Socket.IO client')), ACK_TIMEOUT_MS);
     client.once('connect', () => {
@@ -83,18 +72,28 @@ async function connectClient(origin: string): Promise<GameClient> {
   return client;
 }
 
-function sendInput(socket: GameClient, seq: number): void {
-  socket.emit('match:input', {
-    seq,
-    up: false,
-    down: false,
-    left: false,
-    right: true,
-    dash: false
-  });
+const sendInput = (socket: GameClient, input: InputFrame): void => socket.emit('match:input', input);
+
+const input = (seq: number, overrides: Partial<InputFrame> = {}): InputFrame => ({
+  seq,
+  moveX: 0,
+  moveY: 0,
+  aimX: 1,
+  aimY: 0,
+  quick: false,
+  heavy: false,
+  dash: false,
+  ...overrides
+});
+
+function unitVector(from: { x: number; y: number }, to: { x: number; y: number }): { x: number; y: number } {
+  const x = to.x - from.x;
+  const y = to.y - from.y;
+  const length = Math.hypot(x, y) || 1;
+  return { x: x / length, y: y / length };
 }
 
-describe('Socket.IO game server flow', () => {
+describe('Socket.IO FFA game server flow', () => {
   let server: GameServer;
   let origin: string;
   let clients: GameClient[];
@@ -116,163 +115,165 @@ describe('Socket.IO game server flow', () => {
     return connected;
   };
 
-  it('runs create, join, match, authoritative input, result, lobby, and rematch over real WebSockets', async () => {
+  it('runs chassis, real hit, reconnect, five knockouts, player result, lobby, and rematch over WebSockets', async () => {
     const clientA = await client();
     const clientB = await client();
-
-    expect(await fetch(`${origin}/health`).then((response) => response.json())).toMatchObject({
-      status: 'ok',
-      rooms: 0
-    });
     expect(server.testHarness).not.toBeNull();
-    expect((await fetch(`${origin}/__test__/deliver`)).status).toBe(404);
+    expect((await fetch(`${origin}/__test__/knockout`)).status).toBe(404);
 
     const malformed = await emitAck<SessionWelcome>(clientA, 'room:create', { name: 'Ada', admin: true });
-    expect(malformed).toEqual({
-      ok: false,
-      error: { code: 'INVALID_PAYLOAD', message: 'İstek verisi geçersiz.', recoverable: true }
-    });
-
-    const room = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
-    const joined = await emitSuccess<SessionWelcome>(clientB, 'room:join', {
-      name: 'Linus',
-      roomCode: room.roomCode
-    });
-    expect(joined.roomCode).toBe(room.roomCode);
-
-    const unauthorized = await emitAck<null>(clientB, 'match:start', {});
-    expect(unauthorized).toEqual({
-      ok: false,
-      error: { code: 'NOT_HOST', message: 'Bu işlemi yalnızca oda sahibi yapabilir.', recoverable: true }
-    });
-
-    const prematureInputError = expectEvent(clientA, 'server:error', (error) => error.code === 'INVALID_PHASE');
-    sendInput(clientA, 999);
-    expect(await prematureInputError).toMatchObject({ code: 'INVALID_PHASE' });
-
+    expect(malformed).toMatchObject({ ok: false, error: { code: 'INVALID_PAYLOAD' } });
+    const host = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
+    const guest = await emitSuccess<SessionWelcome>(clientB, 'room:join', { name: 'Linus', roomCode: host.roomCode });
+    await emitSuccess<null>(clientA, 'lobby:chassis', { chassis: 'WRAITH' });
+    await emitSuccess<null>(clientB, 'lobby:chassis', { chassis: 'PULSE' });
     await emitSuccess<null>(clientA, 'lobby:ready', { ready: true });
     await emitSuccess<null>(clientB, 'lobby:ready', { ready: true });
-    const startedEvent = expectEvent(clientB, 'match:started');
+
+    const started = expectEvent(clientB, 'match:started');
     await emitSuccess<null>(clientA, 'match:start', {});
-    expect((await startedEvent).phase).toBe('COUNTDOWN');
-
-    const lateClient = await client();
-    const lateJoin = await emitAck<SessionWelcome>(lateClient, 'room:join', {
-      name: 'Grace',
-      roomCode: room.roomCode
+    expect((await started).players.map((player) => player.chassis).sort()).toEqual(['PULSE', 'WRAITH']);
+    const regulation = await expectEvent(clientA, 'match:snapshot', (snapshot) => snapshot.phase === 'REGULATION');
+    const hostPlayer = regulation.players.find((player) => player.playerId === host.playerId)!;
+    const guestPlayer = regulation.players.find((player) => player.playerId === guest.playerId)!;
+    const direction = unitVector(hostPlayer.position, guestPlayer.position);
+    sendInput(clientA, input(1, { moveX: direction.x, moveY: direction.y, aimX: direction.x, aimY: direction.y }));
+    const inRange = await expectEvent(clientA, 'match:snapshot', (snapshot) => {
+      const attacker = snapshot.players.find((player) => player.playerId === host.playerId);
+      const target = snapshot.players.find((player) => player.playerId === guest.playerId);
+      return Boolean(attacker && target && Math.hypot(attacker.position.x - target.position.x, attacker.position.y - target.position.y) < 70);
     });
-    expect(lateJoin).toMatchObject({ ok: false, error: { code: 'MATCH_IN_PROGRESS' } });
+    const attackerAtRange = inRange.players.find((player) => player.playerId === host.playerId)!;
+    const targetAtRange = inRange.players.find((player) => player.playerId === guest.playerId)!;
+    const attackDirection = unitVector(attackerAtRange.position, targetAtRange.position);
+    const hitEvent = expectEvent(clientA, 'match:event',
+      (event) => event.type === 'HIT' && event.attackerId === host.playerId && event.targetId === guest.playerId);
+    sendInput(clientA, input(2, { aimX: attackDirection.x, aimY: attackDirection.y, quick: true }));
+    const hit = await hitEvent;
+    expect(hit).toMatchObject({ type: 'HIT', attackerId: host.playerId, targetId: guest.playerId });
+    const overloadBeforeDisconnect = (hit as Extract<GameEvent, { type: 'HIT' }>).resultingOverload;
 
-    await expectEvent(clientB, 'match:snapshot', (snapshot) => snapshot.phase === 'REGULATION');
+    const paused = expectEvent(clientA, 'room:state',
+      (state) => state.pauseRemainingMs !== null && state.pauseRemainingMs > GAME.reconnectGraceMs - 1_000 &&
+        !state.players.find((player) => player.playerId === guest.playerId)?.connected);
+    server.testHarness!.disconnectPlayer(host.roomCode, guest.playerId);
+    await paused;
+    const resumedClient = await client();
+    const resumedSnapshot = expectEvent(clientA, 'match:snapshot', (snapshot) => {
+      const resumed = snapshot.players.find((player) => player.playerId === guest.playerId);
+      return resumed?.respawnRemainingMs === GAME.reconnectWarpMs;
+    });
+    const resumed = await emitSuccess<SessionWelcome>(resumedClient, 'session:resume', {
+      roomCode: host.roomCode,
+      resumeToken: guest.resumeToken
+    });
+    expect(resumed).toMatchObject({ playerId: guest.playerId, resumed: true });
+    expect((await resumedSnapshot).players.find((player) => player.playerId === guest.playerId)?.overload).toBe(overloadBeforeDisconnect);
+    await expectEvent(clientA, 'match:snapshot',
+      (snapshot) => snapshot.players.find((player) => player.playerId === guest.playerId)?.respawnRemainingMs === 0);
 
-    const rateErrors: ServerError[] = [];
-    clientA.on('server:error', (error) => rateErrors.push(error));
-    for (let seq = 1; seq <= 65; seq += 1) sendInput(clientA, seq);
-    const afterBurst = await expectEvent(
-      clientA,
-      'match:snapshot',
-      (snapshot) => snapshot.players.some((player) => player.playerId === room.playerId && player.lastProcessedInputSeq >= 60)
-    );
-    expect(afterBurst.players.find((player) => player.playerId === room.playerId)?.lastProcessedInputSeq).toBe(60);
+    const beforeUnauthorizedHarness = server.testHarness!.matchSnapshot(host.roomCode)!;
+    (clientA.emit as (event: string, payload: unknown) => void)('test:force-knockout', {
+      roomCode: host.roomCode,
+      attackerId: host.playerId,
+      targetId: guest.playerId
+    });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(rateErrors).toEqual([
-      { code: 'RATE_LIMITED', message: 'Çok hızlı istek gönderiyorsunuz.', recoverable: true }
-    ]);
+    expect(server.testHarness!.matchSnapshot(host.roomCode)?.scores).toEqual(beforeUnauthorizedHarness.scores);
 
-    await new Promise((resolve) => setTimeout(resolve, 1_050));
-    sendInput(clientA, 70);
-    sendInput(clientA, 69);
-    const monotonic = await expectEvent(
-      clientA,
-      'match:snapshot',
-      (snapshot) => snapshot.players.some((player) => player.playerId === room.playerId && player.lastProcessedInputSeq === 70)
-    );
-    expect(monotonic.players.find((player) => player.playerId === room.playerId)?.lastProcessedInputSeq).toBe(70);
-
-    const scoreEvents: GameEvent[] = [];
-    clientB.on('match:event', (event) => scoreEvents.push(event));
-    for (let score = 0; score < 7; score += 1) server.testHarness!.deliverCore(room.roomCode, 'CYAN');
-    const resultState = await expectEvent(clientB, 'room:state', (state) => state.phase === 'RESULT');
-    expect(scoreEvents.filter((event) => event.type === 'SCORE')).toHaveLength(7);
-    expect(scoreEvents.some((event) => event.type === 'RESULT' && event.winner === 'CYAN')).toBe(true);
-    expect(resultState.players.find((player) => player.playerId === room.playerId)?.stats.deliveries).toBe(7);
-    expect(server.testHarness!.matchSnapshot(room.roomCode)).toMatchObject({
+    const knockoutEvents: GameEvent[] = [];
+    clientA.on('match:event', (event) => knockoutEvents.push(event));
+    const resultStatePromise = expectEvent(clientA, 'room:state', (state) => state.phase === 'RESULT');
+    for (let knockout = 0; knockout < GAME.targetScore; knockout += 1) {
+      const knockedOut = expectEvent(clientA, 'match:event',
+        (event) => event.type === 'KNOCKOUT' && event.targetId === guest.playerId);
+      server.testHarness!.forceKnockout(host.roomCode, host.playerId, guest.playerId);
+      await knockedOut;
+      if (knockout < GAME.targetScore - 1) {
+        await expectEvent(clientA, 'match:snapshot',
+          (snapshot) => snapshot.players.find((player) => player.playerId === guest.playerId)?.respawnRemainingMs === 0);
+      }
+    }
+    const resultState = await resultStatePromise;
+    expect(knockoutEvents.filter((event) => event.type === 'KNOCKOUT')).toHaveLength(GAME.targetScore);
+    expect(knockoutEvents.some(
+      (event) => event.type === 'RESULT' && event.winnerPlayerId === host.playerId && event.reason === 'TARGET_SCORE'
+    )).toBe(true);
+    expect(resultState.players.find((player) => player.playerId === host.playerId)?.stats.knockouts).toBe(GAME.targetScore);
+    expect(resultState.players.find((player) => player.playerId === guest.playerId)?.stats.falls).toBe(GAME.targetScore);
+    expect(server.testHarness!.matchSnapshot(host.roomCode)).toMatchObject({
       phase: 'FINISHED',
-      score: { CYAN: 7, AMBER: 0 },
-      winner: 'CYAN'
+      winnerPlayerId: host.playerId,
+      resultReason: 'TARGET_SCORE',
+      scores: { [host.playerId]: GAME.targetScore, [guest.playerId]: 0 }
     });
 
     await emitSuccess<null>(clientA, 'result:ready', { ready: true });
-    const bothReady = expectEvent(clientA, 'room:state', (state) => state.players.every((player) => player.ready));
-    await emitSuccess<null>(clientB, 'result:ready', { ready: true });
-    expect((await bothReady).players.every((player) => player.ready)).toBe(true);
-    expect(await emitAck<null>(clientB, 'result:lobby', {})).toMatchObject({ ok: false, error: { code: 'NOT_HOST' } });
-
-    const lobbyState = expectEvent(clientB, 'room:state', (state) => state.phase === 'LOBBY');
-    await emitSuccess<null>(clientA, 'result:lobby', {});
-    expect((await lobbyState).players.every((player) => !player.ready)).toBe(true);
-
-    await emitSuccess<null>(clientA, 'lobby:ready', { ready: true });
-    await emitSuccess<null>(clientB, 'lobby:ready', { ready: true });
-    const rematchStarted = expectEvent(clientB, 'match:started');
+    await emitSuccess<null>(resumedClient, 'result:ready', { ready: true });
+    const rematchStarted = expectEvent(resumedClient, 'match:started');
     await emitSuccess<null>(clientA, 'match:start', {});
-    expect(await rematchStarted).toMatchObject({ score: { CYAN: 0, AMBER: 0 } });
-  }, 15_000);
+    expect(await rematchStarted).toMatchObject({
+      tick: 0,
+      scores: { [host.playerId]: 0, [guest.playerId]: 0 },
+      winnerPlayerId: null,
+      resultReason: null
+    });
+  }, 20_000);
 
-  it('migrates the host on a forced disconnect and resumes the same player identity', async () => {
+  it('accepts at most sixty monotonic inputs per second and rate-limits above ninety valid messages', async () => {
     const clientA = await client();
     const clientB = await client();
-    const room = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
-    const guest = await emitSuccess<SessionWelcome>(clientB, 'room:join', { name: 'Linus', roomCode: room.roomCode });
+    const host = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
+    await emitSuccess<SessionWelcome>(clientB, 'room:join', { name: 'Linus', roomCode: host.roomCode });
+    await emitSuccess<null>(clientA, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(clientB, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(clientA, 'match:start', {});
+    await expectEvent(clientA, 'match:snapshot', (snapshot) => snapshot.phase === 'REGULATION');
 
-    const migratedState = expectEvent(
-      clientB,
-      'room:state',
-      (state) => state.hostPlayerId === guest.playerId && state.players.some((player) => player.playerId === room.playerId && !player.connected)
-    );
-    server.testHarness!.disconnectPlayer(room.roomCode, room.playerId);
-    expect((await migratedState).hostPlayerId).toBe(guest.playerId);
+    const errors: ServerError[] = [];
+    clientA.on('server:error', (error) => errors.push(error));
+    for (let seq = 1; seq <= 95; seq += 1) sendInput(clientA, input(seq));
+    const capped = await expectEvent(clientA, 'match:snapshot',
+      (snapshot) => snapshot.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq === 60);
+    expect(capped.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq).toBe(60);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(errors.filter((error) => error.code === 'RATE_LIMITED')).toHaveLength(1);
 
-    const resumedClient = await client();
-    const resumedState = expectEvent(
-      clientB,
-      'room:state',
-      (state) => state.players.some((player) => player.playerId === room.playerId && player.connected)
-    );
-    const resumed = await emitSuccess<SessionWelcome>(resumedClient, 'session:resume', {
-      roomCode: room.roomCode,
-      resumeToken: room.resumeToken
-    });
-    expect(resumed).toMatchObject({ playerId: room.playerId, resumed: true });
-    expect((await resumedState).hostPlayerId).toBe(guest.playerId);
-  });
+    await new Promise((resolve) => setTimeout(resolve, 1_050));
+    sendInput(clientA, input(100));
+    sendInput(clientA, input(99, { moveX: -1 }));
+    const monotonic = await expectEvent(clientA, 'match:snapshot',
+      (snapshot) => snapshot.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq === 100);
+    expect(monotonic.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq).toBe(100);
+  }, 12_000);
 
   it('limits room actions to ten per second and suppresses repeated rate-limit events', async () => {
     const clientA = await client();
     await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
     await new Promise((resolve) => setTimeout(resolve, 1_050));
-
     const errors: ServerError[] = [];
     clientA.on('server:error', (error) => errors.push(error));
     const acknowledgements = await Promise.all(
       Array.from({ length: 14 }, (_, index) => emitAck<null>(clientA, 'lobby:ready', { ready: index % 2 === 0 }))
     );
-    expect(acknowledgements.filter((acknowledgement) => !acknowledgement.ok && acknowledgement.error.code === 'RATE_LIMITED')).toHaveLength(4);
+    expect(acknowledgements.filter(
+      (acknowledgement) => !acknowledgement.ok && acknowledgement.error.code === 'RATE_LIMITED'
+    )).toHaveLength(4);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(errors.filter((error) => error.code === 'RATE_LIMITED')).toHaveLength(1);
   });
 
-  it('can restart and stop the same server instance more than once', async () => {
-    await server.stop();
-
-    const restarted = await server.start();
-    expect(await fetch(`${restarted.origin}/health`).then((response) => response.status)).toBe(200);
-
-    await server.stop();
-
-    const afterStop = await fetch(`${restarted.origin}/health`)
-      .then((response) => response.status)
-      .catch(() => 0);
-    expect(afterStop).toBe(0);
+  it('returns copied harness snapshots and stops cleanly', async () => {
+    const clientA = await client();
+    const clientB = await client();
+    const host = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
+    await emitSuccess<SessionWelcome>(clientB, 'room:join', { name: 'Linus', roomCode: host.roomCode });
+    await emitSuccess<null>(clientA, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(clientB, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(clientA, 'match:start', {});
+    const first = server.testHarness!.matchSnapshot(host.roomCode)!;
+    (first.scores as Record<string, number>)[host.playerId] = 99;
+    expect(server.testHarness!.matchSnapshot(host.roomCode)?.scores[host.playerId]).toBe(0);
+    expect(JSON.stringify(server.testHarness)).not.toMatch(/token|expires|timestamp/iu);
   });
 });

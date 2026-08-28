@@ -3,7 +3,7 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import { resolve } from 'node:path';
 import express from 'express';
 import { Server } from 'socket.io';
-import type { MatchSnapshot, SessionWelcome, Team } from '../../shared/model.js';
+import type { MatchSnapshot, SessionWelcome } from '../../shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
 import { RoomManager, type RoomPublication } from '../rooms/roomManager.js';
 import { registerSocketHandlers, type GameSocket } from './socketHandlers.js';
@@ -13,7 +13,7 @@ export interface GameServer {
   stop(): Promise<void>;
   rooms: RoomManager;
   testHarness: {
-    deliverCore(roomCode: string, team: Team): void;
+    forceKnockout(roomCode: string, attackerId: string, targetId: string): void;
     disconnectPlayer(roomCode: string, playerId: string): void;
     matchSnapshot(roomCode: string): MatchSnapshot | null;
   } | null;
@@ -31,10 +31,16 @@ type PlayerConnection = Readonly<{ roomCode: string; socketId: string }>;
 
 function updateSnapshot(snapshot: MatchSnapshot, publication: Extract<RoomPublication, { type: 'MATCH_EVENT' }>): MatchSnapshot {
   const event = publication.event;
-  if (event.type === 'SCORE') return { ...snapshot, score: { ...event.score } };
+  if (event.type === 'KNOCKOUT') return { ...snapshot, scores: { ...event.scores } };
   if (event.type === 'PHASE') return { ...snapshot, phase: event.phase };
   if (event.type === 'RESULT') {
-    return { ...snapshot, phase: 'FINISHED', score: { ...event.score }, winner: event.winner };
+    return {
+      ...snapshot,
+      phase: 'FINISHED',
+      scores: { ...event.scores },
+      winnerPlayerId: event.winnerPlayerId,
+      resultReason: event.reason
+    };
   }
   return snapshot;
 }
@@ -216,13 +222,17 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
 
   const testHarness = options.enableTestHarness
     ? {
-        deliverCore: (roomCode: string, team: Team): void => rooms.deliverCore(roomCode, team),
+        forceKnockout: (roomCode: string, attackerId: string, targetId: string): void =>
+          rooms.forceKnockout(roomCode, attackerId, targetId),
         disconnectPlayer: (roomCode: string, playerId: string): void => {
           const connection = playerConnections.get(playerId);
           if (!connection || connection.roomCode !== roomCode) return;
           io.sockets.sockets.get(connection.socketId)?.disconnect(true);
         },
-        matchSnapshot: (roomCode: string): MatchSnapshot | null => snapshots.get(roomCode) ?? null
+        matchSnapshot: (roomCode: string): MatchSnapshot | null => {
+          const snapshot = snapshots.get(roomCode);
+          return snapshot ? structuredClone(snapshot) : null;
+        }
       }
     : null;
 

@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
 import type { z } from 'zod';
 import type { Ack, ServerError, SessionWelcome } from '../../shared/model.js';
+import { GAME } from '../../shared/constants.js';
 import {
+  lobbyChassisSchema,
   lobbyReadySchema,
-  lobbyTeamSchema,
   matchInputSchema,
   matchStartSchema,
   resultLobbySchema,
@@ -66,12 +67,14 @@ function domainError(error: DomainError): ServerError {
 class SocketRateLimiter {
   private readonly actions: Bucket;
   private readonly inputs: Bucket;
+  private readonly acceptedInputs: Bucket;
   private errorSuppressedUntil = 0;
 
   constructor(private readonly now: () => number) {
     const timestamp = now();
     this.actions = { tokens: 10, updatedAt: timestamp };
-    this.inputs = { tokens: 60, updatedAt: timestamp };
+    this.inputs = { tokens: GAME.inputRateLimitPerSecond, updatedAt: timestamp };
+    this.acceptedInputs = { tokens: GAME.maxInputFramesPerSecond, updatedAt: timestamp };
   }
 
   consumeAction(): boolean {
@@ -79,7 +82,11 @@ class SocketRateLimiter {
   }
 
   consumeInput(): boolean {
-    return this.consume(this.inputs, 60);
+    return this.consume(this.inputs, GAME.inputRateLimitPerSecond);
+  }
+
+  acceptInput(): boolean {
+    return this.consume(this.acceptedInputs, GAME.maxInputFramesPerSecond);
   }
 
   shouldEmitError(): boolean {
@@ -174,9 +181,9 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         establishSession
       );
     });
-    socket.on('lobby:team', (payload, callback) => {
-      acknowledge(lobbyTeamSchema, payload, callback, (validated) => {
-        rooms.setTeam(socket.id, validated.team);
+    socket.on('lobby:chassis', (payload, callback) => {
+      acknowledge(lobbyChassisSchema, payload, callback, (validated) => {
+        rooms.setChassis(socket.id, validated.chassis);
         return null;
       });
     });
@@ -215,6 +222,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         return;
       }
       if (parsed.data.seq <= lastAcceptedInputSeq) return;
+      if (!limiter.acceptInput()) return;
       try {
         rooms.applyInput(socket.id, parsed.data);
         lastAcceptedInputSeq = parsed.data.seq;

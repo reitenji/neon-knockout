@@ -1,5 +1,6 @@
 export type DomainErrorCode =
   | 'ALREADY_IN_ROOM'
+  | 'INVALID_CHASSIS'
   | 'INVALID_NAME'
   | 'INVALID_PHASE'
   | 'INVALID_RESUME_TOKEN'
@@ -10,8 +11,7 @@ export type DomainErrorCode =
   | 'NOT_READY'
   | 'PLAYER_NOT_FOUND'
   | 'ROOM_FULL'
-  | 'ROOM_NOT_FOUND'
-  | 'UNBALANCED_TEAM';
+  | 'ROOM_NOT_FOUND';
 
 export class DomainError {
   constructor(
