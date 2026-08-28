@@ -1,6 +1,7 @@
-import { useEffect, useSyncExternalStore } from 'react';
-import { GameCanvas } from './game/GameCanvas.js';
-import type { GameStore } from './state/gameStore.js';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import type { NeonGameFactory } from './game/GamePresentationBridge.js';
+import { PhaserArena } from './game/PhaserArena.js';
+import { createArenaBridge, type GameStore } from './state/gameStore.js';
 import { useGameStore } from './state/useGameStore.js';
 import { LandingScreen } from './ui/LandingScreen.js';
 import { LobbyScreen } from './ui/LobbyScreen.js';
@@ -11,6 +12,7 @@ import { TopBar } from './ui/TopBar.js';
 
 type AppProps = Readonly<{
   store: GameStore;
+  gameFactory?: NeonGameFactory;
 }>;
 
 const MIN_VIEWPORT_WIDTH = 900;
@@ -29,9 +31,10 @@ function useSupportedViewport(): boolean {
   return useSyncExternalStore(subscribeToViewport, viewportIsSupported, () => true);
 }
 
-export function App({ store }: AppProps) {
+export function App({ store, gameFactory }: AppProps) {
   const state = useGameStore(store);
   const viewportSupported = useSupportedViewport();
+  const arenaBridge = useMemo(() => createArenaBridge(store), [store]);
 
   useEffect(() => {
     store.actions.connect();
@@ -70,7 +73,11 @@ export function App({ store }: AppProps) {
 
         {state.screen === 'MATCH' ? (
           <>
-            <GameCanvas store={store} localPlayerId={state.session?.playerId ?? ''} />
+            <PhaserArena
+              bridge={arenaBridge}
+              localPlayerId={state.session?.playerId ?? ''}
+              createGame={gameFactory}
+            />
             {(state.connectionState !== 'connected' && state.connectionState !== 'idle') || state.reconnectRemainingMs !== null ? (
               <ConnectionOverlay
                 connectionState={state.connectionState}

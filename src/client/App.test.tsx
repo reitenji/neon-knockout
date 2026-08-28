@@ -1,8 +1,11 @@
 import '@testing-library/jest-dom/vitest';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { NeonGameFactory } from './game/GamePresentationBridge.js';
 import type { ClientState, GameStore } from './state/gameStore.js';
 import { App } from './App.js';
+
+const gameFactory = vi.fn<NeonGameFactory>(() => ({ destroy() {} }));
 
 function storeFor(state: ClientState): GameStore {
   return {
@@ -53,6 +56,7 @@ describe('App', () => {
   afterEach(() => {
     cleanup();
     setViewport(1024, 768);
+    gameFactory.mockClear();
     vi.restoreAllMocks();
   });
 
@@ -108,18 +112,17 @@ describe('App', () => {
   });
 
   it('keeps match content visible when the transport is connected', () => {
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     const matchStore = storeFor({ ...landing, screen: 'MATCH' });
-    render(<App store={matchStore} />);
+    render(<App store={matchStore} gameFactory={gameFactory} />);
 
-    expect(screen.getByRole('main').firstElementChild).not.toBeNull();
+    expect(screen.getByLabelText('Neon Knockout oyun alanı')).toBeVisible();
+    expect(gameFactory).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog', { name: 'Bağlantı kesildi' })).toBeNull();
   });
 
   it('keeps the match mounted under a reconnect overlay and retries through the store', () => {
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     const store = storeFor({ ...landing, screen: 'MATCH', connectionState: 'disconnected', reconnectRemainingMs: 12_400 });
-    render(<App store={store} />);
+    render(<App store={store} gameFactory={gameFactory} />);
 
     expect(screen.getByRole('dialog', { name: 'Bağlantı kesildi' })).toHaveTextContent('13 saniye');
     screen.getByRole('button', { name: 'Yeniden Dene' }).click();
@@ -127,9 +130,8 @@ describe('App', () => {
   });
 
   it('keeps the match mounted while an authoritative opponent reservation counts down', () => {
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     const store = storeFor({ ...landing, screen: 'MATCH', reconnectRemainingMs: 8_100 });
-    render(<App store={store} />);
+    render(<App store={store} gameFactory={gameFactory} />);
 
     expect(screen.getByRole('main').firstElementChild).not.toBeNull();
     expect(screen.getByRole('dialog', { name: 'Rakip bekleniyor' })).toHaveTextContent('9 saniye');

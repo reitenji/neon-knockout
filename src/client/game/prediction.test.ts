@@ -1,161 +1,93 @@
 import { describe, expect, it } from 'vitest';
-import { GAME } from '../../shared/constants.js';
 import type { InputFrame, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import {
   INTERPOLATION_DELAY_MS,
+  REMOTE_SNAP_DISTANCE,
   PredictionBuffer,
   SnapshotTimeline,
-  blendPredictedPosition,
-  interpolateSnapshot,
-  predictInputPosition
+  interpolateRemotePlayer
 } from './prediction.js';
 
-function input(seq: number, overrides: Partial<InputFrame> = {}): InputFrame {
-  return {
-    seq,
-    up: false,
-    down: false,
-    left: false,
-    right: false,
-    dash: false,
-    ...overrides
-  };
-}
+const idleAction = { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 } as const;
 
 function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
   return {
-    playerId: 'p-1',
-    name: 'Ada',
-    team: 'CYAN',
-    position: { x: 100, y: 300 },
-    carriedCoreId: null,
-    lastProcessedInputSeq: -1,
-    dashRemainingMs: 0,
-    dashCooldownRemainingMs: 0,
-    stunRemainingMs: 0,
-    stats: { deliveries: 0, tackles: 0 },
+    playerId: 'p-1', name: 'Ada', chassis: 'RIFT', accent: 0,
+    position: { x: 100, y: 100 }, velocity: { x: 0, y: 0 }, facing: { x: 1, y: 0 }, overload: 0,
+    lastProcessedInputSeq: -1, action: idleAction, dashRemainingMs: 0, dashCooldownRemainingMs: 0,
+    hitstunRemainingMs: 0, respawnRemainingMs: 0, protectionRemainingMs: 0,
+    stats: { knockouts: 0, falls: 0, landedHits: 0, completedAttacks: 0 },
     ...overrides
   };
 }
 
-function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
+function frame(seq: number, overrides: Partial<InputFrame> = {}): InputFrame {
+  return { seq, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides };
+}
+
+function snapshot(tick: number, players: readonly MatchPlayer[]): MatchSnapshot {
   return {
-    tick: 1,
-    phase: 'REGULATION',
-    remainingMs: 1_000,
-    score: { CYAN: 0, AMBER: 0 },
-    players: [player(), player({ playerId: 'p-2', team: 'AMBER', position: { x: 220, y: 140 } })],
-    cores: [],
-    winner: null,
-    ...overrides
+    tick, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0,
+    scores: Object.fromEntries(players.map((value) => [value.playerId, 0])), players,
+    winnerPlayerId: null, resultReason: null
   };
 }
 
 describe('PredictionBuffer', () => {
-  it('drops acknowledged input and replays the remaining frames', () => {
-    const buffer = new PredictionBuffer('p-1');
-    buffer.push(input(1, { right: true }));
-    buffer.push(input(2, { right: true }));
+  it('replays unacknowledged movement through shared kinematics and reconciles position, velocity, and facing', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player();
+    const first = prediction.predict(frame(0, { moveX: 1, aimX: 0, aimY: -1 }), canonical, 16);
+    const second = prediction.predict(frame(1, { moveX: 1, aimX: 0, aimY: -1 }), canonical, 16);
 
-    const position = buffer.reconcile(player({ lastProcessedInputSeq: 1 }), 1_000 / GAME.tickRate);
+    expect(second.position.x).toBeGreaterThan(first.position.x);
+    expect(second.velocity.x).toBeGreaterThan(first.velocity.x);
+    expect(second.facing).toEqual({ x: 0, y: -1 });
 
-    expect(position.x).toBeGreaterThan(100);
-    expect(buffer.pendingSequences()).toEqual([2]);
+    const reconciled = prediction.reconcile(player({ lastProcessedInputSeq: 0 }), 16);
+    expect(prediction.pendingSequences()).toEqual([1]);
+    expect(reconciled.position.x).toBeGreaterThan(100);
+    expect(reconciled.facing).toEqual({ x: 0, y: -1 });
   });
 
-  it('uses carrier speed, dash scale, stun state, boundaries, and public barrier geometry', () => {
-    const stepMs = 100;
-    const normal = predictInputPosition(player(), input(1, { right: true }), stepMs);
-    const carrying = predictInputPosition(
-      player({ carriedCoreId: 'core-1' }),
-      input(1, { right: true }),
-      stepMs
-    );
-    const dashing = predictInputPosition(
-      player({ dashRemainingMs: GAME.dashMs }),
-      input(1, { right: true }),
-      stepMs
-    );
-    const stunned = predictInputPosition(
-      player({ stunRemainingMs: GAME.tackleStunMs }),
-      input(1, { right: true }),
-      stepMs
-    );
-    const barrier = predictInputPosition(
-      player({ position: { x: 330, y: 175 } }),
-      input(1, { right: true }),
-      1_000
-    );
-
-    expect(normal.x - 100).toBeCloseTo(GAME.moveSpeed * 0.1, 3);
-    expect(carrying.x - 100).toBeCloseTo(GAME.moveSpeed * GAME.carrierMultiplier * 0.1, 3);
-    expect(dashing.x - 100).toBeCloseTo(GAME.moveSpeed * GAME.dashMultiplier * 0.1, 3);
-    expect(stunned).toEqual({ x: 100, y: 300 });
-    expect(barrier.x).toBeLessThanOrEqual(340);
+  it('predicts only local action starts and never invents hit, knockout, overload, or score state', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const presentation = prediction.predict(frame(0, { quick: true }), player(), 16);
+    expect(presentation.actionStart).toEqual({ kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1, chargeMs: 0 });
+    expect(presentation).not.toHaveProperty('scores');
+    expect(presentation).not.toHaveProperty('overload');
+    expect(presentation).not.toHaveProperty('hit');
+    expect(presentation).not.toHaveProperty('knockout');
   });
 
-  it('does not predict a new dash while the authoritative cooldown remains active', () => {
-    const coolingDown = player({ dashRemainingMs: 0, dashCooldownRemainingMs: 900 });
-    const buffer = new PredictionBuffer('p-1');
-
-    const position = buffer.predict(input(1, { right: true, dash: true }), coolingDown, 100);
-
-    expect(position.x - coolingDown.position.x).toBeCloseTo(GAME.moveSpeed * 0.1, 3);
-  });
-
-  it('blends small corrections but snaps divergences at 140 pixels', () => {
-    expect(blendPredictedPosition({ x: 120, y: 120 }, { x: 126, y: 126 }, 0.35)).toEqual({
-      x: 122.1,
-      y: 122.1
-    });
-    expect(blendPredictedPosition({ x: 0, y: 0 }, { x: 139, y: 0 }, 0.35)).toEqual({
-      x: 48.65,
-      y: 0
-    });
-    expect(blendPredictedPosition({ x: 0, y: 0 }, { x: 140, y: 0 }, 0.35)).toEqual({
-      x: 140,
-      y: 0
-    });
+  it('starts local heavy-charge presentation while the right button is held without predicting an outcome', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const presentation = prediction.predict(frame(0, { heavy: true }), player(), 100);
+    expect(presentation.actionStart).toEqual({ kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: 100 });
+    expect(presentation).not.toHaveProperty('scores');
+    expect(presentation).not.toHaveProperty('hit');
   });
 });
 
-describe('snapshot interpolation', () => {
-  it('samples remote motion against the explicit 100 ms render delay', () => {
+describe('SnapshotTimeline', () => {
+  it('renders remote snapshots seventy milliseconds behind receipt time', () => {
     const timeline = new SnapshotTimeline();
-    const previous = snapshot();
-    const current = snapshot({
-      tick: 2,
-      players: [
-        player({ position: { x: 140, y: 300 } }),
-        player({ playerId: 'p-2', team: 'AMBER', position: { x: 260, y: 180 } })
-      ]
-    });
+    const previous = snapshot(1, [player({ position: { x: 100, y: 100 } })]);
+    const current = snapshot(2, [player({ position: { x: 200, y: 100 } })]);
     timeline.push(previous, 1_000);
     timeline.push(current, 1_100);
-
-    const frame = timeline.sample(1_000 + INTERPOLATION_DELAY_MS + 50);
-    if (!frame) throw new Error('EXPECTED_INTERPOLATION_FRAME');
-    expect(frame.previous).toBe(previous);
-    expect(frame.current).toBe(current);
-    expect(frame.alpha).toBeCloseTo(0.5, 4);
+    const sampled = timeline.sample(1_000 + INTERPOLATION_DELAY_MS + 50)!;
+    expect(sampled.previous).toBe(previous);
+    expect(sampled.current).toBe(current);
+    expect(sampled.alpha).toBe(0.5);
+    expect(INTERPOLATION_DELAY_MS).toBe(70);
   });
 
-  it('interpolates remote players while replacing only the local position', () => {
-    const result = interpolateSnapshot(
-      snapshot(),
-      snapshot({
-        tick: 2,
-        players: [
-          player({ position: { x: 140, y: 300 } }),
-          player({ playerId: 'p-2', team: 'AMBER', position: { x: 260, y: 180 } })
-        ]
-      }),
-      0.5,
-      'p-1',
-      { x: 150, y: 310 }
-    );
-
-    expect(result.players.find((entry) => entry.playerId === 'p-1')?.position).toEqual({ x: 150, y: 310 });
-    expect(result.players.find((entry) => entry.playerId === 'p-2')?.position).toEqual({ x: 240, y: 160 });
+  it('interpolates the outer remote position but snaps above the named threshold', () => {
+    const previous = player({ position: { x: 100, y: 100 } });
+    const nearby = player({ position: { x: 140, y: 120 } });
+    expect(interpolateRemotePlayer(previous, nearby, 0.5)).toEqual({ x: 120, y: 110 });
+    const far = player({ position: { x: 100 + REMOTE_SNAP_DISTANCE + 1, y: 100 } });
+    expect(interpolateRemotePlayer(previous, far, 0.1)).toEqual(far.position);
   });
 });

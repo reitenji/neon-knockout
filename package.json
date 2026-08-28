@@ -1,5 +1,5 @@
 {
-  "name": "neon-relay",
+  "name": "neon-knockout",
   "private": true,
   "type": "module",
   "engines": {
@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "express": "^5.2.1",
+    "phaser": "4.2.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "socket.io": "^4.8.3",
