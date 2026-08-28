@@ -93,6 +93,24 @@ describe('KeyboardController', () => {
     });
   });
 
+  it('does not replay movement or dash keydowns captured while inactive', () => {
+    const windowStub = createWindowStub();
+    const keyboard = new KeyboardController(windowStub);
+
+    windowStub.dispatch('keydown', createKeyboardEvent('keydown', 'ArrowUp'));
+    windowStub.dispatch('keydown', createKeyboardEvent('keydown', 'Space'));
+    keyboard.setActive(true);
+
+    expect(keyboard.sample(7)).toEqual({
+      seq: 7,
+      up: false,
+      down: false,
+      left: false,
+      right: false,
+      dash: false
+    });
+  });
+
   it('removes every listener and clears state when destroyed', () => {
     const windowStub = createWindowStub();
     const keyboard = new KeyboardController(windowStub);

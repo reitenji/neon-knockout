@@ -5,6 +5,7 @@ import { RENDER_LAYERS, fitArena, renderFrame, resizeCanvas } from './renderer.j
 
 class ContextStub {
   readonly calls: string[] = [];
+  readonly arcCalls: Array<readonly [number, number, number]> = [];
   fillStyle: string | CanvasGradient | CanvasPattern = '';
   strokeStyle: string | CanvasGradient | CanvasPattern = '';
   lineWidth = 1;
@@ -22,7 +23,10 @@ class ContextStub {
   strokeRect() { this.calls.push('strokeRect'); }
   beginPath() { this.calls.push('beginPath'); }
   closePath() { this.calls.push('closePath'); }
-  arc() { this.calls.push('arc'); }
+  arc(x: number, y: number, radius: number) {
+    this.calls.push('arc');
+    this.arcCalls.push([x, y, radius]);
+  }
   fill() { this.calls.push('fill'); }
   stroke() { this.calls.push('stroke'); }
   moveTo() { this.calls.push('moveTo'); }
@@ -101,5 +105,29 @@ describe('renderer helpers', () => {
 
     expect(layers).toEqual(RENDER_LAYERS);
     expect((context as unknown as ContextStub).calls).toContain('fillText');
+  });
+
+  it('renders a locally carried core at the predicted carrier position', () => {
+    const context = new ContextStub();
+    const current = snapshot();
+    const carriedSnapshot: MatchSnapshot = {
+      ...current,
+      players: [{ ...current.players[0]!, carriedCoreId: 'core-1' }],
+      cores: [{ ...current.cores[0]!, position: { x: 180, y: 220 }, carrierId: 'p-1' }]
+    };
+
+    renderFrame(context as unknown as CanvasRenderingContext2D, {
+      viewport: fitArena(1280, 720, ARENA.width, ARENA.height),
+      snapshot: carriedSnapshot,
+      previousSnapshot: null,
+      interpolationAlpha: 1,
+      localPlayerId: 'p-1',
+      predictedLocalPosition: { x: 300, y: 400 },
+      floorImage: null,
+      particles: null
+    });
+
+    expect(context.arcCalls).toContainEqual([324, 380, 13]);
+    expect(context.arcCalls).toContainEqual([324, 380, 7]);
   });
 });

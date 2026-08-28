@@ -33,7 +33,8 @@ export class KeyboardController {
     const keyboardEvent = event as KeyboardEvent;
     const code = normalizeCode(keyboardEvent.code || keyboardEvent.key);
     if (!GAME_CODES.has(code)) return;
-    if (this.active) keyboardEvent.preventDefault();
+    if (!this.active) return;
+    keyboardEvent.preventDefault();
     this.keyDown(code);
   };
 

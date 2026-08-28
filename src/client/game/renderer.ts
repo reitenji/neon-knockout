@@ -15,6 +15,8 @@ export const RENDER_LAYERS = [
 
 export type RenderLayer = (typeof RENDER_LAYERS)[number];
 
+export const MAX_CANVAS_DPR = 3;
+
 export type ArenaViewport = Readonly<{
   viewportWidth: number;
   viewportHeight: number;
@@ -72,7 +74,7 @@ function teamSoftColor(team: Team): string {
 export function resizeCanvas(canvas: HTMLCanvasElement, cssWidth: number, cssHeight: number, dpr: number): boolean {
   const safeWidth = Math.max(1, Math.round(cssWidth));
   const safeHeight = Math.max(1, Math.round(cssHeight));
-  const safeDpr = Math.max(1, Math.min(3, dpr));
+  const safeDpr = Math.max(1, Math.min(MAX_CANVAS_DPR, dpr));
   const backingWidth = Math.max(1, Math.round(safeWidth * safeDpr));
   const backingHeight = Math.max(1, Math.round(safeHeight * safeDpr));
   const changed = canvas.width !== backingWidth || canvas.height !== backingHeight;
@@ -253,10 +255,17 @@ function drawCores(
   context: CanvasRenderingContext2D,
   snapshot: MatchSnapshot,
   previousSnapshot: MatchSnapshot | null,
-  alpha: number
+  alpha: number,
+  localPlayerId: string,
+  predictedLocalPosition: Vec2 | null
 ): void {
   for (const core of snapshot.cores) {
-    writeCorePosition(core, previousSnapshot, alpha, corePositionScratch);
+    if (core.carrierId === localPlayerId && predictedLocalPosition) {
+      corePositionScratch.x = predictedLocalPosition.x;
+      corePositionScratch.y = predictedLocalPosition.y;
+    } else {
+      writeCorePosition(core, previousSnapshot, alpha, corePositionScratch);
+    }
     const carried = core.carrierId !== null;
     const x = carried ? corePositionScratch.x + 24 : corePositionScratch.x;
     const y = carried ? corePositionScratch.y - 20 : corePositionScratch.y;
@@ -487,7 +496,14 @@ export function renderFrame(context: CanvasRenderingContext2D, options: RenderFr
   drawCorePads(context);
 
   announceLayer(options, 'cores');
-  drawCores(context, options.snapshot, options.previousSnapshot, alpha);
+  drawCores(
+    context,
+    options.snapshot,
+    options.previousSnapshot,
+    alpha,
+    options.localPlayerId,
+    options.predictedLocalPosition
+  );
 
   announceLayer(options, 'player-shadows');
   for (const player of options.snapshot.players) {

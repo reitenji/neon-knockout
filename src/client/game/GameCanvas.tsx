@@ -4,7 +4,7 @@ import type { MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import type { GameStore } from '../state/gameStore.js';
 import { KeyboardController } from './keyboard.js';
 import { PredictionBuffer, SnapshotTimeline } from './prediction.js';
-import { AuthoritativeParticles, fitArena, renderFrame, resizeCanvas } from './renderer.js';
+import { AuthoritativeParticles, fitArena, MAX_CANVAS_DPR, renderFrame, resizeCanvas } from './renderer.js';
 
 type GameCanvasProps = Readonly<{
   store: GameStore;
@@ -105,7 +105,7 @@ export function GameCanvas({ store, localPlayerId }: GameCanvasProps) {
       const bounds = stage.getBoundingClientRect();
       const width = Math.max(1, Math.round(stage.clientWidth || bounds.width || ARENA.width));
       const height = Math.max(1, Math.round(stage.clientHeight || bounds.height || ARENA.height));
-      const dpr = window.devicePixelRatio || 1;
+      const dpr = Math.max(1, Math.min(MAX_CANVAS_DPR, window.devicePixelRatio || 1));
       resizeCanvas(canvas, width, height, dpr);
       context.setTransform?.(dpr, 0, 0, dpr, 0, 0);
       viewport = fitArena(width, height);

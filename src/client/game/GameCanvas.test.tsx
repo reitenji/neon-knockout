@@ -126,6 +126,21 @@ describe('GameCanvas', () => {
     expect(ResizeObserverStub.instances[0]?.disconnect).toHaveBeenCalledOnce();
   });
 
+  it('uses the capped backing-store ratio for the Canvas transform', () => {
+    const setTransform = vi.fn();
+    vi.stubGlobal('devicePixelRatio', 4);
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+    vi.spyOn(window, 'setInterval').mockReturnValue(2);
+    vi.spyOn(window, 'clearInterval').mockImplementation(() => undefined);
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ setTransform } as unknown as CanvasRenderingContext2D);
+
+    render(<GameCanvas store={new CanvasStore()} localPlayerId="p-1" />);
+
+    expect(setTransform).toHaveBeenCalledWith(3, 0, 0, 3, 0, 0);
+  });
+
   it('keeps accessible score, clock, cooldown, core, ping, and controls outside Canvas', () => {
     vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1));
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
