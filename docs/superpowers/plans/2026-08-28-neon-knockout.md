@@ -28,7 +28,7 @@ The final result is demonstrated, not inferred. A clean install must pass unit, 
 
 - [x] (2026-08-28 11:29Z) User approved the combat-first redesign and the shortened, penalty-free knockout/reconnect amendments in `2b4e909`.
 - [x] (2026-08-28 11:29Z) Mapped the current shared, simulation, room, network, client, test, build, and delivery surfaces; recorded the superseded uncommitted Task 7 test drafts.
-- [ ] Task 1: Replace shared team/core contracts with typed free-for-all combat contracts. Partial contract commit: `2310543`; focused review and kinematics remain.
+- [x] (2026-08-28 11:56Z) Task 1: Replaced shared team/core contracts with reviewed free-for-all combat contracts and browser-safe kinematics (`0120139`, `3c3f328`).
 - [ ] Task 2: Build deterministic platform geometry and velocity-based kinematics.
 - [ ] Task 3: Implement authoritative attacks, knockback, knockout, respawn, contraction, and match transitions.
 - [ ] Task 4: Convert rooms, reconnect behavior, Socket.IO handlers, and the test harness to free-for-all combat.
@@ -70,7 +70,7 @@ The final result is demonstrated, not inferred. A clean install must pass unit, 
 
 ## Outcomes & Retrospective
 
-No implementation milestone is complete yet. At the end of each task, record the observed behavior, focused test result, review result, commit SHA, and any spec/plan adjustment here. At final completion, compare the live game against the three product promises: immediate control, readable impact, and constant contest.
+Task 1 produced the exact serializable combat/input/protocol surface, exact shared limits, and pure prediction kinematics. Its 10 focused tests passed; an independent review found three contract mismatches, all fixed in `3c3f328` and confirmed by scoped re-review. At final completion, compare the live game against the three product promises: immediate control, readable impact, and constant contest.
 
 ## Context and Orientation
 
