@@ -73,7 +73,8 @@ describe('authoritative combat', () => {
     player.previousQuick = false;
     player.latestInput = input(6, { quick: true });
     startActions(state);
-    expect(player.attack?.kind).toBe('QUICK_1');
+    const attack = player.attack as MutableMatchPlayer['attack'];
+    expect(attack?.kind).toBe('QUICK_1');
   });
 
   it('hits each in-range target once per attack in distance and stable-id order', () => {

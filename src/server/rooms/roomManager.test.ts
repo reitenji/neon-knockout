@@ -262,7 +262,9 @@ describe('RoomManager FFA lifecycle', () => {
         publication.type === 'MATCH_EVENT' && publication.event.type === 'RESULT' && publication.event.reason === 'NO_CONTEST'
     );
     expect(noContests).toHaveLength(1);
-    expect(noContests[0].event.winnerPlayerId).toBeNull();
+    const noContest = noContests[0];
+    if (noContest?.event.type !== 'RESULT') throw new Error('Expected a RESULT event');
+    expect(noContest.event.winnerPlayerId).toBeNull();
     expect(subject.roomState(roomCode)).toMatchObject({ phase: 'LOBBY', result: null, pauseRemainingMs: null });
     expect(subject.roomState(roomCode).players.map(({ playerId, chassis, accent }) => ({ playerId, chassis, accent }))).toEqual([
       preserved[0]
