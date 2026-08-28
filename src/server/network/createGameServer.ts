@@ -53,10 +53,12 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
   const snapshots = new Map<string, MatchSnapshot>();
   const playerConnections = new Map<string, PlayerConnection>();
   const pendingPublications = new Set<NodeJS.Immediate>();
-  const startedAt = now();
+  let startedAt = now();
   let scheduler: NodeJS.Timeout | null = null;
   let lastAdvanceAt = startedAt;
   let activeAddress: { port: number; origin: string } | null = null;
+  let starting: Promise<{ port: number; origin: string }> | null = null;
+  let restartAfterStop: Promise<{ port: number; origin: string }> | null = null;
   let stopping: Promise<void> | null = null;
 
   const dispatch = (publication: RoomPublication): void => {
@@ -125,8 +127,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     }
   });
 
-  const start = async (): Promise<{ port: number; origin: string }> => {
-    if (activeAddress) return activeAddress;
+  const listen = async (): Promise<{ port: number; origin: string }> => {
     await new Promise<void>((resolveStart, rejectStart) => {
       const onError = (error: Error): void => {
         httpServer.off('listening', onListening);
@@ -144,7 +145,8 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     if (!address || typeof address === 'string') throw new Error('Game server did not bind a TCP port.');
     const originHost = host === '0.0.0.0' ? '127.0.0.1' : host;
     activeAddress = { port: address.port, origin: `http://${originHost}:${address.port}` };
-    lastAdvanceAt = now();
+    startedAt = now();
+    lastAdvanceAt = startedAt;
     scheduler = setInterval(() => {
       const current = now();
       rooms.advance(current - lastAdvanceAt);
@@ -153,17 +155,44 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     return activeAddress;
   };
 
+  const start = (): Promise<{ port: number; origin: string }> => {
+    if (stopping) {
+      if (restartAfterStop) return restartAfterStop;
+      const stopToJoin = stopping;
+      const sharedStart = stopToJoin.then(listen).finally(() => {
+        if (starting === sharedStart) starting = null;
+        if (restartAfterStop === sharedStart) restartAfterStop = null;
+      });
+      restartAfterStop = sharedStart;
+      starting = sharedStart;
+      return sharedStart;
+    }
+    if (starting) return starting;
+    if (activeAddress) return Promise.resolve(activeAddress);
+    const sharedStart = listen().finally(() => {
+      if (starting === sharedStart) starting = null;
+    });
+    starting = sharedStart;
+    return sharedStart;
+  };
+
   const stop = (): Promise<void> => {
     if (stopping) return stopping;
     stopping = (async () => {
       try {
+        const startToJoin = starting;
+        if (startToJoin) {
+          try {
+            await startToJoin;
+          } catch {
+            // A failed start still needs the same resource and state cleanup.
+          }
+        }
         if (scheduler) {
           clearInterval(scheduler);
           scheduler = null;
         }
-        for (const immediate of pendingPublications) clearImmediate(immediate);
-        pendingPublications.clear();
-        if (activeAddress) {
+        if (activeAddress || httpServer.listening) {
           await new Promise<void>((resolveClose) => io.close(() => resolveClose()));
           if (httpServer.listening) {
             await new Promise<void>((resolveClose, rejectClose) => {
@@ -171,6 +200,12 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
             });
           }
         }
+        for (const immediate of pendingPublications) clearImmediate(immediate);
+        pendingPublications.clear();
+        rooms.reset();
+        roomCodes.clear();
+        snapshots.clear();
+        playerConnections.clear();
         activeAddress = null;
       } finally {
         stopping = null;

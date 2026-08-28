@@ -70,6 +70,11 @@ export class RoomManager {
 
   constructor(private readonly deps: RoomManagerDependencies) {}
 
+  reset(): void {
+    this.rooms.clear();
+    this.connections.clear();
+  }
+
   createRoom(connectionId: string, name: string): SessionWelcome {
     this.assertConnectionAvailable(connectionId);
     const roomCode = this.createRoomCode();
