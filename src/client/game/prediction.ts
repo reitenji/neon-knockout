@@ -174,7 +174,7 @@ function advanceRuntime(
 
   const vertices = platformVertices(platformProgress);
   const outsidePlatform = !pointInConvexPolygon(runtime.position, vertices);
-  const charging = canStartAction && frame.heavy;
+  const charging = heavyChargeMs >= GAME.heavyEnterChargeMs;
   const movementInput = hitstunRemainingMs > 0
     ? { ...frame, moveX: 0, moveY: 0 }
     : frame;
@@ -201,7 +201,7 @@ function advanceRuntime(
       dashDirection: dashDirectionValue,
       hitstunRemainingMs,
       respawnRemainingMs: runtime.respawnRemainingMs,
-      action: runtime.action,
+      action: actionStart ?? runtime.action,
       heavyChargeMs
     },
     actionStart

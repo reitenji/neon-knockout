@@ -68,6 +68,26 @@ describe('PredictionBuffer', () => {
     expect(presentation).not.toHaveProperty('hit');
   });
 
+  it('keeps a predicted quick committed so a following dash is not predicted', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+
+    expect(prediction.predict(frame(0, { quick: true }), canonical, 16).actionStart?.kind).toBe('QUICK_1');
+    const afterQuick = prediction.predict(frame(1, { dash: true }), canonical, 16);
+
+    expect(afterQuick.actionStart).toBeNull();
+    expect(afterQuick.velocity.x).not.toBe(760);
+  });
+
+  it('keeps full movement steering before heavy charge reaches its entry threshold', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+
+    const charging = prediction.predict(frame(0, { moveX: 1, heavy: true }), canonical, 100);
+
+    expect(charging.velocity.x).toBe(240);
+  });
+
   it('does not predict dash or attack starts while canonical state forbids acting', () => {
     const blockedPlayers = [
       player({ dashCooldownRemainingMs: 100 }),
