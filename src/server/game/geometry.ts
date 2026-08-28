@@ -1,96 +1,146 @@
-import type { Rect, Vec2 } from '../../shared/model.js';
-import { ARENA, GAME } from '../../shared/constants.js';
+import type { Vec2 } from '../../shared/model.js';
 
-export function circleIntersectsRect(position: Vec2, radius: number, rect: Rect): boolean {
-  const nearestX = Math.max(rect.x, Math.min(position.x, rect.x + rect.width));
-  const nearestY = Math.max(rect.y, Math.min(position.y, rect.y + rect.height));
-  const dx = position.x - nearestX;
-  const dy = position.y - nearestY;
-  return dx * dx + dy * dy <= radius * radius;
+export type Segment = Readonly<{ start: Vec2; end: Vec2 }>;
+export type PolygonGeometry = Readonly<{ vertices: readonly Vec2[] }>;
+
+export function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
-export function movePlayer(position: Vec2, direction: Vec2, elapsedMs: number, carrying: boolean): Vec2 {
-  const length = Math.hypot(direction.x, direction.y);
-  if (length === 0) return position;
+export function length(vector: Vec2): number {
+  return Math.hypot(vector.x, vector.y);
+}
 
-  const distance = GAME.moveSpeed * (carrying ? GAME.carrierMultiplier : 1) * (elapsedMs / 1_000);
+export function normalize(vector: Vec2, fallback: Vec2 = { x: 0, y: 0 }): Vec2 {
+  const magnitude = length(vector);
+  if (!Number.isFinite(magnitude) || magnitude < 1e-6) return fallback;
+  return { x: vector.x / magnitude, y: vector.y / magnitude };
+}
+
+export function add(left: Vec2, right: Vec2): Vec2 {
+  return { x: left.x + right.x, y: left.y + right.y };
+}
+
+export function subtract(left: Vec2, right: Vec2): Vec2 {
+  return { x: left.x - right.x, y: left.y - right.y };
+}
+
+export function scale(vector: Vec2, scalar: number): Vec2 {
+  return { x: vector.x * scalar, y: vector.y * scalar };
+}
+
+export function dot(left: Vec2, right: Vec2): number {
+  return left.x * right.x + left.y * right.y;
+}
+
+export function distance(left: Vec2, right: Vec2): number {
+  return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+export function lerp(left: Vec2, right: Vec2, alpha: number): Vec2 {
   return {
-    x: position.x + (direction.x / length) * distance,
-    y: position.y + (direction.y / length) * distance
+    x: left.x + (right.x - left.x) * alpha,
+    y: left.y + (right.y - left.y) * alpha
   };
 }
 
-export function pushCircle(
-  position: Vec2,
-  direction: Vec2,
-  distance: number,
-  radius: number,
-  obstacles: readonly Rect[]
-): Vec2 {
-  const length = Math.hypot(direction.x, direction.y);
-  if (length === 0 || distance <= 0) return position;
-
-  const unit = { x: direction.x / length, y: direction.y / length };
-  let current = position;
-  let remaining = distance;
-
-  while (remaining > 0) {
-    const step = Math.min(1, remaining);
-    const candidate = { x: current.x + unit.x * step, y: current.y + unit.y * step };
-    if (
-      candidate.x < radius ||
-      candidate.x > ARENA.width - radius ||
-      candidate.y < radius ||
-      candidate.y > ARENA.height - radius ||
-      obstacles.some((obstacle) => circleIntersectsRect(candidate, radius, obstacle))
-    ) {
-      break;
-    }
-    current = candidate;
-    remaining -= step;
-  }
-
-  return current;
+export function polygonSegments(vertices: readonly Vec2[]): readonly Segment[] {
+  return vertices.map((start, index) => ({
+    start,
+    end: vertices[(index + 1) % vertices.length]
+  }));
 }
 
-export function separatePlayers(
-  players: Record<string, { position: Vec2 }>,
-  stablePlayerIds: readonly string[] = Object.keys(players).sort()
-): void {
-  const playerIds = stablePlayerIds;
-  const minimumDistance = GAME.playerRadius * 2;
+function closestPointOnSegment(point: Vec2, segment: Segment): Vec2 {
+  const segmentVector = subtract(segment.end, segment.start);
+  const segmentLengthSquared = dot(segmentVector, segmentVector);
+  if (segmentLengthSquared <= 1e-9) return segment.start;
+  const projection = dot(subtract(point, segment.start), segmentVector) / segmentLengthSquared;
+  return lerp(segment.start, segment.end, clamp(projection, 0, 1));
+}
 
-  for (let pass = 0; pass < 2; pass += 1) {
-    const passPositions = playerIds.map((playerId) => players[playerId].position);
-    const corrections = playerIds.map(() => ({ x: 0, y: 0 }));
+export function pointInConvexPolygon(point: Vec2, vertices: readonly Vec2[]): boolean {
+  if (vertices.length < 3) return false;
 
-    for (let leftIndex = 0; leftIndex < playerIds.length; leftIndex += 1) {
-      for (let rightIndex = leftIndex + 1; rightIndex < playerIds.length; rightIndex += 1) {
-        const leftPosition = passPositions[leftIndex];
-        const rightPosition = passPositions[rightIndex];
-        const dx = rightPosition.x - leftPosition.x;
-        const dy = rightPosition.y - leftPosition.y;
-        const distance = Math.hypot(dx, dy);
-        if (distance >= minimumDistance) continue;
+  let direction = 0;
+  for (const segment of polygonSegments(vertices)) {
+    const cross =
+      (segment.end.x - segment.start.x) * (point.y - segment.start.y) -
+      (segment.end.y - segment.start.y) * (point.x - segment.start.x);
+    if (Math.abs(cross) <= 1e-9) continue;
+    const currentDirection = Math.sign(cross);
+    if (direction !== 0 && currentDirection !== direction) return false;
+    direction = currentDirection;
+  }
 
-        const direction = distance === 0 ? { x: 1, y: 0 } : { x: dx / distance, y: dy / distance };
-        const correction = (minimumDistance - distance) / 2;
-        corrections[leftIndex].x -= direction.x * correction;
-        corrections[leftIndex].y -= direction.y * correction;
-        corrections[rightIndex].x += direction.x * correction;
-        corrections[rightIndex].y += direction.y * correction;
-      }
-    }
+  return true;
+}
 
-    for (let playerIndex = 0; playerIndex < playerIds.length; playerIndex += 1) {
-      const correction = corrections[playerIndex];
-      players[playerIds[playerIndex]].position = pushCircle(
-        passPositions[playerIndex],
-        correction,
-        Math.hypot(correction.x, correction.y),
-        GAME.playerRadius,
-        ARENA.obstacles
-      );
+export function closestPointOnPolygon(point: Vec2, vertices: readonly Vec2[]): Vec2 {
+  const segments = polygonSegments(vertices);
+  let best = segments[0] ? closestPointOnSegment(point, segments[0]) : point;
+  let bestDistance = distance(point, best);
+  for (let index = 1; index < segments.length; index += 1) {
+    const candidate = closestPointOnSegment(point, segments[index]);
+    const candidateDistance = distance(point, candidate);
+    if (candidateDistance < bestDistance) {
+      best = candidate;
+      bestDistance = candidateDistance;
     }
   }
+  return best;
+}
+
+export function distanceToPolygon(point: Vec2, vertices: readonly Vec2[]): number {
+  if (pointInConvexPolygon(point, vertices)) return 0;
+  return distance(point, closestPointOnPolygon(point, vertices));
+}
+
+export function nearestEdgeNormal(point: Vec2, vertices: readonly Vec2[]): Vec2 {
+  if (vertices.length < 2) return { x: 0, y: -1 };
+
+  const segments = polygonSegments(vertices);
+  let nearest = segments[0]!;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (const segment of segments) {
+    const edgePoint = closestPointOnSegment(point, segment);
+    const edgeDistance = distance(point, edgePoint);
+    if (edgeDistance < nearestDistance) {
+      nearest = segment;
+      nearestDistance = edgeDistance;
+    }
+  }
+
+  const signedArea = vertices.reduce(
+    (total, vertex, index) => {
+      const next = vertices[(index + 1) % vertices.length];
+      return total + vertex.x * next.y - next.x * vertex.y;
+    },
+    0
+  );
+  const edge = subtract(nearest.end, nearest.start);
+  return normalize(
+    signedArea >= 0 ? { x: edge.y, y: -edge.x } : { x: -edge.y, y: edge.x },
+    { x: 0, y: -1 }
+  );
+}
+
+export function isKnockedOut(point: Vec2, platform: PolygonGeometry, threshold = 80): boolean {
+  return distanceToPolygon(point, platform.vertices) > threshold;
+}
+
+export function separateCircles(
+  left: Vec2,
+  right: Vec2,
+  radius: number
+): Readonly<{ left: Vec2; right: Vec2 }> {
+  const delta = subtract(right, left);
+  const gap = radius * 2 - length(delta);
+  if (gap <= 0) return { left, right };
+  const direction = normalize(delta, { x: 1, y: 0 });
+  const correction = scale(direction, gap / 2);
+  return {
+    left: subtract(left, correction),
+    right: add(right, correction)
+  };
 }

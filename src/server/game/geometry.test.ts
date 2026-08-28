@@ -1,61 +1,42 @@
 import { describe, expect, it } from 'vitest';
 
-import { GAME } from '../../shared/constants.js';
-import { circleIntersectsRect, movePlayer, pushCircle, separatePlayers } from './geometry.js';
+import { ARENA, GAME } from '../../shared/constants.js';
+import {
+  distanceToPolygon,
+  isKnockedOut,
+  nearestEdgeNormal,
+  pointInConvexPolygon
+} from './geometry.js';
+import { platformAt } from './movement.js';
 
-describe('game geometry', () => {
-  it('keeps diagonal movement at the base speed', () => {
-    const next = movePlayer({ x: 100, y: 100 }, { x: 1, y: 1 }, 1_000, false);
-
-    expect(Math.hypot(next.x - 100, next.y - 100)).toBeCloseTo(GAME.moveSpeed, 5);
+describe('deterministic knockout geometry', () => {
+  it('uses all eight regulation and minimum platform vertices', () => {
+    expect(platformAt(0).vertices).toEqual(ARENA.regulationVertices);
+    expect(platformAt(1).vertices).toEqual(ARENA.minimumVertices);
+    expect(platformAt(0).vertices).toHaveLength(8);
+    expect(platformAt(1).vertices).toHaveLength(8);
   });
 
-  it('keeps pushed circles inside the arena boundary', () => {
-    const next = pushCircle({ x: 25, y: 100 }, { x: -1, y: 0 }, 10, 20, []);
-
-    expect(next).toEqual({ x: 20, y: 100 });
+  it('interpolates each platform vertex without rounding', () => {
+    expect(platformAt(0.5).vertices[0]).toEqual({ x: 280, y: 120 });
+    expect(platformAt(0.5).vertices[3]).toEqual({ x: 1080, y: 520 });
   });
 
-  it('stops tackle push at the last valid point before a wall', () => {
-    const wall = { x: 240, y: 250, width: 40, height: 100 };
-    const result = pushCircle({ x: 205, y: 300 }, { x: 1, y: 0 }, 52, 20, [wall]);
+  it('reports zero distance inside the polygon and exact outside segment distance', () => {
+    const vertices = platformAt(0).vertices;
 
-    expect(result.x).toBe(219);
-    expect(circleIntersectsRect(result, 20, wall)).toBe(false);
+    expect(pointInConvexPolygon({ x: 640, y: 360 }, vertices)).toBe(true);
+    expect(pointInConvexPolygon({ x: 640, y: 0 }, vertices)).toBe(false);
+    expect(distanceToPolygon({ x: 640, y: 360 }, vertices)).toBe(0);
+    expect(distanceToPolygon({ x: 640, y: 50 }, vertices)).toBe(40);
   });
 
-  it('separates identical centers in stable player-id order', () => {
-    const players = {
-      'p-b': { position: { x: 100, y: 100 } },
-      'p-a': { position: { x: 100, y: 100 } }
-    };
+  it('uses the nearest outward edge normal and 80-pixel knockout threshold', () => {
+    const platform = platformAt(0);
 
-    separatePlayers(players);
-
-    expect(players['p-a'].position).toEqual({ x: 80, y: 100 });
-    expect(players['p-b'].position).toEqual({ x: 120, y: 100 });
-  });
-
-  it('fully separates three players sharing one center within two passes', () => {
-    const players = {
-      'p-c': { position: { x: 300, y: 300 } },
-      'p-a': { position: { x: 300, y: 300 } },
-      'p-b': { position: { x: 300, y: 300 } }
-    };
-
-    separatePlayers(players);
-
-    const pairs = [
-      ['p-a', 'p-b'],
-      ['p-a', 'p-c'],
-      ['p-b', 'p-c']
-    ] as const;
-    for (const [leftId, rightId] of pairs) {
-      const left = players[leftId].position;
-      const right = players[rightId].position;
-      expect(Math.hypot(right.x - left.x, right.y - left.y)).toBeGreaterThanOrEqual(
-        GAME.playerRadius * 2 - 1e-9
-      );
-    }
+    expect(nearestEdgeNormal({ x: 640, y: 50 }, platform.vertices)).toEqual({ x: 0, y: -1 });
+    expect(isKnockedOut({ x: 640, y: 10 }, platform)).toBe(false);
+    expect(isKnockedOut({ x: 640, y: 9 }, platform)).toBe(true);
+    expect(GAME.knockoutDistance).toBe(80);
   });
 });

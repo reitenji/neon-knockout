@@ -1,134 +1,162 @@
-import type { InputFrame, MatchPhase, Team, Vec2 } from '../../shared/model.js';
-import { ARENA, GAME } from '../../shared/constants.js';
+import { ARENA, CHASSIS, GAME } from '../../shared/constants.js';
+import type {
+  AttackKind,
+  AttackPhase,
+  Chassis,
+  InputFrame,
+  MatchPhase,
+  MatchResultReason,
+  PlayerAccent,
+  Vec2
+} from '../../shared/model.js';
 
 const compareStableIds = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
 export type MatchPlayerSeed = Readonly<{
   playerId: string;
   name: string;
-  team: Team;
+  chassis?: Chassis;
+  accent: PlayerAccent;
   connected?: boolean;
 }>;
+
+export type MutablePlayerStats = {
+  knockouts: number;
+  falls: number;
+  landedHits: number;
+  completedAttacks: number;
+};
+
+export type AttackRuntime = {
+  kind: AttackKind;
+  phase: AttackPhase;
+  phaseRemainingMs: number;
+  facing: Vec2;
+  hitPlayerIds: Set<string>;
+};
 
 export type MutableMatchPlayer = {
   playerId: string;
   name: string;
-  team: Team;
+  chassis: Chassis;
+  accent: PlayerAccent;
   position: Vec2;
-  carriedCoreId: string | null;
-  lastProcessedInputSeq: number;
+  velocity: Vec2;
+  facing: Vec2;
+  overload: number;
+  comboStep: 0 | 1 | 2 | 3;
+  attack: AttackRuntime | null;
+  chargeMs: number;
+  charging: boolean;
   dashRemainingMs: number;
   dashCooldownRemainingMs: number;
-  stunRemainingMs: number;
-  stunnedTick: number | null;
-  stats: { deliveries: number; tackles: number };
+  dashDirection: Vec2;
+  hitstunRemainingMs: number;
+  respawnRemainingMs: number;
+  protectionRemainingMs: number;
   connected: boolean;
+  lastProcessedInputSeq: number;
   latestInput: InputFrame;
-  previousDashPressed: boolean;
-  tackledPlayerIds: Set<string>;
-};
-
-export type MutableMatchCore = {
-  coreId: string;
-  position: Vec2;
-  carrierId: string | null;
-  golden: boolean;
-  padIndex: number | null;
-  blockedPlayerId: string | null;
-  blockedRemainingMs: number;
-  looseRemainingMs: number;
-  droppedTick: number | null;
-};
-
-export type MatchPadState = {
-  padIndex: number;
-  coreId: string;
-  respawnRemainingMs: number | null;
+  previousQuick: boolean;
+  previousHeavy: boolean;
+  previousDash: boolean;
+  bufferedQuick: boolean;
+  lastAttackerId: string | null;
+  lastAttackerAtMs: number | null;
+  stats: MutablePlayerStats;
 };
 
 export type MatchState = {
   tick: number;
   seed: number;
+  nowMs: number;
   phase: MatchPhase;
   pausedPhase: Exclude<MatchPhase, 'PAUSED' | 'FINISHED'> | null;
   countdownRemainingMs: number;
   remainingMs: number;
-  score: Record<Team, number>;
+  pauseRemainingMs: number | null;
+  contraction: number;
+  scores: Record<string, number>;
+  winnerPlayerId: string | null;
+  resultReason: MatchResultReason | null;
   players: Record<string, MutableMatchPlayer>;
-  cores: Record<string, MutableMatchCore>;
-  pads: MatchPadState[];
-  winner: Team | null;
 };
 
-export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: number): MatchState {
-  const players: Record<string, MutableMatchPlayer> = {};
-  const teamCounts: Record<Team, number> = { CYAN: 0, AMBER: 0 };
-  const spawnOffset = (Math.trunc(seed) >>> 0) % ARENA.spawns.CYAN.length;
+export function createEmptyInput(): InputFrame {
+  return {
+    seq: -1,
+    moveX: 0,
+    moveY: 0,
+    aimX: 1,
+    aimY: 0,
+    quick: false,
+    heavy: false,
+    dash: false
+  };
+}
 
-  for (const playerSeed of [...playerSeeds].sort((left, right) => compareStableIds(left.playerId, right.playerId))) {
-    const spawnIndex = (spawnOffset + teamCounts[playerSeed.team]) % ARENA.spawns[playerSeed.team].length;
-    teamCounts[playerSeed.team] += 1;
+export function createPlayerStats(): MutablePlayerStats {
+  return {
+    knockouts: 0,
+    falls: 0,
+    landedHits: 0,
+    completedAttacks: 0
+  };
+}
+
+export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: number): MatchState {
+  const sortedSeeds = [...playerSeeds].sort((left, right) => compareStableIds(left.playerId, right.playerId));
+  const players: Record<string, MutableMatchPlayer> = {};
+  const scores: Record<string, number> = {};
+
+  sortedSeeds.forEach((playerSeed, index) => {
+    const anchor = ARENA.spawnAnchors[index % ARENA.spawnAnchors.length];
     players[playerSeed.playerId] = {
       playerId: playerSeed.playerId,
       name: playerSeed.name,
-      team: playerSeed.team,
-      position: ARENA.spawns[playerSeed.team][spawnIndex],
-      carriedCoreId: null,
-      lastProcessedInputSeq: -1,
+      chassis: playerSeed.chassis ?? CHASSIS[index % CHASSIS.length],
+      accent: playerSeed.accent,
+      position: anchor,
+      velocity: { x: 0, y: 0 },
+      facing: { x: 1, y: 0 },
+      overload: 0,
+      comboStep: 0,
+      attack: null,
+      chargeMs: 0,
+      charging: false,
       dashRemainingMs: 0,
       dashCooldownRemainingMs: 0,
-      stunRemainingMs: 0,
-      stunnedTick: null,
-      stats: { deliveries: 0, tackles: 0 },
+      dashDirection: { x: 1, y: 0 },
+      hitstunRemainingMs: 0,
+      respawnRemainingMs: 0,
+      protectionRemainingMs: 0,
       connected: playerSeed.connected ?? true,
-      latestInput: {
-        seq: -1,
-        up: false,
-        down: false,
-        left: false,
-        right: false,
-        dash: false
-      },
-      previousDashPressed: false,
-      tackledPlayerIds: new Set()
+      lastProcessedInputSeq: -1,
+      latestInput: createEmptyInput(),
+      previousQuick: false,
+      previousHeavy: false,
+      previousDash: false,
+      bufferedQuick: false,
+      lastAttackerId: null,
+      lastAttackerAtMs: null,
+      stats: { ...createPlayerStats() }
     };
-  }
-
-  const connectedCount = Object.values(players).filter((player) => player.connected).length;
-  const activePadIndices = connectedCount >= 6 ? [0, 1, 2] : connectedCount >= 4 ? [0, 2] : [1];
-  const pads: MatchPadState[] = activePadIndices.map((padIndex, index) => ({
-    padIndex,
-    coreId: `core-${index + 1}`,
-    respawnRemainingMs: null
-  }));
-  const cores: Record<string, MutableMatchCore> = Object.fromEntries(
-    pads.map((pad) => [
-      pad.coreId,
-      {
-        coreId: pad.coreId,
-        position: ARENA.corePads[pad.padIndex],
-        carrierId: null,
-        golden: false,
-        padIndex: pad.padIndex,
-        blockedPlayerId: null,
-        blockedRemainingMs: 0,
-        looseRemainingMs: GAME.coreReturnMs,
-        droppedTick: null
-      }
-    ])
-  );
+    scores[playerSeed.playerId] = 0;
+  });
 
   return {
     tick: 0,
     seed,
+    nowMs: seed,
     phase: 'COUNTDOWN',
     pausedPhase: null,
-    countdownRemainingMs: 3_000,
-    remainingMs: GAME.matchMs,
-    score: { CYAN: 0, AMBER: 0 },
-    players,
-    cores,
-    pads,
-    winner: null
+    countdownRemainingMs: GAME.countdownMs,
+    remainingMs: GAME.regulationMs,
+    pauseRemainingMs: null,
+    contraction: 0,
+    scores,
+    winnerPlayerId: null,
+    resultReason: null,
+    players
   };
 }
