@@ -104,6 +104,7 @@ describe('authoritative match simulation', () => {
     expect(snapshot.players.map((entry) => entry.playerId)).toEqual(['p-a', 'p-b']);
     expect(snapshot.cores.map((entry) => entry.coreId)).toEqual(['core-a', 'core-b']);
     expect(snapshot.players[0].position).toEqual({ x: 1_000, y: 300 });
+    expect(snapshot.players[0]).toHaveProperty('dashCooldownRemainingMs', 0);
     expect(snapshot.players[0]).not.toHaveProperty('connected');
     expect(snapshot.cores[0]).not.toHaveProperty('blockedPlayerId');
   });

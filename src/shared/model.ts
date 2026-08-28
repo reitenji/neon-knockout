@@ -43,6 +43,7 @@ export type MatchPlayer = Readonly<{
   carriedCoreId: string | null;
   lastProcessedInputSeq: number;
   dashRemainingMs: number;
+  dashCooldownRemainingMs: number;
   stunRemainingMs: number;
   stats: PlayerStats;
 }>;

@@ -1,4 +1,13 @@
-import type { MatchSnapshot, RoomPlayer, RoomState, ServerError, SessionWelcome, Team } from '../../shared/model.js';
+import type {
+  GameEvent,
+  InputFrame,
+  MatchSnapshot,
+  RoomPlayer,
+  RoomState,
+  ServerError,
+  SessionWelcome,
+  Team
+} from '../../shared/model.js';
 import { normalizePlayerName, normalizeRoomCode } from '../../shared/names.js';
 import type { GameClient, GameClientConnectionState } from '../network/GameClient.js';
 
@@ -35,7 +44,11 @@ export type ClientState = Readonly<{
 
 export interface GameStore {
   getSnapshot(): ClientState;
+  getLatestMatch(): MatchSnapshot | null;
   subscribe(listener: () => void): () => void;
+  subscribeMatch(listener: (snapshot: MatchSnapshot) => void): () => void;
+  subscribeGameEvent(listener: (event: GameEvent) => void): () => void;
+  sendInput(frame: InputFrame): void;
   dispose(): void;
   actions: {
     connect(): void;
@@ -116,10 +129,13 @@ function normalizeCodeOrNull(code: string): string | null {
 
 export function createGameStore({ client, storage, clipboard }: GameStoreOptions): GameStore {
   const listeners = new Set<() => void>();
+  const matchListeners = new Set<(snapshot: MatchSnapshot) => void>();
+  const gameEventListeners = new Set<(event: GameEvent) => void>();
   const unsubscribeClient: Array<() => void> = [];
   let disposed = false;
   let resumeAttemptedForConnection = false;
   let toastId = 0;
+  let latestMatch: MatchSnapshot | null = null;
   let state: ClientState = {
     screen: 'LANDING',
     connectionState: client.getConnectionState(),
@@ -146,6 +162,24 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
   };
 
   const patch = (recipe: (current: ClientState) => ClientState): void => replace(recipe(state));
+
+  const publishMatch = (match: MatchSnapshot): void => {
+    if (disposed) return;
+    latestMatch = match;
+    for (const listener of matchListeners) listener(match);
+  };
+
+  const publishGameEvent = (event: GameEvent): void => {
+    if (disposed) return;
+    for (const listener of gameEventListeners) listener(event);
+  };
+
+  const coarseMatchChanged = (previous: MatchSnapshot | null, next: MatchSnapshot): boolean =>
+    previous === null ||
+    previous.phase !== next.phase ||
+    previous.score.CYAN !== next.score.CYAN ||
+    previous.score.AMBER !== next.score.AMBER ||
+    previous.winner !== next.winner;
 
   const persistWelcome = (welcome: SessionWelcome): void => {
     const session: ClientSession = {
@@ -233,6 +267,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       }));
     }),
     client.subscribe('match:started', (match) => {
+      publishMatch(match);
       patch((current) => ({
         ...current,
         match,
@@ -243,9 +278,10 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       }));
     }),
     client.subscribe('match:snapshot', (match) => {
-      patch((current) => ({ ...current, match }));
+      publishMatch(match);
+      if (coarseMatchChanged(state.match, match)) patch((current) => ({ ...current, match }));
     }),
-    client.subscribe('match:event', () => undefined),
+    client.subscribe('match:event', (event) => publishGameEvent(event)),
     client.subscribe('server:error', (error) => {
       const action = state.pendingAction ?? 'server';
       patch((current) => ({
@@ -360,15 +396,33 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
     getSnapshot(): ClientState {
       return state;
     },
+    getLatestMatch(): MatchSnapshot | null {
+      return latestMatch;
+    },
     subscribe(listener: () => void): () => void {
       if (disposed) return () => undefined;
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    subscribeMatch(listener: (snapshot: MatchSnapshot) => void): () => void {
+      if (disposed) return () => undefined;
+      matchListeners.add(listener);
+      return () => matchListeners.delete(listener);
+    },
+    subscribeGameEvent(listener: (event: GameEvent) => void): () => void {
+      if (disposed) return () => undefined;
+      gameEventListeners.add(listener);
+      return () => gameEventListeners.delete(listener);
+    },
+    sendInput(frame: InputFrame): void {
+      if (!disposed) client.sendInput(frame);
+    },
     dispose(): void {
       if (disposed) return;
       for (const unsubscribe of unsubscribeClient) unsubscribe();
       listeners.clear();
+      matchListeners.clear();
+      gameEventListeners.clear();
       client.disconnect();
       disposed = true;
     },

@@ -25,6 +25,7 @@ export function snapshotMatch(state: MatchState): MatchSnapshot {
         carriedCoreId: player.carriedCoreId,
         lastProcessedInputSeq: player.lastProcessedInputSeq,
         dashRemainingMs: player.dashRemainingMs,
+        dashCooldownRemainingMs: player.dashCooldownRemainingMs,
         stunRemainingMs: player.stunRemainingMs,
         stats: { ...player.stats }
       })),

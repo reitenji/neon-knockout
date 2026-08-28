@@ -1,4 +1,5 @@
 import { useEffect, useSyncExternalStore } from 'react';
+import { GameCanvas } from './game/GameCanvas.js';
 import type { GameStore } from './state/gameStore.js';
 import { useGameStore } from './state/useGameStore.js';
 import { LandingScreen } from './ui/LandingScreen.js';
@@ -24,18 +25,6 @@ function subscribeToViewport(listener: () => void): () => void {
 
 function useSupportedViewport(): boolean {
   return useSyncExternalStore(subscribeToViewport, viewportIsSupported, () => true);
-}
-
-function MatchPlaceholder() {
-  return (
-    <section className="screen future-screen" aria-label="ÇEKİRDEK">
-      <div className="tech-frame future-screen__frame">
-        <strong>ÇEKİRDEK</strong>
-        <span>WASD: Hareket</span>
-        <span>SPACE: Hamle</span>
-      </div>
-    </section>
-  );
 }
 
 function ResultPlaceholder() {
@@ -87,7 +76,7 @@ export function App({ store }: AppProps) {
           />
         ) : null}
 
-        {state.screen === 'MATCH' ? <MatchPlaceholder /> : null}
+        {state.screen === 'MATCH' ? <GameCanvas store={store} localPlayerId={state.session?.playerId ?? ''} /> : null}
         {state.screen === 'RESULT' ? <ResultPlaceholder /> : null}
       </main>
 

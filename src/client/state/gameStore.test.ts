@@ -226,4 +226,49 @@ describe('createGameStore', () => {
     expect(store.getSnapshot().match).toBe(match);
     expect(store.getSnapshot().screen).toBe('MATCH');
   });
+
+  it('streams ordinary snapshots without notifying React-facing subscribers at 20 Hz', () => {
+    const { client, store } = createFixture();
+    const started: MatchSnapshot = {
+      tick: 12,
+      phase: 'REGULATION',
+      remainingMs: 175_000,
+      score: { CYAN: 0, AMBER: 0 },
+      players: [],
+      cores: [],
+      winner: null
+    };
+    client.emit('match:started', started);
+    const coarseListener = vi.fn();
+    const matchListener = vi.fn();
+    store.subscribe(coarseListener);
+    store.subscribeMatch(matchListener);
+
+    const ordinary = { ...started, tick: 13, remainingMs: 174_950 };
+    client.emit('match:snapshot', ordinary);
+
+    expect(store.getLatestMatch()).toBe(ordinary);
+    expect(store.getSnapshot().match).toBe(started);
+    expect(matchListener).toHaveBeenCalledWith(ordinary);
+    expect(coarseListener).not.toHaveBeenCalled();
+
+    const scored = { ...ordinary, tick: 14, score: { CYAN: 1, AMBER: 0 } };
+    client.emit('match:snapshot', scored);
+    expect(store.getSnapshot().match).toBe(scored);
+    expect(coarseListener).toHaveBeenCalledOnce();
+  });
+
+  it('exposes authoritative game events on a non-React feed and cleans it on dispose', () => {
+    const { client, store } = createFixture();
+    const listener = vi.fn();
+    store.subscribeGameEvent(listener);
+    const event: GameEvent = { type: 'PICKUP', playerId: 'p-1', coreId: 'core-1' };
+
+    client.emit('match:event', event);
+    expect(listener).toHaveBeenCalledWith(event);
+
+    store.dispose();
+    client.emit('match:event', event);
+    expect(listener).toHaveBeenCalledOnce();
+  });
 });

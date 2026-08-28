@@ -4,6 +4,7 @@ import { createSocketGameClient } from './network/GameClient.js';
 import { createGameStore } from './state/gameStore.js';
 import './styles/tokens.css';
 import './styles/layout.css';
+import './styles/game.css';
 
 const rootElement = document.getElementById('root');
 

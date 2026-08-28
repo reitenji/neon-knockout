@@ -7,7 +7,11 @@ import { App } from './App.js';
 function storeFor(state: ClientState): GameStore {
   return {
     getSnapshot: () => state,
+    getLatestMatch: () => state.match,
     subscribe: () => () => undefined,
+    subscribeMatch: () => () => undefined,
+    subscribeGameEvent: () => () => undefined,
+    sendInput: vi.fn(),
     dispose: vi.fn(),
     actions: {
       connect: vi.fn(),
@@ -101,6 +105,7 @@ describe('App', () => {
   });
 
   it('keeps Task 5 compile-safe when canonical state advances to a match', () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
     const matchStore = storeFor({ ...landing, screen: 'MATCH' });
     render(<App store={matchStore} />);
 
