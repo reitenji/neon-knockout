@@ -3,6 +3,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NeonGameFactory } from './game/GamePresentationBridge.js';
 import type { ClientState, GameStore } from './state/gameStore.js';
+import type { MatchPlayer, MatchSnapshot } from '../shared/model.js';
 import { App } from './App.js';
 
 const gameFactory = vi.fn<NeonGameFactory>(() => ({ destroy() {} }));
@@ -46,6 +47,25 @@ const landing: ClientState = {
   soundMuted: false,
   reconnectRemainingMs: null
 };
+
+function matchPlayer(): MatchPlayer {
+  return {
+    playerId: 'p-local', name: 'Ada', chassis: 'RIFT', accent: 0,
+    position: { x: 640, y: 360 }, velocity: { x: 0, y: 0 }, facing: { x: 1, y: 0 },
+    overload: 0, lastProcessedInputSeq: 0,
+    action: { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 },
+    dashRemainingMs: 0, dashCooldownRemainingMs: 0, hitstunRemainingMs: 0,
+    respawnRemainingMs: 0, protectionRemainingMs: 0,
+    stats: { knockouts: 0, falls: 0, landedHits: 0, completedAttacks: 0 }
+  };
+}
+
+function matchSnapshot(): MatchSnapshot {
+  return {
+    tick: 180, phase: 'REGULATION', remainingMs: 120_000, platformProgress: 0,
+    scores: { 'p-local': 0 }, players: [matchPlayer()], winnerPlayerId: null, resultReason: null
+  };
+}
 
 function setViewport(width: number, height: number): void {
   Object.defineProperty(window, 'innerWidth', { configurable: true, value: width });
@@ -112,10 +132,17 @@ describe('App', () => {
   });
 
   it('keeps match content visible when the transport is connected', () => {
-    const matchStore = storeFor({ ...landing, screen: 'MATCH' });
+    const matchStore = storeFor({
+      ...landing,
+      screen: 'MATCH',
+      match: matchSnapshot(),
+      session: { playerId: 'p-local', roomCode: 'AB2Z', resumeToken: 'token' }
+    });
     render(<App store={matchStore} gameFactory={gameFactory} />);
 
     expect(screen.getByLabelText('Neon Knockout oyun alanı')).toBeVisible();
+    expect(screen.getByRole('complementary', { name: 'Maç bilgileri' })).toBeVisible();
+    expect(screen.getByLabelText('Kontroller')).toHaveTextContent('Sol tık');
     expect(gameFactory).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog', { name: 'Bağlantı kesildi' })).toBeNull();
   });

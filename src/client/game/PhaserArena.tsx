@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { GamePresentationBridge, NeonGameFactory } from './GamePresentationBridge.js';
 import { scopeBridgeToPlayer } from './GamePresentationBridge.js';
+import { MatchHud } from '../ui/MatchHud.js';
 
 type PhaserArenaProps = Readonly<{
   bridge: GamePresentationBridge;
@@ -16,6 +17,7 @@ export function PhaserArena({
   reducedMotion
 }: PhaserArenaProps) {
   const parentRef = useRef<HTMLDivElement>(null);
+  const scopedBridge = useMemo(() => scopeBridgeToPlayer(bridge, localPlayerId), [bridge, localPlayerId]);
   const prefersReducedMotion = reducedMotion ?? (
     window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
   );
@@ -23,7 +25,6 @@ export function PhaserArena({
   useEffect(() => {
     const parent = parentRef.current;
     if (!parent) return;
-    const scopedBridge = scopeBridgeToPlayer(bridge, localPlayerId);
     let disposed = false;
     let game: ReturnType<NeonGameFactory> | null = null;
     const mount = async (): Promise<void> => {
@@ -37,7 +38,7 @@ export function PhaserArena({
       game?.destroy(true);
       game = null;
     };
-  }, [bridge, createGame, localPlayerId, prefersReducedMotion]);
+  }, [createGame, prefersReducedMotion, scopedBridge]);
 
   return (
     <section className="screen game-screen" aria-label="Neon Knockout maçı">
@@ -48,6 +49,7 @@ export function PhaserArena({
         aria-label="Neon Knockout oyun alanı"
         onContextMenu={(event) => event.preventDefault()}
       />
+      <MatchHud bridge={scopedBridge} localPlayerId={localPlayerId} />
     </section>
   );
 }

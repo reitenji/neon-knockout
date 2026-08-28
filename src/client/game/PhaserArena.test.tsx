@@ -5,14 +5,19 @@ import type { MatchSnapshot } from '../../shared/model.js';
 import type { GamePresentationBridge, NeonGameFactory } from './GamePresentationBridge.js';
 import { PhaserArena } from './PhaserArena.js';
 
-function bridge(): GamePresentationBridge & { snapshotListeners: Set<(snapshot: MatchSnapshot) => void> } {
+function bridge(): GamePresentationBridge & {
+  snapshotListeners: Set<(snapshot: MatchSnapshot) => void>;
+  connectionListeners: Set<(connected: boolean) => void>;
+} {
   const snapshotListeners = new Set<(snapshot: MatchSnapshot) => void>();
+  const connectionListeners = new Set<(connected: boolean) => void>();
   return {
     snapshotListeners,
+    connectionListeners,
     getSnapshot: () => null,
     isConnected: () => true,
     subscribeSnapshot(listener) { snapshotListeners.add(listener); return () => snapshotListeners.delete(listener); },
-    subscribeConnected() { return () => undefined; },
+    subscribeConnected(listener) { connectionListeners.add(listener); return () => connectionListeners.delete(listener); },
     subscribeEvent() { return () => undefined; },
     subscribeMuted() { return () => undefined; },
     sendInput() { return undefined; }
@@ -32,15 +37,19 @@ describe('PhaserArena', () => {
     const view = render(<PhaserArena bridge={presentation} localPlayerId="p-local" createGame={factory} reducedMotion />);
 
     expect(factory).toHaveBeenCalledOnce();
-    expect(presentation.snapshotListeners).toHaveLength(1);
+    expect(screen.getByRole('complementary', { name: 'Maç bilgileri' })).toBeVisible();
+    expect(presentation.snapshotListeners).toHaveLength(2);
+    expect(presentation.connectionListeners).toHaveLength(1);
     view.rerender(<PhaserArena bridge={presentation} localPlayerId="p-local" createGame={factory} reducedMotion />);
     expect(factory).toHaveBeenCalledOnce();
-    expect(presentation.snapshotListeners).toHaveLength(1);
+    expect(presentation.snapshotListeners).toHaveLength(2);
+    expect(presentation.connectionListeners).toHaveLength(1);
 
     view.unmount();
     expect(destroy).toHaveBeenCalledOnce();
     expect(destroy).toHaveBeenCalledWith(true);
     expect(presentation.snapshotListeners).toHaveLength(0);
+    expect(presentation.connectionListeners).toHaveLength(0);
   });
 
   it('suppresses the context menu inside the arena without changing the rest of the document', () => {

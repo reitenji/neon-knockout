@@ -1,0 +1,203 @@
+import { useCallback, useSyncExternalStore, type CSSProperties } from 'react';
+import { ACCENTS, GAME } from '../../shared/constants.js';
+import type { MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
+import type { GamePresentationBridge } from '../game/GamePresentationBridge.js';
+
+type MatchHudProps = Readonly<{
+  bridge: GamePresentationBridge;
+  localPlayerId: string;
+}>;
+
+const PHASE_LABELS: Readonly<Record<MatchPhase, string>> = {
+  COUNTDOWN: 'GERİ SAYIM',
+  REGULATION: 'DÖVÜŞ',
+  PAUSED: 'BEKLEMEDE',
+  SUDDEN_DEATH: 'SON VURUŞ',
+  FINISHED: 'BİTTİ'
+};
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
+}
+
+function formatTime(remainingMs: number): string {
+  const seconds = Math.max(0, Math.ceil(remainingMs / 1_000));
+  return `${String(Math.floor(seconds / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function phaseAnnouncement(snapshot: MatchSnapshot): Readonly<{ label: string; text: string }> | null {
+  if (snapshot.phase === 'COUNTDOWN') {
+    return { label: 'Geri sayım', text: String(Math.max(1, Math.ceil(snapshot.remainingMs / 1_000))) };
+  }
+  if (snapshot.phase === 'REGULATION' && snapshot.remainingMs > GAME.regulationMs - 800) {
+    return { label: 'Raunt başlangıcı', text: 'FIGHT' };
+  }
+  if (snapshot.phase === 'SUDDEN_DEATH') return { label: 'Raunt durumu', text: 'SON VURUŞ' };
+  if (snapshot.phase === 'PAUSED') return { label: 'Raunt durumu', text: 'BEKLE' };
+  return null;
+}
+
+function actionLabel(player: MatchPlayer): string {
+  if (player.respawnRemainingMs > 0 || player.action.kind === 'RESPAWNING') {
+    return `Geri dönüş ${Math.max(0.1, Math.ceil(player.respawnRemainingMs / 100) / 10).toFixed(1)} sn`;
+  }
+  if (player.hitstunRemainingMs > 0 || player.action.kind === 'HITSTUN') return 'Sarsıldı';
+  if (player.dashRemainingMs > 0 || player.action.kind === 'DASH') return 'Dash aktif';
+  if (player.action.kind === 'HEAVY') {
+    const charge = Math.round(clamp(player.action.chargeMs / GAME.heavyMaxChargeMs, 0, 1) * 100);
+    return `Ağır saldırı %${charge}`;
+  }
+  if (player.action.kind?.startsWith('QUICK_')) return `Kombo ${player.action.comboStep}`;
+  return 'Beklemede';
+}
+
+function meterStyle(progress: number): CSSProperties {
+  return { '--meter-progress': clamp(progress, 0, 1) } as CSSProperties;
+}
+
+function useMatchSnapshot(bridge: GamePresentationBridge): MatchSnapshot | null {
+  const subscribe = useCallback(
+    (notify: () => void) => bridge.subscribeSnapshot(() => notify()),
+    [bridge]
+  );
+  const getSnapshot = useCallback(() => bridge.getSnapshot(), [bridge]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function useConnection(bridge: GamePresentationBridge): boolean {
+  const subscribe = useCallback(
+    (notify: () => void) => bridge.subscribeConnected(() => notify()),
+    [bridge]
+  );
+  const getSnapshot = useCallback(() => bridge.isConnected(), [bridge]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function Ranking({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot; localPlayerId: string }>) {
+  const ranking = [...snapshot.players].sort((left, right) => {
+    const scoreDifference = (snapshot.scores[right.playerId] ?? 0) - (snapshot.scores[left.playerId] ?? 0);
+    if (scoreDifference !== 0) return scoreDifference;
+    return left.name.localeCompare(right.name, 'tr');
+  });
+
+  return (
+    <ol className="match-hud__ranking" aria-label="Skor sıralaması">
+      {ranking.map((player, index) => {
+        const local = player.playerId === localPlayerId;
+        const accentStyle = { '--player-accent': ACCENTS[player.accent] } as CSSProperties;
+        return (
+          <li key={player.playerId} className={local ? 'is-local' : undefined} style={accentStyle}>
+            <span className="match-hud__rank" aria-hidden="true">{index + 1}</span>
+            <span className="match-hud__swatch" aria-hidden="true" />
+            <span className="match-hud__name">{player.name}{local ? <small>Sen</small> : null}</span>
+            <strong aria-label={`${snapshot.scores[player.playerId] ?? 0} nakavt`}>
+              {snapshot.scores[player.playerId] ?? 0}
+            </strong>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function ControlsHint() {
+  return (
+    <div className="match-hud__controls" aria-label="Kontroller">
+      <span><kbd>WASD</kbd><kbd>Oklar</kbd><small>Hareket</small></span>
+      <span><kbd>Sol tık</kbd><small>Kombo</small></span>
+      <span><kbd>Sağ tık</kbd><small>Yükle / vur</small></span>
+      <span><kbd>Boşluk</kbd><small>Dash</small></span>
+    </div>
+  );
+}
+
+export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
+  const snapshot = useMatchSnapshot(bridge);
+  const connected = useConnection(bridge);
+  const localPlayer = snapshot?.players.find((player) => player.playerId === localPlayerId) ?? null;
+  const announcement = snapshot ? phaseAnnouncement(snapshot) : null;
+  const overload = localPlayer ? Math.round(clamp(localPlayer.overload, 0, GAME.maxOverload)) : 0;
+  const dashProgress = localPlayer
+    ? 1 - clamp(localPlayer.dashCooldownRemainingMs / GAME.dashCooldownMs, 0, 1)
+    : 0;
+
+  return (
+    <aside className="match-hud" aria-label="Maç bilgileri">
+      {snapshot ? (
+        <>
+          <header className="match-hud__clock">
+            <span>{PHASE_LABELS[snapshot.phase]}</span>
+            <time role="timer" aria-label="Kalan süre" dateTime={`PT${Math.ceil(snapshot.remainingMs / 1_000)}S`}>
+              {formatTime(snapshot.remainingMs)}
+            </time>
+          </header>
+
+          <Ranking snapshot={snapshot} localPlayerId={localPlayerId} />
+
+          {localPlayer ? (
+            <section className="match-hud__combat" aria-label="Yerel dövüş durumu">
+              <div className="match-hud__overload">
+                <span>OVERLOAD</span>
+                <strong>{overload}%</strong>
+                <div
+                  className="match-hud__meter match-hud__meter--overload"
+                  role="meter"
+                  aria-label="Overload"
+                  aria-valuemin={0}
+                  aria-valuemax={GAME.maxOverload}
+                  aria-valuenow={overload}
+                  style={meterStyle(overload / GAME.maxOverload)}
+                ><i /></div>
+              </div>
+
+              <div className="match-hud__ability">
+                <span>DASH</span>
+                <strong>{localPlayer.dashRemainingMs > 0 ? 'Aktif' : localPlayer.dashCooldownRemainingMs > 0 ? `${(localPlayer.dashCooldownRemainingMs / 1_000).toFixed(1)} sn` : 'Hazır'}</strong>
+                <div
+                  className="match-hud__meter"
+                  role="meter"
+                  aria-label="Dash dolumu"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={Math.round(dashProgress * 100)}
+                  style={meterStyle(dashProgress)}
+                ><i /></div>
+              </div>
+
+              <div className="match-hud__action" role="status" aria-label="Aksiyon durumu">
+                <span>AKSİYON</span>
+                <strong>{actionLabel(localPlayer)}</strong>
+              </div>
+            </section>
+          ) : null}
+        </>
+      ) : (
+        <p className="match-hud__loading" role="status">Arena hazırlanıyor…</p>
+      )}
+
+      <div
+        className={`match-hud__connection ${connected ? 'is-connected' : 'is-disconnected'}`}
+        role="status"
+        aria-label="Bağlantı durumu"
+        aria-live="polite"
+      >
+        <i aria-hidden="true" />
+        {connected ? 'Bağlı' : 'Bağlantı kesildi'}
+      </div>
+
+      <ControlsHint />
+
+      {announcement ? (
+        <strong
+          key={`${announcement.label}-${announcement.text}`}
+          className="match-hud__announcement"
+          role="status"
+          aria-label={announcement.label}
+          aria-live="assertive"
+        >
+          {announcement.text}
+        </strong>
+      ) : null}
+    </aside>
+  );
+}
