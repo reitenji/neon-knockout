@@ -107,6 +107,52 @@ describe('authoritative match simulation', () => {
     expect(stepMatch(state, new Map(), 0)).toContainEqual(expect.objectContaining({ type: 'KNOCKOUT', scoreAwardedTo: null }));
   });
 
+  it('finishes for the first target scorer in stable simultaneous-boundary order', () => {
+    const state = createMatchState([
+      { playerId: 'z-scorer', name: 'Zoe', accent: 3, chassis: 'WRAITH' },
+      { playerId: 'p2', name: 'Linus', accent: 1, chassis: 'BASTION' },
+      { playerId: 'a-scorer', name: 'Ada', accent: 0, chassis: 'RIFT' },
+      { playerId: 'p1', name: 'Grace', accent: 2, chassis: 'PULSE' }
+    ], 0);
+    state.phase = 'REGULATION';
+    state.scores['z-scorer'] = GAME.targetScore - 1;
+    state.scores['a-scorer'] = GAME.targetScore - 1;
+    state.players.p1.position = { x: 500, y: 0 };
+    state.players.p1.lastAttackerId = 'z-scorer';
+    state.players.p1.lastAttackerAtMs = state.nowMs;
+    state.players.p2.position = { x: 780, y: 0 };
+    state.players.p2.lastAttackerId = 'a-scorer';
+    state.players.p2.lastAttackerAtMs = state.nowMs;
+
+    const events = stepMatch(state, new Map(), 0);
+
+    expect(events.map((event) => event.type)).toEqual(['KNOCKOUT', 'RESULT']);
+    expect(events.map((event) => event.eventId)).toEqual([1, 2]);
+    expect(events[0]).toMatchObject({ targetId: 'p1', scoreAwardedTo: 'z-scorer' });
+    expect(events[1]).toMatchObject({ winnerPlayerId: 'z-scorer', reason: 'TARGET_SCORE' });
+    expect(state.scores['z-scorer']).toBe(GAME.targetScore);
+    expect(state.scores['a-scorer']).toBe(GAME.targetScore - 1);
+    expect(state.players.p2.stats.falls).toBe(0);
+    expect(state.players.p2.respawnRemainingMs).toBe(0);
+  });
+
+  it('does not credit a recent attacker knocked out earlier in the same boundary phase', () => {
+    const state = regulationState();
+    state.players.p1.position = { x: 500, y: 0 };
+    state.players.p2.position = { x: 780, y: 0 };
+    state.players.p2.lastAttackerId = 'p1';
+    state.players.p2.lastAttackerAtMs = state.nowMs;
+
+    const events = stepMatch(state, new Map(), 0);
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ type: 'KNOCKOUT', targetId: 'p1', scoreAwardedTo: null });
+    expect(events[1]).toMatchObject({ type: 'KNOCKOUT', targetId: 'p2', scoreAwardedTo: null });
+    expect(events.map((event) => event.eventId)).toEqual([1, 2]);
+    expect(state.scores).toEqual({ p1: 0, p2: 0 });
+    expect(state.players.p1.stats.knockouts).toBe(0);
+  });
+
   it('returns control at 700 ms with a deterministic spawn and 650 ms protection', () => {
     const state = regulationState();
     forceKnockout(state, 'p1', 'p2');
@@ -149,7 +195,10 @@ describe('authoritative match simulation', () => {
   it('finishes immediately at the target score', () => {
     const state = regulationState();
     state.scores.p1 = GAME.targetScore - 1;
-    expect(forceKnockout(state, 'p1', 'p2')).toContainEqual(expect.objectContaining({ type: 'RESULT', winnerPlayerId: 'p1', reason: 'TARGET_SCORE' }));
+    const events = forceKnockout(state, 'p1', 'p2');
+    expect(events.map((event) => event.type)).toEqual(['KNOCKOUT', 'RESULT']);
+    expect(events.map((event) => event.eventId)).toEqual([1, 2]);
+    expect(events[1]).toMatchObject({ winnerPlayerId: 'p1', reason: 'TARGET_SCORE' });
   });
 
   it('disconnects without awards and reconnects after a 180 ms warp with preserved state', () => {

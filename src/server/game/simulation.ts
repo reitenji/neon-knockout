@@ -100,20 +100,34 @@ function updateContraction(state: MatchState): void {
   );
 }
 
-function recentAttacker(state: MatchState, target: MutableMatchPlayer): string | null {
+function recentAttacker(
+  state: MatchState,
+  target: MutableMatchPlayer,
+  knockedOutPlayerIds: ReadonlySet<string>
+): string | null {
   if (!target.lastAttackerId || target.lastAttackerAtMs === null) return null;
   if (state.nowMs - target.lastAttackerAtMs > 4_000) return null;
   const attacker = state.players[target.lastAttackerId];
-  return attacker && attacker.playerId !== target.playerId ? attacker.playerId : null;
+  return attacker && attacker.playerId !== target.playerId && attacker.respawnRemainingMs <= 0 &&
+    !knockedOutPlayerIds.has(attacker.playerId)
+    ? attacker.playerId
+    : null;
 }
 
-function knockoutTransition(state: MatchState, targetId: string, forcedAttackerId?: string): readonly GameEvent[] {
+function knockoutTransition(
+  state: MatchState,
+  targetId: string,
+  forcedAttackerId?: string,
+  knockedOutPlayerIds: ReadonlySet<string> = new Set()
+): readonly GameEvent[] {
   const target = state.players[targetId];
   if (!target || !target.connected || target.respawnRemainingMs > 0 || state.phase === 'FINISHED') return [];
-  const forced = forcedAttackerId && forcedAttackerId !== targetId && state.players[forcedAttackerId]
+  const forcedPlayer = forcedAttackerId ? state.players[forcedAttackerId] : undefined;
+  const forced = forcedAttackerId && forcedAttackerId !== targetId && forcedPlayer &&
+    forcedPlayer.respawnRemainingMs <= 0 && !knockedOutPlayerIds.has(forcedAttackerId)
     ? forcedAttackerId
     : null;
-  const credited = forced ?? recentAttacker(state, target);
+  const credited = forced ?? recentAttacker(state, target, knockedOutPlayerIds);
   target.stats.falls += 1;
   if (credited) {
     state.scores[credited] += 1;
@@ -143,11 +157,19 @@ function knockoutTransition(state: MatchState, targetId: string, forcedAttackerI
 function resolveBoundaries(state: MatchState): readonly GameEvent[] {
   const events: GameEvent[] = [];
   const platform = platformAt(state.contraction);
+  const knockedOutPlayerIds = new Set<string>();
   for (const playerId of Object.keys(state.players).sort(compareStableIds)) {
     const player = state.players[playerId];
     if (player.connected && player.respawnRemainingMs <= 0 &&
       isKnockedOut(player.position, platform, GAME.knockoutDistance)) {
-      events.push(...knockoutTransition(state, playerId));
+      const knockoutEvents = knockoutTransition(state, playerId, undefined, knockedOutPlayerIds);
+      if (knockoutEvents.length === 0) continue;
+      events.push(...knockoutEvents);
+      knockedOutPlayerIds.add(playerId);
+      if (knockoutEvents.some((event) => event.type === 'KNOCKOUT' && event.scoreAwardedTo !== null)) {
+        events.push(...evaluateScoringResult(state));
+        if (state.phase === 'FINISHED') break;
+      }
     }
   }
   return events;
@@ -167,22 +189,28 @@ function uniqueLeader(state: MatchState): string | null {
   return ranked[0];
 }
 
-function evaluateResult(state: MatchState): readonly GameEvent[] {
+function evaluateScoringResult(state: MatchState): readonly GameEvent[] {
   if (state.phase === 'FINISHED') return [];
   const targetWinner = Object.keys(state.scores)
     .filter((playerId) => state.scores[playerId] >= GAME.targetScore)
     .sort((left, right) => state.scores[right] - state.scores[left] || compareStableIds(left, right))[0];
   if (targetWinner) return [finishMatch(state, targetWinner, 'TARGET_SCORE')];
+  if (state.phase === 'SUDDEN_DEATH') {
+    const winner = uniqueLeader(state);
+    if (winner) return [finishMatch(state, winner, 'SUDDEN_DEATH')];
+  }
+  return [];
+}
+
+function evaluateResult(state: MatchState): readonly GameEvent[] {
+  const scoringResult = evaluateScoringResult(state);
+  if (scoringResult.length > 0) return scoringResult;
   if (state.phase === 'REGULATION' && state.remainingMs === 0) {
     const winner = uniqueLeader(state);
     if (winner) return [finishMatch(state, winner, 'TIME')];
     state.phase = 'SUDDEN_DEATH';
     state.contraction = 1;
     return [phaseEvent(state, 'SUDDEN_DEATH')];
-  }
-  if (state.phase === 'SUDDEN_DEATH') {
-    const winner = uniqueLeader(state);
-    if (winner) return [finishMatch(state, winner, 'SUDDEN_DEATH')];
   }
   return [];
 }
