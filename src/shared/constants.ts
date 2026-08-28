@@ -1,4 +1,4 @@
-import type { Rect, Team, Vec2 } from './model';
+import type { Rect, Team, Vec2 } from './model.js';
 
 const freezeRect = (rect: Rect): Readonly<Rect> => Object.freeze(rect);
 
