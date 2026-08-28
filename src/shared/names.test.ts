@@ -6,6 +6,7 @@ describe('shared input boundary names', () => {
     expect(normalizePlayerName('  Ada   Lovelace  ')).toBe('Ada Lovelace');
     expect(() => normalizePlayerName('A')).toThrow('INVALID_NAME');
     expect(() => normalizePlayerName(`Ada\u0000<script>`)).toThrow('INVALID_NAME');
+    expect(() => normalizePlayerName('Ada\u200B')).toThrow('INVALID_NAME');
   });
 
   it('normalizes unambiguous room codes', () => {

@@ -1,12 +1,21 @@
 import { z } from 'zod';
 import type { Ack, GameEvent, InputFrame, MatchSnapshot, RoomState, ServerError, SessionWelcome, Team } from './model';
+import { normalizeRoomCode } from './names';
 
 const teamSchema = z.enum(['CYAN', 'AMBER']);
 const emptyPayloadSchema = z.object({}).strict();
+const roomCodeSchema = z.string().transform((value, context) => {
+  try {
+    return normalizeRoomCode(value);
+  } catch {
+    context.addIssue({ code: 'custom', message: 'INVALID_ROOM_CODE' });
+    return z.NEVER;
+  }
+});
 
 export const roomCreateSchema = z.object({ name: z.string() }).strict();
-export const roomJoinSchema = z.object({ name: z.string(), roomCode: z.string() }).strict();
-export const sessionResumeSchema = z.object({ roomCode: z.string(), resumeToken: z.string() }).strict();
+export const roomJoinSchema = z.object({ name: z.string(), roomCode: roomCodeSchema }).strict();
+export const sessionResumeSchema = z.object({ roomCode: roomCodeSchema, resumeToken: z.string() }).strict();
 export const lobbyTeamSchema = z.object({ team: teamSchema }).strict();
 export const lobbyReadySchema = z.object({ ready: z.boolean() }).strict();
 export const matchStartSchema = emptyPayloadSchema;

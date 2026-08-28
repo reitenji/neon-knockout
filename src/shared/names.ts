@@ -1,4 +1,4 @@
-const CONTROL_CHARACTER = /\p{Cc}/u;
+const CONTROL_CHARACTER = /[\p{Cc}\p{Cf}]/u;
 const WHITESPACE = /\s+/gu;
 const ROOM_CODE = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/;
 
