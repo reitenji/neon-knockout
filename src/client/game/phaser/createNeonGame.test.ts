@@ -22,7 +22,9 @@ import { buildNeonGameConfig } from './createNeonGame.js';
 
 const bridge: GamePresentationBridge = {
   getSnapshot: () => null,
+  isConnected: () => true,
   subscribeSnapshot: () => () => undefined,
+  subscribeConnected: () => () => undefined,
   subscribeEvent: () => () => undefined,
   subscribeMuted: () => () => undefined,
   sendInput: () => undefined

@@ -10,7 +10,9 @@ function bridge(): GamePresentationBridge & { snapshotListeners: Set<(snapshot: 
   return {
     snapshotListeners,
     getSnapshot: () => null,
+    isConnected: () => true,
     subscribeSnapshot(listener) { snapshotListeners.add(listener); return () => snapshotListeners.delete(listener); },
+    subscribeConnected() { return () => undefined; },
     subscribeEvent() { return () => undefined; },
     subscribeMuted() { return () => undefined; },
     sendInput() { return undefined; }

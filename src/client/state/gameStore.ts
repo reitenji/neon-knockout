@@ -52,7 +52,9 @@ export interface GameStore {
 
 export interface ArenaBridge {
   getSnapshot(): MatchSnapshot | null;
+  isConnected(): boolean;
   subscribeSnapshot(listener: (snapshot: MatchSnapshot) => void): () => void;
+  subscribeConnected(listener: (connected: boolean) => void): () => void;
   subscribeEvent(listener: (event: GameEvent) => void): () => void;
   subscribeMuted(listener: (muted: boolean) => void): () => void;
   sendInput(frame: InputFrame): void;
@@ -365,7 +367,18 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
 export function createArenaBridge(store: GameStore): ArenaBridge {
   return {
     getSnapshot: store.getLatestMatch,
+    isConnected: () => store.getSnapshot().connectionState === 'connected',
     subscribeSnapshot: store.subscribeMatch,
+    subscribeConnected(listener) {
+      let previous = store.getSnapshot().connectionState === 'connected';
+      listener(previous);
+      return store.subscribe(() => {
+        const next = store.getSnapshot().connectionState === 'connected';
+        if (next === previous) return;
+        previous = next;
+        listener(next);
+      });
+    },
     subscribeEvent: store.subscribeGameEvent,
     subscribeMuted(listener) {
       let previous = store.getSnapshot().soundMuted;

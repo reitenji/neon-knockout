@@ -1,5 +1,5 @@
-import { GAME } from '../../shared/constants.js';
-import { advanceKinematics, normalizeAim, normalizeAxes, type KinematicState } from '../../shared/kinematics.js';
+import { ARENA, GAME } from '../../shared/constants.js';
+import { advanceKinematics, normalizeAxes, type KinematicState } from '../../shared/kinematics.js';
 import type { InputFrame, MatchAction, MatchPlayer, MatchSnapshot, Vec2 } from '../../shared/model.js';
 
 export const INTERPOLATION_DELAY_MS = 70;
@@ -15,27 +15,197 @@ export type InterpolationFrame = Readonly<{
   alpha: number;
 }>;
 
-type PendingInput = Readonly<{ frame: InputFrame; elapsedMs: number }>;
+type PendingInput = Readonly<{ frame: InputFrame; elapsedMs: number; platformProgress: number }>;
 type TimedSnapshot = Readonly<{ snapshot: MatchSnapshot; receivedAtMs: number }>;
+type PredictionRuntime = KinematicState & {
+  dashRemainingMs: number;
+  dashCooldownRemainingMs: number;
+  dashDirection: Vec2;
+  hitstunRemainingMs: number;
+  respawnRemainingMs: number;
+  action: MatchAction;
+  heavyChargeMs: number;
+};
 
-function kinematicsOf(player: MatchPlayer): KinematicState {
-  return { position: player.position, velocity: player.velocity, facing: player.facing };
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.max(minimum, Math.min(maximum, value));
 }
 
-function dashVelocity(frame: InputFrame, facing: Vec2): Vec2 | null {
-  if (!frame.dash) return null;
-  const movement = normalizeAxes(frame.moveX, frame.moveY);
-  const direction = movement.x === 0 && movement.y === 0 ? facing : movement;
-  return { x: direction.x * GAME.dashSpeed, y: direction.y * GAME.dashSpeed };
+function subtract(left: Vec2, right: Vec2): Vec2 {
+  return { x: left.x - right.x, y: left.y - right.y };
 }
 
-function advancePresentation(state: KinematicState, frame: InputFrame, elapsedMs: number): KinematicState {
-  const facing = normalizeAim(frame.aimX, frame.aimY, state.facing);
-  return advanceKinematics(state, frame, elapsedMs, {
-    dashVelocity: dashVelocity(frame, facing),
-    steeringScale: 1,
-    voidPull: { x: 0, y: 0 }
+function dot(left: Vec2, right: Vec2): number {
+  return left.x * right.x + left.y * right.y;
+}
+
+function normalize(vector: Vec2, fallback: Vec2): Vec2 {
+  const length = Math.hypot(vector.x, vector.y);
+  if (length < 0.000001) return fallback;
+  return { x: vector.x / length, y: vector.y / length };
+}
+
+function platformVertices(progress: number): readonly Vec2[] {
+  const contraction = clamp(progress, 0, 1);
+  return ARENA.regulationVertices.map((regulation, index) => {
+    const minimum = ARENA.minimumVertices[index]!;
+    return {
+      x: regulation.x + (minimum.x - regulation.x) * contraction,
+      y: regulation.y + (minimum.y - regulation.y) * contraction
+    };
   });
+}
+
+function pointInConvexPolygon(point: Vec2, vertices: readonly Vec2[]): boolean {
+  let direction = 0;
+  for (let index = 0; index < vertices.length; index += 1) {
+    const start = vertices[index]!;
+    const end = vertices[(index + 1) % vertices.length]!;
+    const cross = (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x);
+    if (Math.abs(cross) <= 0.000000001) continue;
+    const currentDirection = Math.sign(cross);
+    if (direction !== 0 && currentDirection !== direction) return false;
+    direction = currentDirection;
+  }
+  return true;
+}
+
+function closestPointOnSegment(point: Vec2, start: Vec2, end: Vec2): Vec2 {
+  const segment = subtract(end, start);
+  const lengthSquared = dot(segment, segment);
+  if (lengthSquared <= 0.000000001) return start;
+  const projection = clamp(dot(subtract(point, start), segment) / lengthSquared, 0, 1);
+  return { x: start.x + segment.x * projection, y: start.y + segment.y * projection };
+}
+
+function nearestOutwardNormal(point: Vec2, vertices: readonly Vec2[]): Vec2 {
+  let nearestStart = vertices[0]!;
+  let nearestEnd = vertices[1]!;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+  for (let index = 0; index < vertices.length; index += 1) {
+    const start = vertices[index]!;
+    const end = vertices[(index + 1) % vertices.length]!;
+    const edgePoint = closestPointOnSegment(point, start, end);
+    const distance = Math.hypot(point.x - edgePoint.x, point.y - edgePoint.y);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearestStart = start;
+      nearestEnd = end;
+    }
+  }
+  const signedArea = vertices.reduce((total, vertex, index) => {
+    const next = vertices[(index + 1) % vertices.length]!;
+    return total + vertex.x * next.y - next.x * vertex.y;
+  }, 0);
+  const edge = subtract(nearestEnd, nearestStart);
+  return normalize(
+    signedArea >= 0 ? { x: edge.y, y: -edge.x } : { x: -edge.y, y: edge.x },
+    { x: 0, y: -1 }
+  );
+}
+
+function runtimeOf(player: MatchPlayer): PredictionRuntime {
+  const velocityDirection = normalize(player.velocity, player.facing);
+  return {
+    position: player.position,
+    velocity: player.velocity,
+    facing: player.facing,
+    dashRemainingMs: player.dashRemainingMs,
+    dashCooldownRemainingMs: player.dashCooldownRemainingMs,
+    dashDirection: player.dashRemainingMs > 0 ? velocityDirection : player.facing,
+    hitstunRemainingMs: player.hitstunRemainingMs,
+    respawnRemainingMs: player.respawnRemainingMs,
+    action: player.action,
+    heavyChargeMs: player.action.kind === null ? player.action.chargeMs : 0
+  };
+}
+
+function dashDirection(frame: InputFrame, facing: Vec2): Vec2 {
+  const movement = normalizeAxes(frame.moveX, frame.moveY);
+  return movement.x === 0 && movement.y === 0 ? facing : movement;
+}
+
+function quickActionStart(player: MatchPlayer): MatchAction {
+  const comboStep: 1 | 2 | 3 = player.action.comboStep === 1 ? 2 : player.action.comboStep === 2 ? 3 : 1;
+  const kind = comboStep === 1 ? 'QUICK_1' : comboStep === 2 ? 'QUICK_2' : 'QUICK_3';
+  return { kind, phase: 'WINDUP', comboStep, chargeMs: 0 };
+}
+
+function advanceRuntime(
+  runtime: PredictionRuntime,
+  canonicalPlayer: MatchPlayer,
+  frame: InputFrame,
+  elapsedMs: number,
+  platformProgress: number
+): Readonly<{ runtime: PredictionRuntime; actionStart: MatchAction | null }> {
+  const elapsed = Math.max(0, elapsedMs);
+  if (runtime.action.kind === 'RESPAWNING' || runtime.respawnRemainingMs > 0) {
+    return {
+      runtime: { ...runtime, respawnRemainingMs: Math.max(0, runtime.respawnRemainingMs - elapsed) },
+      actionStart: null
+    };
+  }
+
+  let dashRemainingMs = Math.max(0, runtime.dashRemainingMs - elapsed);
+  let dashCooldownRemainingMs = Math.max(0, runtime.dashCooldownRemainingMs - elapsed);
+  const hitstunRemainingMs = Math.max(0, runtime.hitstunRemainingMs - elapsed);
+  const committedAction = runtime.action.kind !== null && runtime.action.kind !== 'HITSTUN' &&
+    runtime.action.kind !== 'DASH';
+  const canStartAction = hitstunRemainingMs <= 0 && !committedAction && dashRemainingMs <= 0;
+  let dashDirectionValue = runtime.dashDirection;
+  let actionStart: MatchAction | null = null;
+
+  if (frame.dash && canStartAction && dashCooldownRemainingMs <= 0) {
+    dashDirectionValue = dashDirection(frame, runtime.facing);
+    dashRemainingMs = GAME.dashDurationMs;
+    dashCooldownRemainingMs = GAME.dashCooldownMs;
+    actionStart = { kind: 'DASH', phase: 'ACTIVE', comboStep: 0, chargeMs: 0 };
+  }
+
+  let heavyChargeMs = runtime.heavyChargeMs;
+  if (canStartAction && !frame.dash && frame.heavy) {
+    heavyChargeMs = Math.min(GAME.heavyMaxChargeMs, heavyChargeMs + elapsed);
+    actionStart = { kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs };
+  } else if (canStartAction && !frame.dash && frame.quick && heavyChargeMs === 0) {
+    actionStart = quickActionStart(canonicalPlayer);
+  } else if (!frame.heavy) {
+    heavyChargeMs = 0;
+  }
+
+  const vertices = platformVertices(platformProgress);
+  const outsidePlatform = !pointInConvexPolygon(runtime.position, vertices);
+  const charging = canStartAction && frame.heavy;
+  const movementInput = hitstunRemainingMs > 0
+    ? { ...frame, moveX: 0, moveY: 0 }
+    : frame;
+  const next = advanceKinematics(runtime, movementInput, elapsed, {
+    dashVelocity: dashRemainingMs > 0
+      ? { x: dashDirectionValue.x * GAME.dashSpeed, y: dashDirectionValue.y * GAME.dashSpeed }
+      : null,
+    steeringScale:
+      (outsidePlatform ? GAME.voidRecoverySteerMultiplier : 1) *
+      (charging ? GAME.heavyChargeMoveMultiplier : 1),
+    voidPull: outsidePlatform
+      ? (() => {
+          const normal = nearestOutwardNormal(runtime.position, vertices);
+          return { x: normal.x * GAME.voidPullAcceleration, y: normal.y * GAME.voidPullAcceleration };
+        })()
+      : { x: 0, y: 0 }
+  });
+
+  return {
+    runtime: {
+      ...next,
+      dashRemainingMs,
+      dashCooldownRemainingMs,
+      dashDirection: dashDirectionValue,
+      hitstunRemainingMs,
+      respawnRemainingMs: runtime.respawnRemainingMs,
+      action: runtime.action,
+      heavyChargeMs
+    },
+    actionStart
+  };
 }
 
 function blendPosition(current: Vec2, target: Vec2): Vec2 {
@@ -45,63 +215,54 @@ function blendPosition(current: Vec2, target: Vec2): Vec2 {
   return { x: current.x + dx * LOCAL_CORRECTION_BLEND, y: current.y + dy * LOCAL_CORRECTION_BLEND };
 }
 
-function quickActionStart(player: MatchPlayer, frame: InputFrame): MatchAction | null {
-  if (!frame.quick || player.action.kind !== null || player.action.phase !== 'IDLE') return null;
-  const comboStep: 1 | 2 | 3 = player.action.comboStep === 1 ? 2 : player.action.comboStep === 2 ? 3 : 1;
-  const kind = comboStep === 1 ? 'QUICK_1' : comboStep === 2 ? 'QUICK_2' : 'QUICK_3';
-  return { kind, phase: 'WINDUP', comboStep, chargeMs: 0 };
-}
-
 export class PredictionBuffer {
   private readonly pending: PendingInput[] = [];
-  private display: KinematicState | null = null;
+  private runtime: PredictionRuntime | null = null;
   private actionStart: MatchAction | null = null;
-  private heavyChargeMs = 0;
 
   constructor(readonly playerId: string) {}
 
-  predict(frame: InputFrame, player: MatchPlayer, elapsedMs: number): PlayerPresentation {
+  predict(
+    frame: InputFrame,
+    player: MatchPlayer,
+    elapsedMs: number,
+    platformProgress = 0
+  ): PlayerPresentation {
     const last = this.pending[this.pending.length - 1];
-    if (!last || frame.seq > last.frame.seq) this.pending.push({ frame, elapsedMs });
-    this.display = advancePresentation(this.display ?? kinematicsOf(player), frame, elapsedMs);
-    if (player.action.kind !== null) this.heavyChargeMs = 0;
-    if (frame.heavy && player.action.kind === null) {
-      this.heavyChargeMs = Math.min(GAME.heavyMaxChargeMs, this.heavyChargeMs + elapsedMs);
-    } else if (!frame.heavy && this.actionStart?.kind !== 'HEAVY') {
-      this.heavyChargeMs = 0;
-    }
-    this.actionStart = quickActionStart(player, frame) ??
-      (frame.dash && player.action.kind === null
-        ? { kind: 'DASH', phase: 'ACTIVE', comboStep: 0, chargeMs: 0 }
-        : frame.heavy && player.action.kind === null
-          ? { kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: this.heavyChargeMs }
-          : null);
-    return { ...this.display, actionStart: this.actionStart };
+    if (!last || frame.seq > last.frame.seq) this.pending.push({ frame, elapsedMs, platformProgress });
+    const advanced = advanceRuntime(this.runtime ?? runtimeOf(player), player, frame, elapsedMs, platformProgress);
+    this.runtime = advanced.runtime;
+    this.actionStart = advanced.actionStart;
+    return { position: this.runtime.position, velocity: this.runtime.velocity, facing: this.runtime.facing, actionStart: this.actionStart };
   }
 
-  reconcile(authoritativePlayer: MatchPlayer, fallbackElapsedMs: number): PlayerPresentation {
+  reconcile(
+    authoritativePlayer: MatchPlayer,
+    fallbackElapsedMs: number,
+    platformProgress = 0
+  ): PlayerPresentation {
     while (
       this.pending.length > 0 &&
       (this.pending[0]?.frame.seq ?? Number.POSITIVE_INFINITY) <= authoritativePlayer.lastProcessedInputSeq
     ) this.pending.shift();
 
-    let replay = kinematicsOf(authoritativePlayer);
+    let replay = runtimeOf(authoritativePlayer);
     let replayedAction: MatchAction | null = null;
-    let replayedChargeMs = authoritativePlayer.action.kind === null ? authoritativePlayer.action.chargeMs : 0;
     for (const pending of this.pending) {
-      replay = advancePresentation(replay, pending.frame, pending.elapsedMs || fallbackElapsedMs);
-      if (pending.frame.heavy && authoritativePlayer.action.kind === null) {
-        replayedChargeMs = Math.min(GAME.heavyMaxChargeMs, replayedChargeMs + pending.elapsedMs);
-        replayedAction = { kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: replayedChargeMs };
-      } else {
-        replayedAction = quickActionStart(authoritativePlayer, pending.frame) ?? replayedAction;
-      }
+      const advanced = advanceRuntime(
+        replay,
+        authoritativePlayer,
+        pending.frame,
+        pending.elapsedMs || fallbackElapsedMs,
+        pending.platformProgress ?? platformProgress
+      );
+      replay = advanced.runtime;
+      replayedAction = advanced.actionStart;
     }
-    const position = this.display ? blendPosition(this.display.position, replay.position) : replay.position;
-    this.display = { ...replay, position };
+    const position = this.runtime ? blendPosition(this.runtime.position, replay.position) : replay.position;
+    this.runtime = { ...replay, position };
     this.actionStart = authoritativePlayer.action.kind === null ? replayedAction : null;
-    this.heavyChargeMs = replayedChargeMs;
-    return { ...this.display, actionStart: this.actionStart };
+    return { position, velocity: replay.velocity, facing: replay.facing, actionStart: this.actionStart };
   }
 
   pendingSequences(): number[] {
@@ -110,9 +271,8 @@ export class PredictionBuffer {
 
   reset(player?: MatchPlayer): void {
     this.pending.length = 0;
-    this.display = player ? kinematicsOf(player) : null;
+    this.runtime = player ? runtimeOf(player) : null;
     this.actionStart = null;
-    this.heavyChargeMs = 0;
   }
 }
 

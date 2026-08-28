@@ -3,9 +3,10 @@ import { ARENA } from '../../../shared/constants.js';
 import type { GameEvent, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
 import { localPlayerIdFromBridge } from '../GamePresentationBridge.js';
-import { PredictionBuffer, SnapshotTimeline, interpolateRemotePlayer, type PlayerPresentation } from '../prediction.js';
+import { SnapshotTimeline, interpolateRemotePlayer } from '../prediction.js';
 import { ARENA_SCENE_KEY } from './BootScene.js';
 import { ArenaInput, createPhaserInputSource } from './ArenaInput.js';
+import { ArenaSession } from './ArenaSession.js';
 import { createFighterView, type FighterView } from './FighterView.js';
 
 const INPUT_STEP_MS = 1_000 / 60;
@@ -14,21 +15,13 @@ function playerById(snapshot: MatchSnapshot, playerId: string): MatchPlayer | nu
   return snapshot.players.find((player) => player.playerId === playerId) ?? null;
 }
 
-function acceptsInput(snapshot: MatchSnapshot | null): boolean {
-  return snapshot?.phase === 'REGULATION' || snapshot?.phase === 'SUDDEN_DEATH';
-}
-
 export class ArenaScene extends Phaser.Scene {
   private readonly localPlayerId: string | null;
   private readonly timeline = new SnapshotTimeline();
   private readonly views = new Map<string, FighterView>();
   private readonly canonicalEvents: GameEvent[] = [];
   private readonly unsubscribers: Array<() => void> = [];
-  private prediction: PredictionBuffer | null = null;
-  private inputController: ArenaInput | null = null;
-  private latestSnapshot: MatchSnapshot | null = null;
-  private localPresentation: PlayerPresentation | null = null;
-  private inputSequence = 0;
+  private session: ArenaSession | null = null;
   private cleaned = false;
 
   constructor(
@@ -37,13 +30,12 @@ export class ArenaScene extends Phaser.Scene {
   ) {
     super(ARENA_SCENE_KEY);
     this.localPlayerId = localPlayerIdFromBridge(bridge);
-    this.prediction = this.localPlayerId ? new PredictionBuffer(this.localPlayerId) : null;
   }
 
   create(): void {
     this.drawArena();
     this.cleaned = false;
-    this.inputController = new ArenaInput(createPhaserInputSource(this), {
+    const inputController = new ArenaInput(createPhaserInputSource(this), {
       windowTarget: window,
       documentTarget: document,
       onShutdown: (listener) => {
@@ -54,10 +46,15 @@ export class ArenaScene extends Phaser.Scene {
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, this.releaseResources, this);
     this.events.once(Phaser.Scenes.Events.DESTROY, this.releaseResources, this);
 
-    const initial = this.bridge.getSnapshot();
-    if (initial) this.acceptSnapshot(initial);
+    this.session = new ArenaSession(
+      this.bridge,
+      this.localPlayerId ?? '',
+      inputController,
+      () => performance.now(),
+      (snapshot, receivedAtMs) => this.timeline.push(snapshot, receivedAtMs)
+    );
+    this.session.start();
     this.unsubscribers.push(
-      this.bridge.subscribeSnapshot((snapshot) => this.acceptSnapshot(snapshot)),
       this.bridge.subscribeEvent((event) => {
         this.canonicalEvents.push(event);
         if (this.canonicalEvents.length > 32) this.canonicalEvents.shift();
@@ -67,50 +64,25 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   update(): void {
-    const snapshot = this.latestSnapshot;
-    const localPlayer = snapshot && this.localPlayerId ? playerById(snapshot, this.localPlayerId) : null;
-    if (snapshot && localPlayer && acceptsInput(snapshot) && this.inputController && this.prediction) {
-      const frame = this.inputController.sample(this.inputSequence, localPlayer.position, performance.now());
-      if (frame) {
-        this.inputSequence += 1;
-        this.localPresentation = this.prediction.predict(frame, localPlayer, INPUT_STEP_MS);
-        this.bridge.sendInput(frame);
-      }
-    } else {
-      this.inputController?.clearHeld();
-    }
+    this.session?.step(INPUT_STEP_MS);
     this.renderPresentation(performance.now());
-  }
-
-  private acceptSnapshot(snapshot: MatchSnapshot): void {
-    const receivedAtMs = performance.now();
-    this.latestSnapshot = snapshot;
-    this.timeline.push(snapshot, receivedAtMs);
-    if (!this.localPlayerId || !this.prediction) return;
-    const player = playerById(snapshot, this.localPlayerId);
-    if (!player) {
-      this.prediction.reset();
-      this.localPresentation = null;
-      return;
-    }
-    this.inputSequence = Math.max(this.inputSequence, player.lastProcessedInputSeq + 1);
-    this.localPresentation = this.prediction.reconcile(player, INPUT_STEP_MS);
   }
 
   private renderPresentation(nowMs: number): void {
     const frame = this.timeline.sample(nowMs);
     if (!frame) return;
+    const localPresentation = this.session?.getLocalPresentation() ?? null;
     const activeIds = new Set<string>();
     for (const currentPlayer of frame.current.players) {
       activeIds.add(currentPlayer.playerId);
       const isLocal = currentPlayer.playerId === this.localPlayerId;
       const view = this.views.get(currentPlayer.playerId) ?? this.addView(currentPlayer, isLocal);
-      if (isLocal && this.localPresentation) {
+      if (isLocal && localPresentation) {
         view.apply(
           currentPlayer,
-          this.localPresentation.position,
-          this.localPresentation.facing,
-          this.localPresentation.actionStart
+          localPresentation.position,
+          localPresentation.facing,
+          localPresentation.actionStart
         );
         continue;
       }
@@ -148,8 +120,8 @@ export class ArenaScene extends Phaser.Scene {
     if (this.cleaned) return;
     this.cleaned = true;
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
-    this.inputController?.dispose();
-    this.inputController = null;
+    this.session?.dispose();
+    this.session = null;
     this.timeline.clear();
     this.canonicalEvents.length = 0;
     for (const view of this.views.values()) view.destroy();

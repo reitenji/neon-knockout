@@ -231,6 +231,32 @@ describe('createGameStore', () => {
     expect(listener).toHaveBeenCalledTimes(2);
   });
 
+  it('exposes current connection and notifies bridge listeners once per connection change until disposal', () => {
+    const { client, store } = createFixture();
+    const bridge = createArenaBridge(store);
+    const listener = vi.fn();
+
+    expect(bridge.isConnected()).toBe(false);
+    const unsubscribe = bridge.subscribeConnected(listener);
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenLastCalledWith(false);
+
+    client.emit('connection', 'connected');
+    client.emit('connection', 'connected');
+    expect(bridge.isConnected()).toBe(true);
+    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenLastCalledWith(true);
+
+    client.emit('connection', 'disconnected');
+    expect(listener).toHaveBeenCalledTimes(3);
+    expect(listener).toHaveBeenLastCalledWith(false);
+
+    unsubscribe();
+    unsubscribe();
+    client.emit('connection', 'connected');
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
   it('delivers persisted mute immediately and disposes that subscription idempotently', () => {
     const storage = new MemoryStorage();
     storage.setItem('neon-relay:muted', 'true');

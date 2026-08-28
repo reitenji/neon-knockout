@@ -3,7 +3,9 @@ import type { GameEvent, InputFrame, MatchSnapshot } from '../../shared/model.js
 
 export interface GamePresentationBridge {
   getSnapshot(): MatchSnapshot | null;
+  isConnected(): boolean;
   subscribeSnapshot(listener: (snapshot: MatchSnapshot) => void): () => void;
+  subscribeConnected(listener: (connected: boolean) => void): () => void;
   subscribeEvent(listener: (event: GameEvent) => void): () => void;
   subscribeMuted(listener: (muted: boolean) => void): () => void;
   sendInput(frame: InputFrame): void;

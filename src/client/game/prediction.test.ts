@@ -67,6 +67,61 @@ describe('PredictionBuffer', () => {
     expect(presentation).not.toHaveProperty('scores');
     expect(presentation).not.toHaveProperty('hit');
   });
+
+  it('does not predict dash or attack starts while canonical state forbids acting', () => {
+    const blockedPlayers = [
+      player({ dashCooldownRemainingMs: 100 }),
+      player({ dashRemainingMs: 100, velocity: { x: 760, y: 0 } }),
+      player({ hitstunRemainingMs: 100, action: { ...idleAction, kind: 'HITSTUN' } }),
+      player({ respawnRemainingMs: 100, action: { ...idleAction, kind: 'RESPAWNING' } }),
+      player({ action: { kind: 'QUICK_1', phase: 'ACTIVE', comboStep: 1, chargeMs: 0 } })
+    ];
+
+    for (const blocked of blockedPlayers) {
+      const prediction = new PredictionBuffer('p-1');
+      const result = prediction.predict(
+        frame(0, { moveX: 1, quick: true, heavy: true, dash: true }),
+        blocked,
+        16
+      );
+      expect(result.actionStart, blocked.action.kind ?? 'COOLDOWN').toBeNull();
+    }
+  });
+
+  it('advances canonical dash cooldown before allowing a later fresh dash edge', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const coolingDown = player({ position: { x: 640, y: 360 }, dashCooldownRemainingMs: 20 });
+
+    expect(prediction.predict(frame(0, { dash: true }), coolingDown, 16).actionStart).toBeNull();
+    expect(prediction.predict(frame(1), coolingDown, 16).actionStart).toBeNull();
+    const started = prediction.predict(frame(2, { dash: true }), coolingDown, 16);
+
+    expect(started.actionStart).toEqual({ kind: 'DASH', phase: 'ACTIVE', comboStep: 0, chargeMs: 0 });
+    expect(started.velocity.x).toBe(760);
+  });
+
+  it('uses reduced steering and outward void pull when predicting outside the contracted platform', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const outside = player({ position: { x: 640, y: 50 }, facing: { x: 1, y: 0 } });
+
+    const result = prediction.predict(frame(0, { moveX: 1 }), outside, 100, 0);
+
+    expect(result.velocity.x).toBeCloseTo(108, 5);
+    expect(result.velocity.y).toBeCloseTo(-36, 5);
+    expect(result.position).toEqual({ x: 650.8, y: 46.4 });
+  });
+
+  it('never predicts movement past a respawn timer without a canonical spawn snapshot', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const respawning = player({
+      position: { x: 640, y: 360 },
+      respawnRemainingMs: 10,
+      action: { ...idleAction, kind: 'RESPAWNING' }
+    });
+
+    expect(prediction.predict(frame(0, { moveX: 1 }), respawning, 16).position).toEqual({ x: 640, y: 360 });
+    expect(prediction.predict(frame(1, { moveX: 1 }), respawning, 16).position).toEqual({ x: 640, y: 360 });
+  });
 });
 
 describe('SnapshotTimeline', () => {
