@@ -49,6 +49,7 @@ export type MutableMatchPlayer = {
   chargeMs: number;
   charging: boolean;
   dashRemainingMs: number;
+  dashInvulnerabilityRemainingMs: number;
   dashCooldownRemainingMs: number;
   dashDirection: Vec2;
   hitstunRemainingMs: number;
@@ -125,6 +126,7 @@ export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: 
       chargeMs: 0,
       charging: false,
       dashRemainingMs: 0,
+      dashInvulnerabilityRemainingMs: 0,
       dashCooldownRemainingMs: 0,
       dashDirection: { x: 1, y: 0 },
       hitstunRemainingMs: 0,

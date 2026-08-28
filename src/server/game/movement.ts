@@ -49,7 +49,15 @@ function startDash(player: MutableMatchPlayer): void {
 
   player.dashDirection = dashDirection(player);
   player.dashRemainingMs = GAME.dashDurationMs;
+  player.dashInvulnerabilityRemainingMs = GAME.dashInvulnerabilityMs;
   player.dashCooldownRemainingMs = GAME.dashCooldownMs;
+}
+
+function advanceDashTimers(player: MutableMatchPlayer, stepMs: number): void {
+  const elapsedMs = Math.max(0, stepMs);
+  player.dashRemainingMs = Math.max(0, player.dashRemainingMs - elapsedMs);
+  player.dashInvulnerabilityRemainingMs = Math.max(0, player.dashInvulnerabilityRemainingMs - elapsedMs);
+  player.dashCooldownRemainingMs = Math.max(0, player.dashCooldownRemainingMs - elapsedMs);
 }
 
 export function advancePlayers(state: MatchState, stepMs: number): void {
@@ -60,6 +68,7 @@ export function advancePlayers(state: MatchState, stepMs: number): void {
     const player = state.players[playerId];
     if (!isActive(player)) continue;
 
+    advanceDashTimers(player, stepMs);
     startDash(player);
     const outsidePlatform = !pointInConvexPolygon(player.position, platform.vertices);
     const currentDashDirection = player.dashDirection;

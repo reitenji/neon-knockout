@@ -56,7 +56,53 @@ describe('authoritative movement', () => {
 
     expect(player.velocity).toEqual({ x: 0, y: -GAME.dashSpeed });
     expect(player.dashDirection).toEqual({ x: 0, y: -1 });
+    expect(player.dashRemainingMs).toBe(GAME.dashDurationMs);
+    expect(player.dashInvulnerabilityRemainingMs).toBe(GAME.dashInvulnerabilityMs);
     expect(player.dashCooldownRemainingMs).toBe(GAME.dashCooldownMs);
+  });
+
+  it('expires the active dash after its 140 ms duration', () => {
+    const state = createState();
+    const player = state.players.p1;
+    player.latestInput = { ...player.latestInput, moveX: 1, dash: true };
+
+    advancePlayers(state, 16);
+    player.latestInput = { ...player.latestInput, dash: false };
+    advancePlayers(state, GAME.dashDurationMs - 1);
+    expect(player.dashRemainingMs).toBe(1);
+
+    advancePlayers(state, 1);
+    expect(player.dashRemainingMs).toBe(0);
+  });
+
+  it('expires dash invulnerability after its first 100 ms', () => {
+    const state = createState();
+    const player = state.players.p1;
+    player.latestInput = { ...player.latestInput, dash: true };
+
+    advancePlayers(state, 16);
+    player.latestInput = { ...player.latestInput, dash: false };
+    advancePlayers(state, GAME.dashInvulnerabilityMs - 1);
+    expect(player.dashInvulnerabilityRemainingMs).toBe(1);
+
+    advancePlayers(state, 1);
+    expect(player.dashInvulnerabilityRemainingMs).toBe(0);
+  });
+
+  it('expires cooldown after 1100 ms and permits a new dash', () => {
+    const state = createState();
+    const player = state.players.p1;
+    player.latestInput = { ...player.latestInput, dash: true };
+
+    advancePlayers(state, 16);
+    player.latestInput = { ...player.latestInput, dash: false };
+    advancePlayers(state, GAME.dashCooldownMs);
+    expect(player.dashCooldownRemainingMs).toBe(0);
+
+    player.latestInput = { ...player.latestInput, dash: true };
+    advancePlayers(state, 16);
+    expect(player.dashRemainingMs).toBe(GAME.dashDurationMs);
+    expect(player.dashInvulnerabilityRemainingMs).toBe(GAME.dashInvulnerabilityMs);
   });
 
   it('separates active overlapping players in stable player-id order', () => {
