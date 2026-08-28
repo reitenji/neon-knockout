@@ -411,8 +411,12 @@ export class RoomManager {
       if (room.match.phase === 'PAUSED') this.publishMatchEvents(room, resumePausedMatch(room.match));
       return true;
     }
-    const reconnectRemainingMs = this.pauseRemainingMs(room);
-    if (reconnectRemainingMs !== null) {
+    const now = this.deps.now();
+    const validReservations = [...room.players.values()].filter(
+      (player) => !player.connected && player.expiresAt !== null && player.expiresAt > now
+    );
+    if (connectedCount + validReservations.length >= GAME.minPlayers) {
+      const reconnectRemainingMs = Math.max(...validReservations.map((player) => player.expiresAt! - now));
       if (room.match.phase !== 'PAUSED') {
         this.publishMatchEvents(room, setMatchPaused(room.match, reconnectRemainingMs));
       } else {

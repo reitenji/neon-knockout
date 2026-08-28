@@ -271,6 +271,66 @@ describe('RoomManager FFA lifecycle', () => {
     expect(subject.manager.debugRoom(roomCode)?.scores).toBeNull();
   });
 
+  it('ends at the exact deadline where three staggered reservations can no longer restore two players', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject, 3);
+    advanceCountdown(subject);
+    subject.manager.forceKnockout(roomCode, players[2].playerId, players[1].playerId);
+    const preserved = subject.roomState(roomCode).players.find((player) => player.playerId === players[2].playerId)!;
+
+    subject.manager.disconnect('c-1');
+    subject.clock.advance(5_000);
+    subject.manager.disconnect('c-2');
+    subject.clock.advance(5_000);
+    subject.manager.disconnect('c-3');
+    subject.publications.length = 0;
+
+    subject.clock.advance(9_999);
+    subject.manager.advance(0);
+    expect(subject.manager.debugRoom(roomCode)).toMatchObject({ phase: 'MATCH', connectedCount: 0, reservedCount: 3 });
+    expect(subject.publications.some(
+      (publication) => publication.type === 'MATCH_EVENT' && publication.event.type === 'RESULT'
+    )).toBe(false);
+
+    subject.clock.advance(1);
+    subject.manager.advance(0);
+    expect(subject.manager.debugRoom(roomCode)).toMatchObject({ phase: 'MATCH', connectedCount: 0, reservedCount: 2 });
+    expect(subject.publications.some(
+      (publication) => publication.type === 'MATCH_EVENT' && publication.event.type === 'RESULT'
+    )).toBe(false);
+
+    subject.clock.advance(4_999);
+    subject.manager.advance(0);
+    expect(subject.manager.debugRoom(roomCode)?.phase).toBe('MATCH');
+    subject.clock.advance(1);
+    subject.manager.advance(0);
+
+    const noContests = subject.publications.filter(
+      (publication): publication is Extract<RoomPublication, { type: 'MATCH_EVENT' }> =>
+        publication.type === 'MATCH_EVENT' && publication.event.type === 'RESULT' && publication.event.reason === 'NO_CONTEST'
+    );
+    expect(noContests).toHaveLength(1);
+    expect(subject.roomState(roomCode)).toMatchObject({
+      phase: 'LOBBY',
+      hostPlayerId: players[2].playerId,
+      pauseRemainingMs: null,
+      result: null,
+      players: [{
+        playerId: players[2].playerId,
+        chassis: preserved.chassis,
+        accent: preserved.accent,
+        connected: false,
+        stats: { knockouts: 0, falls: 0, landedHits: 0, completedAttacks: 0 }
+      }]
+    });
+    expect(subject.manager.debugRoom(roomCode)?.scores).toBeNull();
+
+    subject.manager.advance(0);
+    expect(subject.publications.filter(
+      (publication) => publication.type === 'MATCH_EVENT' && publication.event.type === 'RESULT'
+    )).toHaveLength(1);
+  });
+
   it('migrates the host immediately and never takes ownership back on resume', () => {
     const subject = fixture();
     const first = subject.manager.createRoom('c-1', 'Ada');
