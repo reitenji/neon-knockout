@@ -13,12 +13,10 @@ export type DomainErrorCode =
   | 'ROOM_NOT_FOUND'
   | 'UNBALANCED_TEAM';
 
-export class DomainError extends Error {
+export class DomainError {
   constructor(
     readonly code: DomainErrorCode,
     readonly safeMessage: string,
     readonly recoverable: boolean
-  ) {
-    super(safeMessage);
-  }
+  ) {}
 }
