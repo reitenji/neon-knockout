@@ -9,6 +9,7 @@
     "dev": "concurrently -k \"tsx watch src/server/main.ts\" \"vite --host 0.0.0.0\"",
     "build:client": "vite build",
     "build:server": "tsup src/server/main.ts --format esm --platform node --out-dir dist/server --clean false",
+    "assets:audio": "node scripts/generate-audio.mjs",
     "build": "rimraf dist && npm run build:client && npm run build:server",
     "start": "node dist/server/main.js",
     "lan": "npm run build && npm start",

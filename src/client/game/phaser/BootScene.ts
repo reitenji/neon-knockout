@@ -5,6 +5,7 @@ import {
   fighterTextureKey,
   type FighterAssetPart
 } from './fighterManifest.js';
+import { GAME_AUDIO_ASSETS } from './GameAudio.js';
 
 export const BOOT_SCENE_KEY = 'boot';
 export const ARENA_SCENE_KEY = 'arena';
@@ -22,6 +23,7 @@ export class BootScene extends Phaser.Scene {
         this.load.svg(fighterTextureKey(chassis, part), assets[part], { width: 128, height: 128 });
       }
     }
+    for (const [key, url] of Object.entries(GAME_AUDIO_ASSETS)) this.load.audio(key, url);
   }
 
   create(): void {

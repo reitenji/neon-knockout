@@ -1,13 +1,17 @@
 import Phaser from 'phaser';
-import { ARENA } from '../../../shared/constants.js';
-import type { GameEvent, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
+import type { MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
 import { localPlayerIdFromBridge } from '../GamePresentationBridge.js';
 import { SnapshotTimeline, interpolateRemotePlayer } from '../prediction.js';
 import { ARENA_SCENE_KEY } from './BootScene.js';
 import { ArenaInput, createPhaserInputSource } from './ArenaInput.js';
 import { ArenaSession } from './ArenaSession.js';
+import { createArenaView, type ArenaView } from './ArenaView.js';
 import { createFighterView, type FighterView } from './FighterView.js';
+import { GameAudio } from './GameAudio.js';
+import { ImpactFx } from './ImpactFx.js';
+import { PhaserAudioAdapter } from './PhaserAudioAdapter.js';
+import { PhaserImpactAdapter } from './PhaserImpactAdapter.js';
 
 const INPUT_STEP_MS = 1_000 / 60;
 
@@ -19,9 +23,12 @@ export class ArenaScene extends Phaser.Scene {
   private readonly localPlayerId: string | null;
   private readonly timeline = new SnapshotTimeline();
   private readonly views = new Map<string, FighterView>();
-  private readonly canonicalEvents: GameEvent[] = [];
+  private readonly consumedEventIds = new Set<number>();
   private readonly unsubscribers: Array<() => void> = [];
   private session: ArenaSession | null = null;
+  private arenaView: ArenaView | null = null;
+  private impactFx: ImpactFx | null = null;
+  private gameAudio: GameAudio | null = null;
   private cleaned = false;
 
   constructor(
@@ -33,8 +40,15 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.drawArena();
     this.cleaned = false;
+    this.consumedEventIds.clear();
+    this.cameras.main.setBackgroundColor('#02050a');
+    this.arenaView = createArenaView(this, { reducedMotion: this.reducedMotion });
+    this.impactFx = new ImpactFx(
+      new PhaserImpactAdapter(this, (playerId) => this.views.get(playerId) ?? null),
+      { reducedMotion: this.reducedMotion }
+    );
+    this.gameAudio = new GameAudio(new PhaserAudioAdapter(this.sound, window));
     const inputController = new ArenaInput(createPhaserInputSource(this), {
       windowTarget: window,
       documentTarget: document,
@@ -56,10 +70,13 @@ export class ArenaScene extends Phaser.Scene {
     this.session.start();
     this.unsubscribers.push(
       this.bridge.subscribeEvent((event) => {
-        this.canonicalEvents.push(event);
-        if (this.canonicalEvents.length > 32) this.canonicalEvents.shift();
+        if (this.consumedEventIds.has(event.eventId)) return;
+        this.consumedEventIds.add(event.eventId);
+        const snapshot = this.bridge.getSnapshot();
+        if (snapshot) this.impactFx?.ingest(event, snapshot);
+        this.gameAudio?.playEvent(event);
       }),
-      this.bridge.subscribeMuted(() => undefined)
+      this.bridge.subscribeMuted((muted) => this.gameAudio?.setMuted(muted))
     );
   }
 
@@ -71,6 +88,11 @@ export class ArenaScene extends Phaser.Scene {
   private renderPresentation(nowMs: number): void {
     const frame = this.timeline.sample(nowMs);
     if (!frame) return;
+    this.arenaView?.apply({
+      phase: frame.current.phase,
+      remainingMs: frame.current.remainingMs,
+      platformProgress: frame.current.platformProgress
+    }, nowMs);
     const localPresentation = this.session?.getLocalPresentation() ?? null;
     const activeIds = new Set<string>();
     for (const currentPlayer of frame.current.players) {
@@ -98,22 +120,9 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   private addView(player: MatchPlayer, isLocal: boolean): FighterView {
-    const view = createFighterView(this, player, isLocal);
+    const view = createFighterView(this, player, isLocal, { reducedMotion: this.reducedMotion });
     this.views.set(player.playerId, view);
     return view;
-  }
-
-  private drawArena(): void {
-    this.cameras.main.setBackgroundColor('#02050a');
-    const graphics = this.add.graphics();
-    const regulationVertices = ARENA.regulationVertices.map((point) => new Phaser.Math.Vector2(point.x, point.y));
-    const minimumVertices = ARENA.minimumVertices.map((point) => new Phaser.Math.Vector2(point.x, point.y));
-    graphics.fillStyle(0x17202b, 1);
-    graphics.fillPoints(regulationVertices, true);
-    graphics.lineStyle(10, 0x394553, 1);
-    graphics.strokePoints(regulationVertices, true, true);
-    graphics.lineStyle(2, 0xff8a5b, this.reducedMotion ? 0.65 : 0.9);
-    graphics.strokePoints(minimumVertices, true, true);
   }
 
   private releaseResources(): void {
@@ -123,7 +132,13 @@ export class ArenaScene extends Phaser.Scene {
     this.session?.dispose();
     this.session = null;
     this.timeline.clear();
-    this.canonicalEvents.length = 0;
+    this.consumedEventIds.clear();
+    this.impactFx?.dispose();
+    this.impactFx = null;
+    this.gameAudio?.dispose();
+    this.gameAudio = null;
+    this.arenaView?.destroy();
+    this.arenaView = null;
     for (const view of this.views.values()) view.destroy();
     this.views.clear();
   }
