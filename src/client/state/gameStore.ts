@@ -272,6 +272,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       }
     }),
     client.subscribe('server:error', (error) => {
+      if (state.screen === 'MATCH' && state.pendingAction === null && error.code === 'RATE_LIMITED') return;
       const action = state.pendingAction ?? 'server';
       patch((current) => ({
         ...current, pendingAction: null, lastError: error, errorAction: action,

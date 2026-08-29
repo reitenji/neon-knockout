@@ -196,6 +196,23 @@ describe('createGameStore', () => {
     });
   });
 
+  it('keeps real-time input shaping silent during a match', () => {
+    const { client, store } = createFixture();
+    const rateLimited: ServerError = {
+      code: 'RATE_LIMITED', message: 'Çok hızlı istek gönderiyorsunuz.', recoverable: true
+    };
+    client.emit('room:state', roomState({ phase: 'MATCH' }));
+
+    client.emit('server:error', rateLimited);
+
+    expect(store.getSnapshot()).toMatchObject({ lastError: null, errorAction: null, toasts: [] });
+    client.emit('room:state', roomState({ phase: 'LOBBY' }));
+    client.emit('server:error', rateLimited);
+    expect(store.getSnapshot().toasts.at(-1)).toMatchObject({
+      tone: 'warning', message: 'Çok hızlı istek gönderiyorsunuz.'
+    });
+  });
+
   it('streams authoritative snapshots/events and creates a Phaser-free arena bridge', () => {
     const { client, store } = createFixture();
     const bridge = createArenaBridge(store);

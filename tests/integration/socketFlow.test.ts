@@ -220,7 +220,7 @@ describe('Socket.IO FFA game server flow', () => {
     });
   }, 20_000);
 
-  it('accepts at most sixty monotonic inputs per second and rate-limits above ninety valid messages', async () => {
+  it('accepts at most sixty monotonic inputs per second and silently shapes input bursts', async () => {
     const clientA = await client();
     const clientB = await client();
     const host = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
@@ -237,7 +237,7 @@ describe('Socket.IO FFA game server flow', () => {
       (snapshot) => snapshot.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq === 60);
     expect(capped.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq).toBe(60);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(errors.filter((error) => error.code === 'RATE_LIMITED')).toHaveLength(1);
+    expect(errors.filter((error) => error.code === 'RATE_LIMITED')).toHaveLength(0);
 
     await new Promise((resolve) => setTimeout(resolve, 1_050));
     sendInput(clientA, input(100));

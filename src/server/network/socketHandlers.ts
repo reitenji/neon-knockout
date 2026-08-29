@@ -218,7 +218,6 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         return;
       }
       if (!limiter.consumeInput()) {
-        emitRateLimit();
         return;
       }
       if (parsed.data.seq <= lastAcceptedInputSeq) return;
