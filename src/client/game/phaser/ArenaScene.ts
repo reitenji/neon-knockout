@@ -10,6 +10,7 @@ import { createArenaView, type ArenaView } from './ArenaView.js';
 import { createFighterView, type FighterView } from './FighterView.js';
 import { GameAudio } from './GameAudio.js';
 import { ImpactFx } from './ImpactFx.js';
+import { LocalActionAudioTracker } from './LocalActionAudioTracker.js';
 import { PhaserAudioAdapter } from './PhaserAudioAdapter.js';
 import { PhaserImpactAdapter } from './PhaserImpactAdapter.js';
 
@@ -24,11 +25,13 @@ export class ArenaScene extends Phaser.Scene {
   private readonly timeline = new SnapshotTimeline();
   private readonly views = new Map<string, FighterView>();
   private readonly consumedEventIds = new Set<number>();
+  private readonly localActionAudio = new LocalActionAudioTracker();
   private readonly unsubscribers: Array<() => void> = [];
   private session: ArenaSession | null = null;
   private arenaView: ArenaView | null = null;
   private impactFx: ImpactFx | null = null;
   private gameAudio: GameAudio | null = null;
+  private localCueSequence = 0;
   private cleaned = false;
 
   constructor(
@@ -42,6 +45,8 @@ export class ArenaScene extends Phaser.Scene {
   create(): void {
     this.cleaned = false;
     this.consumedEventIds.clear();
+    this.localActionAudio.reset();
+    this.localCueSequence = 0;
     this.cameras.main.setBackgroundColor('#02050a');
     this.arenaView = createArenaView(this, { reducedMotion: this.reducedMotion });
     this.impactFx = new ImpactFx(
@@ -100,6 +105,15 @@ export class ArenaScene extends Phaser.Scene {
       const isLocal = currentPlayer.playerId === this.localPlayerId;
       const view = this.views.get(currentPlayer.playerId) ?? this.addView(currentPlayer, isLocal);
       if (isLocal && localPresentation) {
+        const canPresentLocalAction = (frame.current.phase === 'REGULATION' || frame.current.phase === 'SUDDEN_DEATH') &&
+          currentPlayer.hitstunRemainingMs <= 0 && currentPlayer.respawnRemainingMs <= 0;
+        if (canPresentLocalAction) {
+          for (const cue of this.localActionAudio.consume(localPresentation.actionStart)) {
+            this.gameAudio?.playCue(cue, ++this.localCueSequence);
+          }
+        } else {
+          this.localActionAudio.reset();
+        }
         view.apply(
           currentPlayer,
           localPresentation.position,
@@ -133,6 +147,8 @@ export class ArenaScene extends Phaser.Scene {
     this.session = null;
     this.timeline.clear();
     this.consumedEventIds.clear();
+    this.localActionAudio.reset();
+    this.localCueSequence = 0;
     this.impactFx?.dispose();
     this.impactFx = null;
     this.gameAudio?.dispose();

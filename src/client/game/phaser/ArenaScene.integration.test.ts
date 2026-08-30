@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { GameEvent, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
+import type { PlayerPresentation } from '../prediction.js';
 
 const probes = vi.hoisted(() => ({
   arenaApply: vi.fn(),
@@ -14,7 +15,8 @@ const probes = vi.hoisted(() => ({
   fighterApply: vi.fn(),
   fighterDestroy: vi.fn(),
   createFighterView: vi.fn(),
-  sessionDispose: vi.fn()
+  sessionDispose: vi.fn(),
+  sessionPresentation: vi.fn<() => PlayerPresentation | null>(() => null)
 }));
 
 class FakeEvents {
@@ -69,7 +71,7 @@ vi.mock('./ArenaSession.js', () => ({
       if (snapshot) this.onSnapshot(snapshot, 0);
     }
     step(): void {}
-    getLocalPresentation(): null { return null; }
+    getLocalPresentation(): PlayerPresentation | null { return probes.sessionPresentation(); }
     dispose(): void { probes.sessionDispose(); }
   }
 }));
@@ -169,6 +171,15 @@ describe('ArenaScene live presentation integration', () => {
       reducedMotion: true
     });
     expect(probes.audioSetMuted).toHaveBeenCalledWith(true);
+
+    probes.sessionPresentation.mockReturnValue({
+      position: { x: 300, y: 360 }, velocity: { x: 0, y: 0 }, facing: { x: 1, y: 0 },
+      actionStart: { kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1, chargeMs: 0 }
+    });
+    scene.update();
+    scene.update();
+    expect(probes.audioPlayCue).toHaveBeenCalledTimes(1);
+    expect(probes.audioPlayCue).toHaveBeenCalledWith('quick', 1);
 
     const event: GameEvent = {
       eventId: 21, tick: 10, type: 'RESPAWN', playerId: 'p1', position: { x: 640, y: 360 }
