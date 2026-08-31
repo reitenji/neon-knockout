@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import { GAME } from '../../shared/constants.js';
-import { advanceCombatTimers, resolveAttackHits, startActions } from './combat.js';
+import { buildActiveAttackShapes, resolveMeleeInteractions } from './combatResolution.js';
+import { advanceCombatTimers, startActions } from './combat.js';
 import { createMatchState, type MatchState, type MutableMatchPlayer } from './state.js';
 
 const input = (seq: number, overrides: Partial<MutableMatchPlayer['latestInput']> = {}) => ({
@@ -24,6 +25,11 @@ function createState(): MatchState {
 function beginQuick(state: MatchState, playerId = 'p1'): void {
   state.players[playerId].latestInput = input(0, { quick: true });
   startActions(state);
+}
+
+function advanceAndResolve(state: MatchState, stepMs: number) {
+  const { activeSlices } = advanceCombatTimers(state, stepMs);
+  return resolveMeleeInteractions(state, buildActiveAttackShapes(state, activeSlices));
 }
 
 describe('authoritative combat', () => {
@@ -77,35 +83,48 @@ describe('authoritative combat', () => {
     expect(attack?.kind).toBe('QUICK_1');
   });
 
-  it('hits each in-range target once per attack in distance and stable-id order', () => {
+  it('hits each target crossed by the visible sweep once per attack in stable-id order', () => {
     const state = createState();
-    state.players.p2.position = { x: 650, y: 360 };
-    state.players.p3.position = { x: 650, y: 360 };
+    state.players.p2.position = { x: 642, y: 360 };
+    state.players.p3.position = { x: 642, y: 360 };
     beginQuick(state);
-    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
-    const first = resolveAttackHits(state);
-    const repeated = resolveAttackHits(state);
+    const timers = advanceCombatTimers(
+      state,
+      GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs
+    );
+    const shapes = buildActiveAttackShapes(state, timers.activeSlices);
+    const first = resolveMeleeInteractions(state, shapes);
+    const repeated = resolveMeleeInteractions(state, shapes);
     expect(first.map((event) => event.type === 'HIT' ? event.targetId : '')).toEqual(['p2', 'p3']);
     expect(repeated).toEqual([]);
     expect(state.players.p1.stats.landedHits).toBe(1);
   });
 
-  it('rejects targets behind the forward arc and beyond the squared range check', () => {
+  it('rejects a hurt circle just outside the visible swept capsule', () => {
     const state = createState();
-    state.players.p2.position = { x: 600 - GAME.quickCombo[0].range + 1, y: 360 };
-    state.players.p3.position = { x: 600 + GAME.quickCombo[0].range + 1, y: 360 };
+    state.players.p2.position = { x: 642, y: 423 };
+    state.players.p3.connected = false;
     beginQuick(state);
-    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
-    expect(resolveAttackHits(state)).toEqual([]);
+    expect(advanceAndResolve(
+      state,
+      GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs
+    )).toEqual([]);
   });
 
-  it('rejects protection and dash invulnerability without hit feedback', () => {
+  it('rejects spawn protection while dash invulnerability emits perfect-dodge feedback', () => {
     const state = createState();
+    state.players.p2.position = { x: 642, y: 360 };
+    state.players.p3.position = { x: 642, y: 360 };
+    state.players.p3.dashCooldownRemainingMs = 900;
     beginQuick(state);
-    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
-    state.players.p2.protectionRemainingMs = 1;
+    state.players.p2.protectionRemainingMs = GAME.respawnProtectionMs;
     state.players.p3.dashInvulnerabilityRemainingMs = 1;
-    expect(resolveAttackHits(state)).toEqual([]);
+    expect(advanceAndResolve(
+      state,
+      GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs
+    )).toEqual([expect.objectContaining({
+      type: 'PERFECT_DODGE', playerId: 'p3', attackerId: 'p1', refundedMs: 550
+    })]);
     expect(state.players.p2.overload).toBe(0);
     expect(state.players.p3.overload).toBe(0);
   });
@@ -190,9 +209,12 @@ describe('authoritative combat', () => {
   it('applies exact overload impulse and the 90 ms minimum hitstun', () => {
     const state = createState();
     state.players.p3.connected = false;
+    state.players.p2.position = { x: 642, y: 360 };
     beginQuick(state);
-    advanceCombatTimers(state, GAME.quickCombo[0].windupMs);
-    const events = resolveAttackHits(state);
+    const events = advanceAndResolve(
+      state,
+      GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs
+    );
     const expectedImpulse = 280 * (1 + (8 / 150) * 0.9);
     expect(events).toContainEqual(expect.objectContaining({
       type: 'HIT', attackerId: 'p1', targetId: 'p2', attack: 'QUICK_1',
@@ -205,14 +227,14 @@ describe('authoritative combat', () => {
   it('caps overload and applies the exact 230 ms maximum hitstun for a full heavy', () => {
     const state = createState();
     state.players.p3.connected = false;
+    state.players.p2.position = { x: 648, y: 360 };
     state.players.p2.overload = GAME.maxOverload;
     const attacker = state.players.p1;
     attacker.previousHeavy = true;
     attacker.chargeMs = GAME.heavyMaxChargeMs;
     attacker.latestInput = input(1);
     startActions(state);
-    advanceCombatTimers(state, GAME.heavyWindupMs);
-    const events = resolveAttackHits(state);
+    const events = advanceAndResolve(state, GAME.heavyWindupMs + GAME.heavyActiveMs);
     expect(events).toContainEqual(expect.objectContaining({
       type: 'HIT', attack: 'HEAVY', impulse: 760 * 1.9, resultingOverload: 150
     }));

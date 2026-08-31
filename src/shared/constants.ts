@@ -40,6 +40,9 @@ export const GAME = Object.freeze({
   dashDurationMs: 140,
   dashInvulnerabilityMs: 100,
   dashCooldownMs: 1_100,
+  perfectDodgeRefundMs: 550,
+  quickClashRecoil: 90,
+  heavyClashRecoil: 150,
   maxOverload: 150,
   knockoutToControlMs: 700,
   respawnProtectionMs: 650,
@@ -57,8 +60,6 @@ export const GAME = Object.freeze({
   quickCombo: Object.freeze([
     Object.freeze({
       step: 1,
-      range: 72,
-      arcDeg: 92,
       overloadGain: 8,
       baseImpulse: 280,
       windupMs: 70,
@@ -67,8 +68,6 @@ export const GAME = Object.freeze({
     }),
     Object.freeze({
       step: 2,
-      range: 76,
-      arcDeg: 96,
       overloadGain: 10,
       baseImpulse: 325,
       windupMs: 65,
@@ -77,8 +76,6 @@ export const GAME = Object.freeze({
     }),
     Object.freeze({
       step: 3,
-      range: 88,
-      arcDeg: 105,
       overloadGain: 16,
       baseImpulse: 455,
       windupMs: 115,
@@ -87,8 +84,6 @@ export const GAME = Object.freeze({
     })
   ]),
   heavyAttack: Object.freeze({
-    range: 94,
-    arcDeg: 82,
     minOverloadGain: 18,
     maxOverloadGain: 32,
     minImpulse: 460,

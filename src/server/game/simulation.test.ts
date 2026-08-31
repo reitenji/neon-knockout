@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ARENA, GAME } from '../../shared/constants.js';
 import type { InputFrame } from '../../shared/model.js';
+import { advanceCombatTimers } from './combat.js';
 import { forceKnockout, resumePausedMatch, setMatchPaused, setPlayerConnected, snapshotMatch, stepMatch } from './simulation.js';
 import { createMatchState, type MatchState } from './state.js';
 
@@ -52,12 +53,29 @@ describe('authoritative match simulation', () => {
     state.players.p2.position = { x: 650, y: 360 };
     stepMatch(state, new Map([['p1', idle(0, { quick: true })]]), 0);
     const events = [
-      ...stepMatch(state, new Map([['p1', idle(1)]]), GAME.quickCombo[0].windupMs),
+      ...stepMatch(
+        state,
+        new Map([['p1', idle(1)]]),
+        GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs
+      ),
       ...forceKnockout(state, 'p1', 'p2')
     ];
     expect(events.map((event) => event.type)).toEqual(['HIT', 'KNOCKOUT']);
     expect(events.map((event) => event.eventId)).toEqual([1, 2]);
     expect(events[0].tick).toBeLessThanOrEqual(events[1].tick);
+  });
+
+  it('resolves the terminal active sweep slice when the same 60 Hz step enters recovery', () => {
+    const state = regulationState();
+    state.players.p1.position = { x: 600, y: 360 };
+    state.players.p2.position = { x: 642, y: 392 };
+    stepMatch(state, new Map([['p1', idle(0, { quick: true })]]), 0);
+    advanceCombatTimers(state, GAME.quickCombo[0].windupMs + 50);
+
+    const events = stepMatch(state, new Map([['p1', idle(1)]]), 1_000 / 60);
+
+    expect(state.players.p1.attack?.phase).toBe('RECOVERY');
+    expect(events).toEqual([expect.objectContaining({ type: 'HIT', attackerId: 'p1', targetId: 'p2' })]);
   });
 
   it('allows an attack on the exact step an active dash expires', () => {
@@ -238,7 +256,7 @@ describe('authoritative match simulation', () => {
       state.players.p2.position = { x: 650, y: 360 };
       const events = [
         ...stepMatch(state, new Map([['p1', idle(0, { quick: true })]]), 0),
-        ...stepMatch(state, new Map([['p1', idle(1)]]), 70),
+        ...stepMatch(state, new Map([['p1', idle(1)]]), 130),
         ...forceKnockout(state, 'p1', 'p2'),
         ...stepMatch(state, new Map(), 700)
       ];

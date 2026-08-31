@@ -1,62 +1,23 @@
 import { GAME } from '../../shared/constants.js';
 import { profileForAttack } from '../../shared/combat/profiles.js';
-import type { AttackKind, GameEvent } from '../../shared/model.js';
-import { clamp, dot, normalize, subtract } from './geometry.js';
-import type { AttackRuntime, MatchState, MutableMatchPlayer } from './state.js';
+import type { AttackKind } from '../../shared/model.js';
+import type { MatchState, MutableMatchPlayer } from './state.js';
+import type { ActiveAttackSlice } from './combatResolution.js';
 
 const compareStableIds = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
-const MIN_EFFECTIVE_IMPULSE = GAME.quickCombo[0].baseImpulse *
-  (1 + (GAME.quickCombo[0].overloadGain / GAME.maxOverload) * 0.9);
-const MAX_EFFECTIVE_IMPULSE = GAME.heavyAttack.maxImpulse * 1.9;
-
-type AttackTuning = Readonly<{
-  range: number;
-  arcDeg: number;
-  overloadGain: number;
-  baseImpulse: number;
-  activeMs: number;
-  recoveryMs: number;
-}>;
 
 function activePlayer(player: MutableMatchPlayer): boolean {
   return player.connected && player.respawnRemainingMs <= 0;
 }
 
-function quickTuning(kind: AttackKind): (typeof GAME.quickCombo)[number] | null {
-  if (kind === 'HEAVY') return null;
-  return GAME.quickCombo[Number(kind.at(-1)) - 1];
-}
-
-function tuningFor(attack: AttackRuntime): AttackTuning {
-  const quick = quickTuning(attack.kind);
-  if (quick) return { ...quick };
-  const chargeProgress = clamp(
-    (attack.chargeMs - GAME.heavyEnterChargeMs) /
-      (GAME.heavyMaxChargeMs - GAME.heavyEnterChargeMs),
-    0,
-    1
-  );
-  return {
-    range: GAME.heavyAttack.range,
-    arcDeg: GAME.heavyAttack.arcDeg,
-    overloadGain: GAME.heavyAttack.minOverloadGain +
-      (GAME.heavyAttack.maxOverloadGain - GAME.heavyAttack.minOverloadGain) * chargeProgress,
-    baseImpulse: GAME.heavyAttack.minImpulse +
-      (GAME.heavyAttack.maxImpulse - GAME.heavyAttack.minImpulse) * chargeProgress,
-    activeMs: GAME.heavyActiveMs,
-    recoveryMs: GAME.heavyRecoveryMs
-  };
-}
-
 function beginAttack(state: MatchState, player: MutableMatchPlayer, kind: AttackKind, chargeMs = 0): void {
-  const quick = quickTuning(kind);
   const profile = profileForAttack(kind);
   player.attack = {
     attackId: state.nextAttackId++,
     kind,
     profileId: profile.id,
     phase: 'WINDUP',
-    phaseRemainingMs: quick?.windupMs ?? GAME.heavyWindupMs,
+    phaseRemainingMs: profile.windupMs,
     phaseElapsedMs: 0,
     previousActiveProgress: 0,
     lockedFacing: { x: player.latestInput.aimX, y: player.latestInput.aimY },
@@ -71,31 +32,77 @@ function beginAttack(state: MatchState, player: MutableMatchPlayer, kind: Attack
   player.protectionRemainingMs = 0;
 }
 
-function advanceAttack(player: MutableMatchPlayer, elapsedMs: number): void {
+function advanceAttack(
+  player: MutableMatchPlayer,
+  elapsedMs: number,
+  activeSlices: ActiveAttackSlice[],
+  activated: ActiveAttackSlice[]
+): void {
   let remainingElapsed = elapsedMs;
   while (player.attack && remainingElapsed > 0) {
-    if (remainingElapsed < player.attack.phaseRemainingMs) {
-      player.attack.phaseRemainingMs -= remainingElapsed;
-      return;
+    const attack = player.attack;
+    const profile = profileForAttack(attack.kind);
+    const consumedMs = Math.min(remainingElapsed, attack.phaseRemainingMs);
+
+    if (attack.phase === 'ACTIVE') {
+      const previousProgress = attack.phaseElapsedMs / profile.activeMs;
+      attack.phaseElapsedMs += consumedMs;
+      attack.phaseRemainingMs -= consumedMs;
+      remainingElapsed -= consumedMs;
+      const currentProgress = attack.phaseElapsedMs / profile.activeMs;
+      const slice = {
+        playerId: player.playerId,
+        attack,
+        previousProgress,
+        currentProgress,
+        enteredActive: previousProgress === 0
+      } satisfies ActiveAttackSlice;
+      activeSlices.push(slice);
+      attack.previousActiveProgress = currentProgress;
+      if (attack.phaseRemainingMs === 0) {
+        attack.phase = 'RECOVERY';
+        attack.phaseRemainingMs = profile.recoveryMs;
+        attack.phaseElapsedMs = 0;
+        player.stats.completedAttacks += 1;
+      }
+      continue;
     }
-    remainingElapsed -= player.attack.phaseRemainingMs;
-    const tuning = tuningFor(player.attack);
-    if (player.attack.phase === 'WINDUP') {
-      player.attack.phase = 'ACTIVE';
-      player.attack.phaseRemainingMs = tuning.activeMs;
-    } else if (player.attack.phase === 'ACTIVE') {
-      player.attack.phase = 'RECOVERY';
-      player.attack.phaseRemainingMs = tuning.recoveryMs;
-      player.stats.completedAttacks += 1;
+
+    attack.phaseElapsedMs += consumedMs;
+    attack.phaseRemainingMs -= consumedMs;
+    remainingElapsed -= consumedMs;
+    if (attack.phaseRemainingMs > 0) return;
+
+    if (attack.phase === 'WINDUP') {
+      attack.phase = 'ACTIVE';
+      attack.phaseRemainingMs = profile.activeMs;
+      attack.phaseElapsedMs = 0;
+      attack.previousActiveProgress = 0;
+      activated.push({
+        playerId: player.playerId,
+        attack,
+        previousProgress: 0,
+        currentProgress: 0,
+        enteredActive: true
+      });
     } else {
       player.attack = null;
     }
   }
 }
 
-export function advanceCombatTimers(state: MatchState, stepMs: number): void {
-  if (state.phase !== 'REGULATION' && state.phase !== 'SUDDEN_DEATH') return;
+export type CombatTimerAdvance = Readonly<{
+  activeSlices: readonly ActiveAttackSlice[];
+  activated: readonly ActiveAttackSlice[];
+}>;
+
+export function advanceCombatTimers(state: MatchState, stepMs: number): CombatTimerAdvance {
+  if (state.phase !== 'REGULATION' && state.phase !== 'SUDDEN_DEATH') {
+    return { activeSlices: [], activated: [] };
+  }
   const elapsedMs = Math.max(0, stepMs);
+  const activeSlices: ActiveAttackSlice[] = [];
+  const activated: ActiveAttackSlice[] = [];
   for (const playerId of Object.keys(state.players).sort(compareStableIds)) {
     const player = state.players[playerId];
     if (!player.connected) continue;
@@ -105,7 +112,7 @@ export function advanceCombatTimers(state: MatchState, stepMs: number): void {
     if (player.respawnRemainingMs <= 0) {
       player.protectionRemainingMs = Math.max(0, player.protectionRemainingMs - elapsedMs);
     }
-    advanceAttack(player, elapsedMs);
+    advanceAttack(player, elapsedMs, activeSlices, activated);
     if (wasCommitted || player.attack || player.hitstunRemainingMs > 0 || player.dashRemainingMs > 0) {
       player.chargeMs = 0;
       player.charging = false;
@@ -114,6 +121,7 @@ export function advanceCombatTimers(state: MatchState, stepMs: number): void {
       player.charging = player.chargeMs >= GAME.heavyEnterChargeMs;
     }
   }
+  return { activeSlices, activated };
 }
 
 export function startActions(state: MatchState, timersElapsedMs = 0): void {
@@ -164,72 +172,4 @@ export function startActions(state: MatchState, timersElapsedMs = 0): void {
     player.previousQuick = player.latestInput.quick;
     player.previousHeavy = player.latestInput.heavy;
   }
-}
-
-function hitstunFor(impulse: number): number {
-  const progress = clamp(
-    (impulse - MIN_EFFECTIVE_IMPULSE) / (MAX_EFFECTIVE_IMPULSE - MIN_EFFECTIVE_IMPULSE),
-    0,
-    1
-  );
-  return 90 + progress * 140;
-}
-
-function inAttackArc(attacker: MutableMatchPlayer, target: MutableMatchPlayer, tuning: AttackTuning): boolean {
-  const delta = subtract(target.position, attacker.position);
-  const distanceSquared = dot(delta, delta);
-  if (distanceSquared > tuning.range * tuning.range || distanceSquared <= 1e-9) return false;
-  const direction = normalize(delta);
-  return dot(attacker.attack!.lockedFacing, direction) >= Math.cos((tuning.arcDeg * Math.PI) / 360);
-}
-
-export function resolveAttackHits(state: MatchState): readonly GameEvent[] {
-  const events: GameEvent[] = [];
-  const attackers = Object.values(state.players)
-    .filter((player) => activePlayer(player) && player.attack?.phase === 'ACTIVE')
-    .sort((left, right) =>
-      left.attack!.attackId - right.attack!.attackId || compareStableIds(left.playerId, right.playerId));
-
-  for (const attacker of attackers) {
-    const attack = attacker.attack!;
-    const tuning = tuningFor(attack);
-    const targets = Object.values(state.players)
-      .filter((target) =>
-        target.playerId !== attacker.playerId && activePlayer(target) &&
-        target.protectionRemainingMs <= 0 && target.dashInvulnerabilityRemainingMs <= 0 &&
-        !attack.hitPlayerIds.has(target.playerId) && inAttackArc(attacker, target, tuning))
-      .sort((left, right) => {
-        const leftDelta = subtract(left.position, attacker.position);
-        const rightDelta = subtract(right.position, attacker.position);
-        return dot(leftDelta, leftDelta) - dot(rightDelta, rightDelta) || compareStableIds(left.playerId, right.playerId);
-      });
-
-    for (const target of targets) {
-      const firstLandedTarget = attack.hitPlayerIds.size === 0;
-      attack.hitPlayerIds.add(target.playerId);
-      if (firstLandedTarget) attacker.stats.landedHits += 1;
-      target.overload = Math.min(GAME.maxOverload, target.overload + tuning.overloadGain);
-      const impulse = tuning.baseImpulse * (1 + (target.overload / GAME.maxOverload) * 0.9);
-      const direction = normalize(attack.lockedFacing, { x: 1, y: 0 });
-      target.velocity = {
-        x: target.velocity.x + direction.x * impulse,
-        y: target.velocity.y + direction.y * impulse
-      };
-      target.hitstunRemainingMs = Math.max(target.hitstunRemainingMs, hitstunFor(impulse));
-      target.lastAttackerId = attacker.playerId;
-      target.lastAttackerAtMs = state.nowMs;
-      events.push({
-        type: 'HIT',
-        eventId: state.nextEventId++,
-        tick: state.tick,
-        attackerId: attacker.playerId,
-        targetId: target.playerId,
-        attack: attack.kind,
-        impactPosition: { ...target.position },
-        impulse,
-        resultingOverload: target.overload
-      });
-    }
-  }
-  return events;
 }

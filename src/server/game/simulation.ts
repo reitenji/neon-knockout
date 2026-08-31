@@ -2,7 +2,8 @@ import { GAME } from '../../shared/constants.js';
 import { profileForAttack } from '../../shared/combat/profiles.js';
 import { normalizeAim, normalizeAxes } from '../../shared/kinematics.js';
 import type { GameEvent, InputFrame, MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
-import { advanceCombatTimers, resolveAttackHits, startActions } from './combat.js';
+import { advanceCombatTimers, startActions } from './combat.js';
+import { buildActiveAttackShapes, resolveMeleeInteractions } from './combatResolution.js';
 import { clamp, isKnockedOut } from './geometry.js';
 import { advancePlayers, chooseSafestSpawn, platformAt, separateActivePlayers } from './movement.js';
 import { createEmptyInput, type MatchState, type MutableMatchPlayer } from './state.js';
@@ -235,7 +236,7 @@ export function stepMatch(
   const events: GameEvent[] = [];
   state.tick += 1;
   acceptInputs(state, inputs);
-  advanceCombatTimers(state, stepMs);
+  const combatTimers = advanceCombatTimers(state, stepMs);
   advanceRespawns(state, stepMs, events);
   advanceMatchClocks(state, stepMs, events);
   updateContraction(state);
@@ -243,7 +244,7 @@ export function stepMatch(
   startActions(state, stepMs);
   advancePlayers(state, stepMs);
   separateActivePlayers(state);
-  events.push(...resolveAttackHits(state));
+  events.push(...resolveMeleeInteractions(state, buildActiveAttackShapes(state, combatTimers.activeSlices)));
   events.push(...resolveBoundaries(state));
   events.push(...evaluateResult(state));
   return events;
