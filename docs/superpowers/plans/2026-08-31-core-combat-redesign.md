@@ -18,7 +18,8 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 06:49Z) Task 0: repaired Vitest/Playwright suite separation; 39 Vitest files and 200 tests pass, with Playwright specs left to the Playwright runner (`df6fa6a`).
 - [x] (2026-08-31 06:59Z) Task 1: added immutable shared attack profiles and continuous swept-capsule geometry; 7 focused tests, typecheck, and targeted ESLint pass (`238fe4e`, `d61ed12`).
 - [x] (2026-08-31 07:34Z) Task 2: replaced pointer combat with keyboard-only input, physical release gating, and ownership-safe Phaser capture leases; 21 focused tests, typecheck, and targeted ESLint pass (`994cdb9`, `d68b2f5`, `9a4dbaa`, `e206f3e`).
-- [ ] Task 3: extend authoritative state, snapshots, and events.
+- [x] (2026-08-31 07:51Z) Prerequisite L: repaired the pre-existing Playwright worker-fixture lint boundary; full lint, typecheck, and Playwright test listing pass (`d190b7c`).
+- [x] (2026-08-31 07:51Z) Task 3: exposed required authoritative action/pulse state and event contracts with deterministic serialization; 37 final focused tests, full lint, and typecheck pass (`420df3a`).
 - [ ] Task 4: replace sector hits with sweeps, clashes, and perfect dodge.
 - [ ] Task 5: add Neon Pulse and align match pacing.
 - [ ] Task 6: make prediction and charge/release animation continuous.
@@ -43,6 +44,16 @@ The result is visible by running `npm run lan`, opening the printed local addres
   Evidence: Task 1 review rejected the initial tests; fix `d61ed12` now uses exactly one 60 Hz slice, proves both endpoints miss before the capsule crosses, and asserts independently calculated x/y coordinates for all eight facings. The scoped re-review passed with no new findings.
 - Observation: Phaser resets `Key.isDown` on blur, pause, and sleep, and keyboard captures are global rather than scene-owned.
   Evidence: Task 2 review reproduced ghost input after synthetic reset and cross-scene capture removal. Commits `9a4dbaa` and `e206f3e` add raw keyup release gating across browser and scene suspension plus manager-scoped capture leases that preserve pre-existing owners; the final review passed 21 focused tests with no findings.
+- Observation: Task 3's first ownership list omitted `src/server/game/combat.ts`, even though `beginAttack` is the only constructor of the newly non-optional `AttackRuntime` contract.
+  Evidence: after adding the required runtime fields in `state.ts`, typecheck necessarily fails at the existing object literal in `combat.ts`. Task 3 now owns only compile-safe initialization there; sweep timing and contact behavior remain in Task 4.
+- Observation: `perfectDodgeConsumed` also has one behavioral initialization boundary outside the first Task 3 list: the private `startDash` function in `movement.ts`.
+  Evidence: state creation can initialize the flag, but only `startDash` distinguishes a new legal dash from cooldown expiry. Task 3 now owns the single reset plus its focused movement regression; Task 4 still owns refund resolution.
+- Observation: the exact `AttackRuntime` rename also leaves one legacy `attack.facing` assertion in `combat.test.ts` even after production construction is migrated.
+  Evidence: fresh typecheck reports only that assertion; Task 3 updates it to required `lockedFacing` without changing combat expectations.
+- Observation: Task 3's mandatory repository-wide lint gate reaches two pre-existing errors in `tests/e2e/fixtures.ts` that no earlier focused gate exercised.
+  Evidence: the file is unchanged from commit `f234036`; ESLint rejects the Playwright-required empty fixture parameter and interprets its `use` callback as a React hook. Task 3's 26 required tests, 89 extended owned tests, typecheck, targeted lint, and isolated review are otherwise green.
+- Observation: renaming the Playwright provider callback and explicitly consuming its worker dependency object restores the full lint gate without rule suppression or behavior change.
+  Evidence: prerequisite commit `d190b7c` passed targeted and full ESLint, both TypeScript projects, a two-test Playwright listing, and an independent one-file review; Task 3 then passed 37 focused tests on the repaired HEAD.
 
 ## Decision Log
 
@@ -73,14 +84,17 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - Decision: execute Tasks 1 and 2 sequentially even though their code ownership is independent.
   Rationale: the selected subagent-driven-development workflow forbids simultaneous implementers so each task receives an isolated implementation and review range. This trades some wall-clock parallelism for unambiguous commits and mandatory per-task review.
   Date/Author: 2026-08-31, Codex.
+- Decision: repair the two unchanged Playwright lint errors as a separate prerequisite commit instead of mixing them into Task 3's authoritative-state diff.
+  Rationale: this preserves task ownership and review clarity while restoring the full repository lint gate required by every later milestone.
+  Date/Author: 2026-08-31, Codex after Task 3 gate evidence.
 
 ## Outcomes & Retrospective
 
-Tasks 0–2 are accepted. The test-runner boundary leaves Playwright specs to Playwright while 39 Vitest files / 200 tests pass. Shared profiles and swept-capsule geometry define the exact authored values and continuous eight-direction contact math. Keyboard-only input now separates WASD movement from arrow attacks, supports steerable heavy charge and safe release, removes pointer gameplay, prevents held/repeated ghost input across disconnect and every browser/Phaser suspension path, and releases only its own global captures. Task 2 finishes with 21 focused tests, typecheck, targeted ESLint, and clean final review; Task 3 now freezes the authoritative runtime/snapshot/event contract.
+Tasks 0–3 and Prerequisite L are accepted. The runner and lint boundaries are clean. Shared profiles define exact attack timing and swept geometry; keyboard-only input is safe across browser and Phaser lifecycle resets. The authoritative contract now requires deterministic action metadata, locked facing, normalized active progress, sorted hit targets, numerically sorted pulse snapshots, exact clash/dodge/pulse event variants, and new-dash dodge-reset state. Task 3 passed 37 focused tests, full lint, typecheck, and independent review with no findings. Task 4 can now replace sector hits with the shared sweep truth.
 
 ## Context and Orientation
 
-The repository root is `/Users/serkances/dev/game/.worktrees/neon-relay-implementation` on branch `feat/neon-relay-game`; run every command in this plan from that directory unless a step explicitly says otherwise. The public remote is expected to be `git@github.com:reitenji/neon-relay.git`. The approved behavior is documented in `docs/superpowers/specs/2026-08-31-core-combat-redesign-design.md`, but all implementation-critical values and rules are repeated in this plan so it remains self-contained.
+The repository root is `/Users/serkances/dev/game/.worktrees/neon-relay-implementation` on branch `feat/neon-relay-game`; run every command in this plan from that directory unless a step explicitly says otherwise. The public remote is `https://github.com/reitenji/neon-relay.git`. The approved behavior is documented in `docs/superpowers/specs/2026-08-31-core-combat-redesign-design.md`, but all implementation-critical values and rules are repeated in this plan so it remains self-contained.
 
 The browser UI is React, while the arena is a Phaser scene. `src/client/game/phaser/ArenaInput.ts` samples physical controls into `InputFrame`. `src/client/game/phaser/ArenaSession.ts` sends those frames and feeds `src/client/game/prediction.ts`, which predicts only the local player's immediate motion and pose. `src/client/game/phaser/ArenaScene.ts` reconciles snapshots and owns fighter, effect, audio, and future pulse views. `src/client/ui/MatchHud.tsx` presents match status and controls.
 
@@ -115,6 +129,8 @@ Task 0 first restores trustworthy test-runner separation. The first feature stag
 The second stage moves gameplay truth to the new model. Task 3 freezes the state and event interfaces, Task 4 replaces melee sector tests with shared swept shapes plus clash/perfect-dodge rules, and Task 5 adds projectiles and pacing while aligning the full server phase order. These tasks are sequential because every later one consumes the runtime types and deterministic ordering established by the former. `src/server/rooms/roomManager.ts` belongs to Task 5 until that commit is green; Task 8 may extend it only afterward for private test-harness access, so parallel workers cannot collide there.
 
 The third stage makes the new truth feel good. Task 6 fixes local prediction and animation continuity. After the shared snapshot interface is frozen it may overlap with the server-only portion of Task 5, but it must not invent projectile or hit outcomes. Task 7 then renders shared sweep paths, authoritative pulses, charge direction, event effects, audio, and HUD feedback. Task 8 proves the whole product through real inputs, load/performance checks, LAN health, review, and public GitHub state.
+
+Prerequisite L is inserted immediately after Task 3 implementation review because the new full-lint gate exposed two older Playwright fixture errors. It is behavior-neutral, independently committed and reviewed, and must pass before Task 3 is marked complete or Task 4 starts.
 
 ## Implementation dependency graph
 
@@ -318,6 +334,22 @@ Expected: keyboard attack tests fail because `ArenaInputSource` still requires p
 
 ---
 
+## Prerequisite L: Repair the Playwright worker-fixture lint boundary
+
+This prerequisite changes no gameplay or browser assertions. It makes the existing Playwright worker fixture express its unused dependency object and fixture callback without violating the repository's general ESLint and React Hooks rules.
+
+**Owner boundary:** `tests/e2e/fixtures.ts` only.
+
+1. Reproduce `npm run lint` failing at line 16 with `no-empty-pattern` and line 21 with `react-hooks/rules-of-hooks`.
+1. Give the worker fixture's first callback parameter a real identifier and explicitly discard it, and rename the Playwright fixture-provider callback away from React's `use` hook name. Do not change server lifecycle, scope, timeout, or provided `E2eGame` value.
+1. Run `npx eslint tests/e2e/fixtures.ts`, `npm run lint`, `npm run typecheck`, and `npx playwright test --list`.
+1. Commit only the fixture:
+
+    git add tests/e2e/fixtures.ts
+    git commit -m "fix: lint playwright fixtures"
+
+---
+
 ## Task 3: Extend authoritative combat state, snapshots, and events
 
 This task freezes the data contract required by later server and presentation work. At its end, snapshots deterministically expose attack metadata and pulses, events can represent every new outcome, all neutral fixtures are explicit, and typecheck/lint remain green even though the new mechanics are not resolved yet.
@@ -329,6 +361,10 @@ This task freezes the data contract required by later server and presentation wo
 - Modify: `src/shared/model.ts`
 - Modify: `src/server/game/state.ts`
 - Modify: `src/server/game/simulation.ts`
+- Modify: `src/server/game/combat.ts` for compile-safe initialization of required `AttackRuntime` fields only
+- Modify: `src/server/game/combat.test.ts` only to rename the legacy runtime-facing assertion
+- Modify: `src/server/game/movement.ts` only to reset `perfectDodgeConsumed` on a new legal dash
+- Modify: `src/server/game/movement.test.ts` only for that reset boundary
 - Modify: `src/client/game/prediction.ts` for compile-safe neutral metadata only
 - Modify: `src/shared/protocol.test.ts`
 - Modify fixture builders in:
@@ -462,13 +498,14 @@ Change the existing `HIT.attack` field from `AttackKind` to `HitSource`.
 Expected: type and assertion failures because snapshots do not contain pulse/action metadata and the event union lacks the new variants.
 
 1. Implement the model/runtime fields with required values rather than optional compatibility fields.
-1. Initialize all new runtime fields in `createMatchState`; reset `perfectDodgeConsumed` only when a new dash begins or the player is reset.
+1. Initialize the new non-optional `AttackRuntime` fields in `beginAttack` without replacing sector contact or advancing Task 4 behavior; use the shared profile ID, the existing accepted input aim as `lockedFacing`, zero elapsed/progress, and empty private sets.
+1. Initialize all new runtime fields in `createMatchState`; add a focused movement regression and reset `perfectDodgeConsumed` only inside a newly accepted `startDash`, not when cooldown merely reaches zero.
 1. Serialize `MatchAction` and `MatchPulse` in `snapshotMatch`; sort pulse IDs numerically and every exposed target ID lexicographically. A held pre-release charge serializes as `kind: null`, `phase: 'IDLE'`, `charging: true`, non-zero `chargeMs`, and null attack/profile/locked-facing fields. A committed heavy serializes as `kind: 'HEAVY'`, `charging: false`, preserved release `chargeMs`, and non-null attack/profile/locked-facing fields.
 1. Update test builders with explicit neutral defaults (`charging: false`, null IDs/profile/facing, `activeProgress: 0`, empty target IDs, and `pulses: []`). Do not add a legacy snapshot adapter.
 1. Run the focused tests, `npm run typecheck`, and `npm run lint`.
 1. Commit Task 3:
 
-    git add src/shared/model.ts src/server/game/state.ts src/server/game/simulation.ts src/client/game/prediction.ts src/shared/protocol.test.ts src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts src/client/game/phaser/ArenaScene.integration.test.ts src/client/game/phaser/AnimationDirector.test.ts src/client/game/phaser/ImpactFx.test.ts src/client/game/phaser/GameAudio.test.ts src/client/game/phaser/LocalActionAudioTracker.test.ts src/client/state/gameStore.test.ts src/client/ui/MatchHud.test.tsx src/client/App.test.tsx src/client/game/PhaserArena.test.tsx
+    git add src/shared/model.ts src/server/game/state.ts src/server/game/simulation.ts src/server/game/combat.ts src/server/game/combat.test.ts src/server/game/movement.ts src/server/game/movement.test.ts src/client/game/prediction.ts src/shared/protocol.test.ts src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts src/client/game/phaser/ArenaScene.integration.test.ts src/client/game/phaser/AnimationDirector.test.ts src/client/game/phaser/ImpactFx.test.ts src/client/game/phaser/GameAudio.test.ts src/client/game/phaser/LocalActionAudioTracker.test.ts src/client/state/gameStore.test.ts src/client/ui/MatchHud.test.tsx src/client/App.test.tsx src/client/game/PhaserArena.test.tsx
     git commit -m "feat: expose authoritative combat state"
 
 
