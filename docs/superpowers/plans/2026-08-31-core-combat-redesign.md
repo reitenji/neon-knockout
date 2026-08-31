@@ -21,7 +21,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 07:51Z) Prerequisite L: repaired the pre-existing Playwright worker-fixture lint boundary; full lint, typecheck, and Playwright test listing pass (`d190b7c`).
 - [x] (2026-08-31 07:51Z) Task 3: exposed required authoritative action/pulse state and event contracts with deterministic serialization; 37 final focused tests, full lint, and typecheck pass (`420df3a`).
 - [x] (2026-08-31 08:23Z) Task 4: replaced sector hits with shared swept capsules, deterministic clash priorities, and one-per-dash perfect dodge; 63 focused and 239 full tests pass (`4fdb113`, `746655d`, `355cb62`).
-- [ ] Task 5: add Neon Pulse and align match pacing.
+- [x] (2026-08-31 08:50Z) Task 5: added authoritative Neon Pulse, continuous final-segment collision, deterministic cleanup, and final match pacing; 68 focused and 257 full tests pass (`67a2c21`, `3587a91`).
 - [ ] Task 6: make prediction and charge/release animation continuous.
 - [ ] Task 7: render shared sweeps, pulses, charge direction, FX, audio, and HUD feedback.
 - [ ] Task 8: complete integration, E2E, load, performance, live LAN, review, merge, and public GitHub proof.
@@ -56,6 +56,10 @@ The result is visible by running `npm run lan`, opening the printed local addres
   Evidence: prerequisite commit `d190b7c` passed targeted and full ESLint, both TypeScript projects, a two-test Playwright listing, and an independent one-file review; Task 3 then passed 37 focused tests on the repaired HEAD.
 - Observation: an active slice can remain valid after a large timer step fully removes its runtime, but any retained shape must be rejected outside its exact state and tick.
   Evidence: Task 4 reviews reproduced both lost large-step contact and stale/cross-state fallback. Commits `746655d` and `355cb62` bind built shapes to their originating runtime through same-state/same-tick weak associations while keeping manual test shapes on an explicit live-runtime fallback; final re-review found no remaining issue.
+- Observation: changing authoritative KO control return from 700 ms to 600 ms also changes two consumers omitted from the first Task 5 list.
+  Evidence: full regression stays red only at the exported-constant assertion in `protocol.test.ts` and the knockout-plus-respawn animation plan that still totals 700 ms. Task 5 now owns only those pacing alignments; Task 6 retains attack-animation ownership.
+- Observation: deleting a Pulse as soon as its remaining lifetime reaches zero drops a valid collision on its final clamped movement segment.
+  Evidence: Task 5 review reproduced a 10 ms Pulse moving from x=600 to x=609 into a target without emitting a hit. Fix `3587a91` retains the zero-lifetime capsule through clash/contact resolution, then purges it; final-segment hit and unconsumed-expiry regressions pass and the scoped re-review is clean.
 
 ## Decision Log
 
@@ -92,7 +96,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 
 ## Outcomes & Retrospective
 
-Tasks 0–4 and Prerequisite L are accepted. Runner and lint boundaries are clean; keyboard-only input is lifecycle-safe; the authoritative state/event contract is deterministic. Melee now uses the shared swept weapon path instead of center sectors, resolves attack clashes before hurtboxes, applies exact heavy/quick priorities and recoil, preserves terminal active slices, rejects stale shapes, and grants one 550 ms perfect-dodge refund per dash. Task 4 finishes with 63 focused tests, 239 full tests, typecheck, lint, and clean final review. Task 5 now adds the short Neon Pulse and final 120-second match pacing.
+Tasks 0–5 and Prerequisite L are accepted. Runner and lint boundaries are clean; keyboard-only input is lifecycle-safe; the authoritative state/event contract is deterministic. Melee now uses the shared swept weapon path instead of center sectors, resolves attack clashes before hurtboxes, applies exact heavy/quick priorities and recoil, preserves terminal active slices, rejects stale shapes, and grants one 550 ms perfect-dodge refund per dash. Full-charge heavies now emit one short Neon Pulse with continuous final-segment collision and deterministic end-of-tick cleanup. Match pacing is 120 seconds or five knockouts, with 78/75/40-second contraction milestones, 600 ms control return, and next-KO sudden death after a regulation tie. Task 5 finishes with 68 focused tests, 257 full tests, typecheck, lint, and clean scoped re-review.
 
 ## Context and Orientation
 
@@ -617,6 +621,7 @@ This task completes server combat and match tempo. At its end, one fully charged
 **Files:**
 
 - Modify: `src/shared/constants.ts`
+- Modify: `src/shared/protocol.test.ts` only for the exported 600 ms pacing assertion
 - Create: `src/server/game/projectiles.ts`
 - Create: `src/server/game/projectiles.test.ts`
 - Modify: `src/server/game/combat.ts`
@@ -628,6 +633,9 @@ This task completes server combat and match tempo. At its end, one fully charged
 - Modify: `src/server/rooms/roomManager.test.ts`
 - Modify: `src/client/game/phaser/arenaVisualPlan.ts`
 - Modify: `src/client/game/phaser/arenaVisualPlan.test.ts`
+- Modify: `src/client/game/phaser/animationPlan.ts` only to fit knockout plus respawn presentation inside 600 ms
+- Modify: `src/client/game/phaser/animationPlan.test.ts` only for the 600 ms control-return contract
+- Modify: `src/client/game/phaser/AnimationDirector.test.ts` only to align the respawn-state threshold fixture and title with 600 ms
 
 Add final pacing/projectile constants and remove the superseded contraction lead/duration values:
 
@@ -697,11 +705,12 @@ const shapes = buildActiveAttackShapes(state, combatStep.activeSlices);
 
 This preserves the current countdown rule: the tick that changes `COUNTDOWN` to `REGULATION` emits the phase event but does not also move or attack. `advanceRespawns` must ignore player IDs present in this tick's new knockout events so new knockouts are not decremented immediately; existing respawn timers return control within exactly 600 ms.
 1. Update `arenaVisualPlan` to derive warning progress from 78 seconds remaining and contraction progress from the new 75-to-40-second window.
+1. Align the exported constant assertion and compress only the knockout/respawn presentation timing so their total is exactly the new 600 ms control-return contract; do not change attack animation plans in this task.
 1. On `FINISHED`, rematch/reset, room removal, and server reset, clear all pulse state. When an expired disconnected player is removed from a room, remove its owned pulses.
 1. Run focused tests, `npm run typecheck`, and `npm run lint`.
 1. Commit Task 5:
 
-    git add src/shared/constants.ts src/server/game/projectiles.ts src/server/game/projectiles.test.ts src/server/game/combat.ts src/server/game/combatResolution.ts src/server/game/combatResolution.test.ts src/server/game/simulation.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.ts src/server/rooms/roomManager.test.ts src/client/game/phaser/arenaVisualPlan.ts src/client/game/phaser/arenaVisualPlan.test.ts
+    git add src/shared/constants.ts src/shared/protocol.test.ts src/server/game/projectiles.ts src/server/game/projectiles.test.ts src/server/game/combat.ts src/server/game/combatResolution.ts src/server/game/combatResolution.test.ts src/server/game/simulation.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.ts src/server/rooms/roomManager.test.ts src/client/game/phaser/arenaVisualPlan.ts src/client/game/phaser/arenaVisualPlan.test.ts src/client/game/phaser/animationPlan.ts src/client/game/phaser/animationPlan.test.ts src/client/game/phaser/AnimationDirector.test.ts
     git commit -m "feat: add neon pulse combat"
 
 
