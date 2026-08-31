@@ -9,7 +9,7 @@ type HeldAttack = Readonly<{ up: boolean; down: boolean; left: boolean; right: b
 export interface ArenaInputSource {
   movement(): HeldMovement;
   attack(): HeldAttack;
-  reset(): void;
+  dispose(): void;
 }
 
 export type ArenaInputLifecycle = Readonly<{
@@ -19,6 +19,7 @@ export type ArenaInputLifecycle = Readonly<{
 }>;
 
 const INPUT_STEP_MS = 1_000 / GAME.maxInputFramesPerSecond;
+const CAPTURED_KEYS = ['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SHIFT', 'SPACE'];
 
 function resolveAttackDirection(held: HeldAttack): Vec2 | null {
   const direction = normalizeAxes(Number(held.right) - Number(held.left), Number(held.down) - Number(held.up));
@@ -34,6 +35,7 @@ export class ArenaInput {
   private previousDash = false;
   private suppressQuickUntilNeutral = false;
   private suppressHeldUntilRelease = false;
+  private disposed = false;
   private readonly removeLifecycle: Array<() => void> = [];
 
   constructor(private readonly source: ArenaInputSource, lifecycle?: ArenaInputLifecycle) {
@@ -68,6 +70,9 @@ export class ArenaInput {
       Number(movementHeld.down) - Number(movementHeld.up)
     );
     const attackDirection = resolveAttackDirection(attackHeld);
+    const physicalAttackDirectionHeld = attackHeld.up || attackHeld.down || attackHeld.left || attackHeld.right;
+    const releasedHeavy = this.previousShift && !attackHeld.shift && this.heavyLatched;
+    if (releasedHeavy) this.suppressQuickUntilNeutral = true;
     const quick = attackDirection !== null && !attackHeld.shift && !this.attackDirectionHeld && !this.suppressQuickUntilNeutral;
     if (attackHeld.shift && attackDirection !== null) this.heavyLatched = true;
     const heavy = attackHeld.shift && (this.heavyLatched || attackDirection !== null);
@@ -75,10 +80,9 @@ export class ArenaInput {
     const aim = attackDirection ?? this.lastAttackFacing;
 
     if (attackDirection) this.lastAttackFacing = attackDirection;
-    if (this.previousShift && !attackHeld.shift && this.heavyLatched) this.suppressQuickUntilNeutral = true;
-    if (attackDirection === null) this.suppressQuickUntilNeutral = false;
+    if (!physicalAttackDirectionHeld) this.suppressQuickUntilNeutral = false;
     if (!attackHeld.shift) this.heavyLatched = false;
-    this.attackDirectionHeld = attackDirection !== null;
+    this.attackDirectionHeld = physicalAttackDirectionHeld;
     this.previousShift = attackHeld.shift;
     this.previousDash = movementHeld.dash;
 
@@ -86,7 +90,6 @@ export class ArenaInput {
   }
 
   clearHeld(): void {
-    this.source.reset();
     this.attackDirectionHeld = false;
     this.heavyLatched = false;
     this.previousShift = false;
@@ -96,8 +99,11 @@ export class ArenaInput {
   }
 
   dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
     this.clearHeld();
     for (const remove of this.removeLifecycle.splice(0)) remove();
+    this.source.dispose();
   }
 
   private idleFrame(seq: number): InputFrame {
@@ -115,7 +121,7 @@ export function createPhaserInputSource(scene: PhaserSceneInput): ArenaInputSour
     up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT',
     shift: 'SHIFT', dash: 'SPACE'
   }) as Record<string, Phaser.Input.Keyboard.Key>;
-  keyboard.addCapture(['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SHIFT', 'SPACE']);
+  keyboard.addCapture(CAPTURED_KEYS);
   return {
     movement: () => ({
       up: Boolean(keys.w?.isDown), down: Boolean(keys.s?.isDown),
@@ -125,6 +131,6 @@ export function createPhaserInputSource(scene: PhaserSceneInput): ArenaInputSour
       up: Boolean(keys.up?.isDown), down: Boolean(keys.down?.isDown),
       left: Boolean(keys.left?.isDown), right: Boolean(keys.right?.isDown), shift: Boolean(keys.shift?.isDown)
     }),
-    reset: () => keyboard.resetKeys()
+    dispose: () => keyboard.removeCapture(CAPTURED_KEYS)
   };
 }

@@ -37,10 +37,7 @@ function controls(): ArenaInputSource & { movementHeld: Record<'up' | 'down' | '
   const attackHeld = { up: false, down: false, left: false, right: false, shift: false };
   return {
     movementHeld, attackHeld, movement: () => ({ ...movementHeld }), attack: () => ({ ...attackHeld }),
-    reset() {
-      for (const key of Object.keys(movementHeld) as Array<keyof typeof movementHeld>) movementHeld[key] = false;
-      for (const key of Object.keys(attackHeld) as Array<keyof typeof attackHeld>) attackHeld[key] = false;
-    }
+    dispose() {}
   };
 }
 
@@ -65,6 +62,7 @@ describe('ArenaSession', () => {
     now += 17;
     session.step(16);
     expect(bridge.sent.at(-1)?.heavy).toBe(false);
+    source.movementHeld.right = false;
     source.attackHeld.right = false;
     source.attackHeld.shift = false;
     now += 17;
