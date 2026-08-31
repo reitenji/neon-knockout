@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { InputFrame, RoomState } from '../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 
 const socketHarness = vi.hoisted(() => {
   type Handler = (...args: never[]) => void;
@@ -46,7 +47,8 @@ import { createSocketGameClient } from './GameClient.js';
 
 function roomState(): RoomState {
   return {
-    roomCode: 'AB2Z', phase: 'LOBBY', hostPlayerId: 'player-1', pauseRemainingMs: null, result: null, players: []
+    roomCode: 'AB2Z', phase: 'LOBBY', hostPlayerId: 'player-1', pauseRemainingMs: null,
+    result: null, settings: DEFAULT_ROOM_SETTINGS, players: []
   };
 }
 
@@ -77,6 +79,32 @@ describe('createSocketGameClient', () => {
       ok: false,
       error: { code: 'ACK_TIMEOUT', message: 'Sunucu yanıt vermedi.', recoverable: true }
     });
+  });
+
+  it('emits the complete room settings pair through one acknowledged event', async () => {
+    socketHarness.socket.emit.mockImplementation((_event, _payload, acknowledge?: (value: unknown) => void) => {
+      acknowledge?.({ ok: true, data: null });
+    });
+    const client = createSocketGameClient();
+
+    await client.setRoomSettings({ durationMs: 90_000, knockoutTarget: 3 });
+
+    expect(socketHarness.socket.emit.mock.calls).toEqual([
+      ['lobby:settings', { durationMs: 90_000, knockoutTarget: 3 }, expect.any(Function)]
+    ]);
+  });
+
+  it('emits one acknowledged empty leave-room request', async () => {
+    socketHarness.socket.emit.mockImplementation((_event, _payload, acknowledge?: (value: unknown) => void) => {
+      acknowledge?.({ ok: true, data: null });
+    });
+    const client = createSocketGameClient();
+
+    await client.leaveRoom();
+
+    expect(socketHarness.socket.emit.mock.calls).toEqual([
+      ['room:leave', {}, expect.any(Function)]
+    ]);
   });
 
   it('emits the revised chassis, ready, start, result-ready, and lobby contracts', async () => {

@@ -1,5 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
 import type { Ack, Chassis, GameEvent, InputFrame, MatchSnapshot, RoomState, ServerError, SessionWelcome } from '../../shared/model.js';
+import type { RoomSettings } from '../../shared/roomSettings.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
 
 export type GameClientConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
@@ -24,6 +25,8 @@ export interface GameClient {
   resumeSession(roomCode: string, resumeToken: string): Promise<Ack<SessionWelcome>>;
   setChassis(chassis: Chassis): Promise<Ack<null>>;
   setReady(ready: boolean): Promise<Ack<null>>;
+  setRoomSettings(settings: RoomSettings): Promise<Ack<null>>;
+  leaveRoom(): Promise<Ack<null>>;
   startMatch(): Promise<Ack<null>>;
   sendInput(input: InputFrame): void;
   setResultReady(ready: boolean): Promise<Ack<null>>;
@@ -141,6 +144,12 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     },
     setReady(ready: boolean): Promise<Ack<null>> {
       return withAckTimeout((acknowledge) => socket.emit('lobby:ready', { ready }, acknowledge));
+    },
+    setRoomSettings(settings: RoomSettings): Promise<Ack<null>> {
+      return withAckTimeout((acknowledge) => socket.emit('lobby:settings', settings, acknowledge));
+    },
+    leaveRoom(): Promise<Ack<null>> {
+      return withAckTimeout((acknowledge) => socket.emit('room:leave', {}, acknowledge));
     },
     startMatch(): Promise<Ack<null>> {
       return withAckTimeout((acknowledge) => socket.emit('match:start', {}, acknowledge));

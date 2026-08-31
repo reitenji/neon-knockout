@@ -1,12 +1,14 @@
 import type {
   Ack, Chassis, GameEvent, InputFrame, MatchSnapshot, RoomPlayer, RoomState, ServerError, SessionWelcome
 } from '../../shared/model.js';
+import type { RoomSettings } from '../../shared/roomSettings.js';
 import { normalizePlayerName, normalizeRoomCode } from '../../shared/names.js';
 import type { GameClient, GameClientConnectionState } from '../network/GameClient.js';
 
 export type GameScreen = 'LANDING' | 'LOBBY' | 'MATCH' | 'RESULT';
 export type PendingAction =
-  | 'create-room' | 'join-room' | 'resume' | 'chassis' | 'ready' | 'start' | 'result-ready' | 'return-lobby' | null;
+  | 'create-room' | 'join-room' | 'resume' | 'chassis' | 'ready' | 'settings' | 'leave-room'
+  | 'start' | 'result-ready' | 'return-lobby' | null;
 export type ErrorAction = Exclude<PendingAction, null> | 'server' | null;
 export type CopyFeedback = 'idle' | 'copied' | 'failed';
 
@@ -41,6 +43,8 @@ export interface GameStore {
     joinRoom(name: string, code: string): Promise<void>;
     setChassis(chassis: Chassis): Promise<void>;
     setReady(ready: boolean): Promise<void>;
+    setRoomSettings(settings: RoomSettings): Promise<void>;
+    leaveRoom(): Promise<void>;
     startMatch(): Promise<void>;
     setResultReady(ready: boolean): Promise<void>;
     returnToLobby(): Promise<void>;
@@ -114,6 +118,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
   let disposed = false;
   let resumeAttemptedForConnection = false;
   let resumeQueued = false;
+  let departedSessionEventsSuppressed = false;
   let acknowledgementsInFlight = 0;
   let toastId = 0;
   let pausePublishedAt = 0;
@@ -162,6 +167,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
     for (const listener of gameEventListeners) listener(event);
   };
   const persistWelcome = (welcome: SessionWelcome): void => {
+    departedSessionEventsSuppressed = false;
     const session = { playerId: welcome.playerId, roomCode: welcome.roomCode, resumeToken: welcome.resumeToken };
     if (sameSession(state.session, session)) return;
     storage.setItem(resumeKey(welcome.roomCode), welcome.resumeToken);
@@ -242,8 +248,11 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
         else void attemptResume();
       }
     }),
-    client.subscribe('session:welcome', persistWelcome),
+    client.subscribe('session:welcome', (welcome) => {
+      if (!departedSessionEventsSuppressed) persistWelcome(welcome);
+    }),
     client.subscribe('room:state', (room) => {
+      if (departedSessionEventsSuppressed) return;
       acceptReconnectDuration(room.pauseRemainingMs);
       const screen = screenForRoom(room);
       patch((current) => ({
@@ -252,17 +261,20 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       }));
     }),
     client.subscribe('match:started', (match) => {
+      if (departedSessionEventsSuppressed) return;
       publishMatch(match);
       patch((current) => ({
         ...current, match, screen: 'MATCH', lastError: null, errorAction: null
       }));
     }),
     client.subscribe('match:snapshot', (match) => {
+      if (departedSessionEventsSuppressed) return;
       const shouldNotify = coarseMatchChanged(state.match, match);
       publishMatch(match);
       patch((current) => ({ ...current, match }), shouldNotify);
     }),
     client.subscribe('match:event', (event) => {
+      if (departedSessionEventsSuppressed) return;
       publishGameEvent(event);
       if (event.type === 'RESULT' && event.reason === 'NO_CONTEST') {
         patch((current) => ({
@@ -327,6 +339,34 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
     },
     setChassis(chassis): Promise<void> { return runAcknowledgedAction('chassis', () => client.setChassis(chassis)); },
     setReady(ready): Promise<void> { return runAcknowledgedAction('ready', () => client.setReady(ready)); },
+    setRoomSettings(settings): Promise<void> { return runAcknowledgedAction('settings', () => client.setRoomSettings(settings)); },
+    async leaveRoom(): Promise<void> {
+      const roomCode = state.session?.roomCode ?? state.room?.roomCode;
+      if (!roomCode) return;
+      if (!beginAcknowledgement('leave-room')) return;
+      try {
+        const acknowledgement = await client.leaveRoom();
+        if (disposed) return;
+        if (!acknowledgement.ok) { setFailure('leave-room', acknowledgement.error); return; }
+        forgetRoom(roomCode);
+        clearReconnectTimer();
+        departedSessionEventsSuppressed = true;
+        resumeAttemptedForConnection = true;
+        resumeQueued = false;
+        replace({
+          ...state,
+          screen: 'LANDING',
+          room: null,
+          match: null,
+          session: null,
+          pendingAction: null,
+          lastError: null,
+          errorAction: null,
+          reconnectRemainingMs: null
+        });
+      } catch { if (!disposed) setUnexpectedFailure('leave-room'); }
+      finally { finishAcknowledgement('leave-room'); }
+    },
     startMatch(): Promise<void> { return runAcknowledgedAction('start', () => client.startMatch()); },
     setResultReady(ready): Promise<void> { return runAcknowledgedAction('result-ready', () => client.setResultReady(ready)); },
     returnToLobby(): Promise<void> { return runAcknowledgedAction('return-lobby', () => client.returnToLobby()); },

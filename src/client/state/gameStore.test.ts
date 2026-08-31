@@ -3,6 +3,7 @@ import type {
   Ack, Chassis, GameEvent, InputFrame, MatchSnapshot, RoomPlayer, RoomState, ServerError, SessionWelcome
 } from '../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
+import type { RoomSettings } from '../../shared/roomSettings.js';
 import type { GameClient, GameClientConnectionState, GameClientEvents } from '../network/GameClient.js';
 import { createArenaBridge, createGameStore } from './gameStore.js';
 
@@ -28,10 +29,12 @@ class FakeGameClient implements GameClient {
   readonly resumeSession = vi.fn<(roomCode: string, resumeToken: string) => Promise<Ack<SessionWelcome>>>();
   readonly setChassis = vi.fn<(chassis: Chassis) => Promise<Ack<null>>>(async () => ({ ok: true, data: null }));
   readonly setReady = vi.fn<(ready: boolean) => Promise<Ack<null>>>(async () => ({ ok: true, data: null }));
+  readonly setRoomSettings = vi.fn<(settings: RoomSettings) => Promise<Ack<null>>>(async () => ({ ok: true, data: null }));
   readonly startMatch = vi.fn<() => Promise<Ack<null>>>(async () => ({ ok: true, data: null }));
   readonly sendInput = vi.fn<(input: InputFrame) => void>(() => undefined);
   readonly setResultReady = vi.fn<(ready: boolean) => Promise<Ack<null>>>(async () => ({ ok: true, data: null }));
   readonly returnToLobby = vi.fn<() => Promise<Ack<null>>>(async () => ({ ok: true, data: null }));
+  readonly leaveRoom = vi.fn<() => Promise<Ack<null>>>(async () => ({ ok: true, data: null }));
   getConnectionState(): GameClientConnectionState { return this.connectionState; }
   subscribe<E extends keyof GameClientEvents>(event: E, listener: GameClientEvents[E]): () => void {
     this.listeners[event].add(listener);
@@ -120,6 +123,138 @@ describe('createGameStore', () => {
     settleChassis({ ok: true, data: null });
     await pendingChassis;
     expect(store.getSnapshot().pendingAction).toBeNull();
+  });
+
+  it('keeps settings pending and canonical until acknowledgement and authoritative room publication arrive independently', async () => {
+    const { client, store } = createFixture();
+    client.emit('session:welcome', successWelcome());
+    const canonical = roomState();
+    client.emit('room:state', canonical);
+    let settleSettings!: (acknowledgement: Ack<null>) => void;
+    client.setRoomSettings.mockImplementation(() => new Promise((resolve) => { settleSettings = resolve; }));
+
+    const pendingSettings = store.actions.setRoomSettings({ durationMs: 90_000, knockoutTarget: 3 });
+
+    expect(client.setRoomSettings).toHaveBeenCalledWith({ durationMs: 90_000, knockoutTarget: 3 });
+    expect(store.getSnapshot()).toMatchObject({ pendingAction: 'settings', room: canonical });
+    settleSettings({ ok: true, data: null });
+    await pendingSettings;
+    expect(store.getSnapshot()).toMatchObject({ pendingAction: null, room: canonical });
+
+    const authoritative = roomState({ settings: { durationMs: 90_000, knockoutTarget: 3 } });
+    client.emit('room:state', authoritative);
+    expect(store.getSnapshot().room).toBe(authoritative);
+  });
+
+  it('preserves authoritative settings and exposes the settings action when the server rejects the update', async () => {
+    const { client, store } = createFixture();
+    client.emit('session:welcome', successWelcome());
+    const canonical = roomState();
+    client.emit('room:state', canonical);
+    client.setRoomSettings.mockResolvedValue({
+      ok: false,
+      error: { code: 'NOT_HOST', message: 'Bu işlemi yalnızca oda sahibi yapabilir.', recoverable: true }
+    });
+
+    await store.actions.setRoomSettings({ durationMs: 180_000, knockoutTarget: 10 });
+
+    expect(store.getSnapshot()).toMatchObject({
+      pendingAction: null,
+      room: canonical,
+      errorAction: 'settings',
+      lastError: { code: 'NOT_HOST' }
+    });
+  });
+
+  it('clears only room lifecycle state after acknowledged leave while preserving transport and sound', async () => {
+    const client = new FakeGameClient();
+    client.connectionState = 'connected';
+    const storage = new MemoryStorage();
+    storage.setItem('neon-relay:muted', 'true');
+    const { store } = createFixture(client, storage);
+    const welcome = successWelcome();
+    const room = roomState({ phase: 'MATCH', pauseRemainingMs: 9_000 });
+    const match = matchSnapshot();
+    client.emit('session:welcome', welcome);
+    client.emit('room:state', room);
+    client.emit('match:started', match);
+    client.emit('server:error', { code: 'SERVER_BUSY', message: 'Birazdan tekrar deneyin.', recoverable: true });
+    const session = store.getSnapshot().session;
+    let settleLeave!: (acknowledgement: Ack<null>) => void;
+    client.leaveRoom.mockImplementation(() => new Promise((resolve) => { settleLeave = resolve; }));
+
+    const pendingLeave = store.actions.leaveRoom();
+
+    expect(store.getSnapshot()).toMatchObject({
+      screen: 'MATCH', connectionState: 'connected', room, match,
+      pendingAction: 'leave-room', soundMuted: true, reconnectRemainingMs: 9_000
+    });
+    expect(store.getSnapshot().session).toBe(session);
+    expect(storage.getItem('neon-relay:last-room')).toBe('AB2Z');
+    expect(storage.getItem('neon-relay:AB2Z:resume')).toBe('a'.repeat(64));
+    client.connectionState = 'reconnecting';
+    client.emit('connection', 'reconnecting');
+    client.connectionState = 'connected';
+    client.emit('connection', 'connected');
+    settleLeave({ ok: true, data: null });
+    await pendingLeave;
+
+    expect(store.getSnapshot()).toMatchObject({
+      screen: 'LANDING', connectionState: 'connected', room: null, match: null, session: null,
+      pendingAction: null, lastError: null, errorAction: null, soundMuted: true, reconnectRemainingMs: null
+    });
+    expect(storage.getItem('neon-relay:last-room')).toBeNull();
+    expect(storage.getItem('neon-relay:AB2Z:resume')).toBeNull();
+    expect(client.resumeSession).not.toHaveBeenCalled();
+  });
+
+  it('ignores delayed publications from the departed session after acknowledged leave', async () => {
+    const client = new FakeGameClient();
+    client.connectionState = 'connected';
+    const { storage, store } = createFixture(client);
+    const welcome = successWelcome();
+    client.emit('session:welcome', welcome);
+    client.emit('room:state', roomState({ phase: 'MATCH' }));
+    client.emit('match:started', matchSnapshot());
+
+    await store.actions.leaveRoom();
+    client.emit('session:welcome', welcome);
+    client.emit('room:state', roomState({ phase: 'MATCH' }));
+    client.emit('match:snapshot', matchSnapshot({ tick: 13 }));
+    client.emit('match:event', phaseEvent({ tick: 13 }));
+    client.emit('connection', 'reconnecting');
+    client.emit('connection', 'connected');
+    await Promise.resolve();
+
+    expect(store.getSnapshot()).toMatchObject({ screen: 'LANDING', room: null, match: null, session: null });
+    expect(storage.getItem('neon-relay:last-room')).toBeNull();
+    expect(storage.getItem('neon-relay:AB2Z:resume')).toBeNull();
+    expect(client.resumeSession).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['server rejection', { code: 'INVALID_PHASE', message: 'Bu işlem şu anda kullanılamaz.', recoverable: true }],
+    ['acknowledgement timeout', { code: 'ACK_TIMEOUT', message: 'Sunucu yanıt vermedi.', recoverable: true }]
+  ] as const)('preserves the complete room session after a leave %s', async (_label, error) => {
+    const { client, storage, store } = createFixture();
+    const welcome = successWelcome();
+    const room = roomState({ phase: 'MATCH', pauseRemainingMs: 7_000 });
+    const match = matchSnapshot();
+    client.emit('session:welcome', welcome);
+    client.emit('room:state', room);
+    client.emit('match:started', match);
+    const session = store.getSnapshot().session;
+    client.leaveRoom.mockResolvedValue({ ok: false, error });
+
+    await store.actions.leaveRoom();
+
+    expect(store.getSnapshot()).toMatchObject({
+      screen: 'MATCH', room, match, pendingAction: null,
+      errorAction: 'leave-room', lastError: error, reconnectRemainingMs: 7_000
+    });
+    expect(store.getSnapshot().session).toBe(session);
+    expect(storage.getItem('neon-relay:last-room')).toBe('AB2Z');
+    expect(storage.getItem('neon-relay:AB2Z:resume')).toBe('a'.repeat(64));
   });
 
   it('queues exactly one resume when the transport reconnects during a pending acknowledgement', async () => {
