@@ -69,6 +69,50 @@ function shape(
 }
 
 describe('shared-shape melee resolution', () => {
+  it('rejects an associated capsule on the next tick even while the same attack remains live', () => {
+    const state = createState();
+    state.players.p1.position = { x: 600, y: 360 };
+    state.players.p2.position = { x: 800, y: 360 };
+    const runtime = attack(state, 'p1', 1, 'QUICK_1');
+    const [staleShape] = buildActiveAttackShapes(state, [{
+      playerId: 'p1', attack: runtime, previousProgress: 0, currentProgress: 1, enteredActive: true
+    }]);
+
+    state.tick += 1;
+    state.players.p2.position = { x: 642, y: 360 };
+
+    expect(state.players.p1.attack).toBe(runtime);
+    expect(resolveMeleeInteractions(state, [staleShape])).toEqual([]);
+    expect(state.players.p2.overload).toBe(0);
+  });
+
+  it('rejects an associated capsule from another match with coincident attack identity', () => {
+    const origin = createState();
+    origin.players.p1.position = { x: 600, y: 360 };
+    const originAttack = attack(origin, 'p1', 1, 'QUICK_1');
+    const [foreignShape] = buildActiveAttackShapes(origin, [{
+      playerId: 'p1', attack: originAttack, previousProgress: 0, currentProgress: 1, enteredActive: true
+    }]);
+
+    const other = createState();
+    other.players.p1.position = { x: 600, y: 360 };
+    other.players.p2.position = { x: 642, y: 360 };
+    attack(other, 'p1', 1, 'QUICK_1');
+
+    expect(resolveMeleeInteractions(other, [foreignShape])).toEqual([]);
+    expect(other.players.p2.overload).toBe(0);
+  });
+
+  it('resolves a manual unassociated shape against its matching live runtime', () => {
+    const state = createState();
+    const runtime = attack(state, 'p1', 1, 'QUICK_1');
+    const manualShape = shape('p1', runtime, { x: 620, y: 340 }, { x: 660, y: 380 });
+
+    expect(resolveMeleeInteractions(state, [manualShape])).toEqual([
+      expect.objectContaining({ type: 'HIT', attackerId: 'p1', targetId: 'p2' })
+    ]);
+  });
+
   it('resolves a full active slice after a large step expires its runtime without leaking it', () => {
     const state = createState();
     state.players.p1.position = { x: 600, y: 360 };

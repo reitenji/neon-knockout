@@ -71,8 +71,11 @@ function runtimeForShape(
   const player = state.players[shape.playerId];
   if (!player || !activePlayer(player)) return null;
   const association = shapeRuntimeAssociations.get(shape);
-  if (association?.state === state && association.tick === state.tick &&
-    association.attack.attackId === shape.attackId && association.attack.kind === shape.kind) {
+  if (association) {
+    if (association.state !== state || association.tick !== state.tick ||
+      association.attack.attackId !== shape.attackId || association.attack.kind !== shape.kind) {
+      return null;
+    }
     return { player, attack: association.attack };
   }
   if (player.attack?.attackId !== shape.attackId || player.attack.kind !== shape.kind) return null;
