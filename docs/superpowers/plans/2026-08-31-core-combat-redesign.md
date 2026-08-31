@@ -1,8 +1,8 @@
 # Core Combat Redesign Implementation Plan
 
-This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be updated whenever work stops, a new fact changes the implementation, or a milestone finishes. A future contributor must be able to resume from this file and the working tree alone.
+This ExecPlan is a living document. The sections `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` must be updated whenever work stops, a new fact changes the implementation, or a task finishes. A future contributor must be able to resume from this file and the working tree alone.
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan milestone-by-milestone. Update `Progress` after every stopping point and commit each green milestone separately.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Update `Progress` after every stopping point and commit each green task separately.
 
 ## Purpose / Big Picture
 
@@ -15,14 +15,15 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 06:10Z) Investigated the live game and traced pointer input, center-sector hits, charge-release snapping, old KO timing, and late contraction to their source files.
 - [x] (2026-08-31 06:18Z) Recorded and received user approval for `docs/superpowers/specs/2026-08-31-core-combat-redesign-design.md`.
 - [x] (2026-08-31 06:28Z) Mapped client, server, presentation, and acceptance surfaces and wrote this self-contained ExecPlan.
-- [ ] Milestone 1: add shared attack profiles and continuous geometry.
-- [ ] Milestone 2: replace pointer combat with keyboard-only input.
-- [ ] Milestone 3: extend authoritative state, snapshots, and events.
-- [ ] Milestone 4: replace sector hits with sweeps, clashes, and perfect dodge.
-- [ ] Milestone 5: add Neon Pulse and align match pacing.
-- [ ] Milestone 6: make prediction and charge/release animation continuous.
-- [ ] Milestone 7: render shared sweeps, pulses, charge direction, FX, audio, and HUD feedback.
-- [ ] Milestone 8: complete integration, E2E, load, performance, live LAN, review, merge, and public GitHub proof.
+- [ ] Task 0: repair Vitest/Playwright suite separation so the baseline is trustworthy.
+- [ ] Task 1: add shared attack profiles and continuous geometry.
+- [ ] Task 2: replace pointer combat with keyboard-only input.
+- [ ] Task 3: extend authoritative state, snapshots, and events.
+- [ ] Task 4: replace sector hits with sweeps, clashes, and perfect dodge.
+- [ ] Task 5: add Neon Pulse and align match pacing.
+- [ ] Task 6: make prediction and charge/release animation continuous.
+- [ ] Task 7: render shared sweeps, pulses, charge direction, FX, audio, and HUD feedback.
+- [ ] Task 8: complete integration, E2E, load, performance, live LAN, review, merge, and public GitHub proof.
 
 ## Surprises & Discoveries
 
@@ -33,7 +34,9 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - Observation: the LAN/session foundation is already useful and should be preserved.
   Evidence: the existing eight-client WebSocket test has passed with at least 250 snapshots per client over ten seconds, and the production server has answered both localhost and private-LAN `/health` probes.
 - Observation: the first draft of this plan placed pulse spawn before movement and omitted the countdown no-gameplay gate.
-  Evidence: review against the approved nine-step phase order and `src/server/game/simulation.test.ts` showed that pulse origin/movement and countdown behavior would regress; Milestone 5 now preserves the gate and spawns/advances pulses after movement and separation.
+  Evidence: review against the approved nine-step phase order and `src/server/game/simulation.test.ts` showed that pulse origin/movement and countdown behavior would regress; Task 5 now preserves the gate and spawns/advances pulses after movement and separation.
+- Observation: the first full baseline test run found that Vitest imports Playwright's two `.spec.ts` files and fails before executing them as Playwright tests.
+  Evidence: `npm test -- --maxWorkers=1` produced `2 failed | 39 passed` files and `200 passed` Vitest tests; both failures were “Playwright Test did not expect test() to be called here.” `npx vitest list --maxWorkers=1 --exclude 'tests/e2e/**'` exited zero, proving the missing runner exclusion is the boundary defect.
 
 ## Decision Log
 
@@ -58,10 +61,16 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - Decision: warn at 78 seconds remaining, contract from 75 to 40 seconds remaining, and return control 600 ms after a normal knockout.
   Rationale: the user rejected a 90-second match as too short but wanted more frequent conflict and little downtime.
   Date/Author: 2026-08-31, user and Codex.
+- Decision: add a preflight Task 0 that excludes `tests/e2e/**` from Vitest while preserving Vitest's default exclusions.
+  Rationale: Playwright files were added after the original Vitest configuration; without this repair, `npm test` and the plan's final `npm run verify` can never be valid green gates.
+  Date/Author: 2026-08-31, Codex after reproducible baseline evidence.
+- Decision: execute Tasks 1 and 2 sequentially even though their code ownership is independent.
+  Rationale: the selected subagent-driven-development workflow forbids simultaneous implementers so each task receives an isolated implementation and review range. This trades some wall-clock parallelism for unambiguous commits and mandatory per-task review.
+  Date/Author: 2026-08-31, Codex.
 
 ## Outcomes & Retrospective
 
-Implementation has not started. The approved design and this execution plan are complete; the next concrete action is Milestone 1 and Milestone 2 in parallel. At every finished milestone, record the accepted behavior, exact test result, commit SHA, remaining gap, and any lesson that changes a later milestone here.
+Implementation has not started. The approved design and this execution plan are complete; the next concrete action is Task 0, followed by Tasks 1 and 2 sequentially. At every finished task, record the accepted behavior, exact test result, commit SHA, remaining gap, and any lesson that changes a later task here.
 
 ## Context and Orientation
 
@@ -95,21 +104,58 @@ The test stack is Vitest for pure/unit/integration/load tests and Playwright for
 
 ## Plan of Work
 
-The first implementation stage establishes two independent foundations. Milestone 1 creates the shared profile and geometry library without changing live combat, while Milestone 2 changes only the physical input adapter and keeps the existing wire frame. These milestones may be assigned to separate workers because their file ownership does not overlap. Each must finish with focused tests and typecheck green before its commit is accepted.
+Task 0 first restores trustworthy test-runner separation. The first feature stage then establishes two independent foundations: Task 1 creates the shared profile and geometry library without changing live combat, while Task 2 changes only the physical input adapter and keeps the existing wire frame. Their file ownership does not overlap, but the selected subagent-driven workflow runs them sequentially so each diff receives an isolated review. Each must finish with focused tests and typecheck green before its commit is accepted.
 
-The second stage moves gameplay truth to the new model. Milestone 3 freezes the state and event interfaces, Milestone 4 replaces melee sector tests with shared swept shapes plus clash/perfect-dodge rules, and Milestone 5 adds projectiles and pacing while aligning the full server phase order. These milestones are sequential because every later one consumes the runtime types and deterministic ordering established by the former. `src/server/rooms/roomManager.ts` belongs to Milestone 5 until that commit is green; Milestone 8 may extend it only afterward for private test-harness access, so parallel workers cannot collide there.
+The second stage moves gameplay truth to the new model. Task 3 freezes the state and event interfaces, Task 4 replaces melee sector tests with shared swept shapes plus clash/perfect-dodge rules, and Task 5 adds projectiles and pacing while aligning the full server phase order. These tasks are sequential because every later one consumes the runtime types and deterministic ordering established by the former. `src/server/rooms/roomManager.ts` belongs to Task 5 until that commit is green; Task 8 may extend it only afterward for private test-harness access, so parallel workers cannot collide there.
 
-The third stage makes the new truth feel good. Milestone 6 fixes local prediction and animation continuity. After the shared snapshot interface is frozen it may overlap with the server-only portion of Milestone 5, but it must not invent projectile or hit outcomes. Milestone 7 then renders shared sweep paths, authoritative pulses, charge direction, event effects, audio, and HUD feedback. Milestone 8 proves the whole product through real inputs, load/performance checks, LAN health, review, and public GitHub state.
+The third stage makes the new truth feel good. Task 6 fixes local prediction and animation continuity. After the shared snapshot interface is frozen it may overlap with the server-only portion of Task 5, but it must not invent projectile or hit outcomes. Task 7 then renders shared sweep paths, authoritative pulses, charge direction, event effects, audio, and HUD feedback. Task 8 proves the whole product through real inputs, load/performance checks, LAN health, review, and public GitHub state.
 
 ## Implementation dependency graph
 
-Milestones 1 and 2 are independent and may run in parallel with separate file ownership. Milestone 3 waits for Milestone 1. Milestone 4 waits for Milestones 1 and 3. Milestone 5 waits for Milestone 4. Milestone 6 waits for Milestones 1–3 and may run alongside the server-only portion of Milestone 5 after the shared snapshot contract is frozen. Milestone 7 waits for Milestones 5 and 6. Milestone 8 waits for all production milestones.
+Task 0 precedes all feature work. Tasks 1 and 2 have separate ownership but run sequentially under the selected workflow. Task 3 waits for Task 1. Task 4 waits for Tasks 1 and 3. Task 5 waits for Task 4. Task 6 waits for Tasks 1–3 and begins after Task 5 in this workflow. Task 7 waits for Tasks 5 and 6. Task 8 waits for all production tasks.
 
 ---
 
-## Milestone 1: Add shared attack profiles and continuous combat geometry
+## Task 0: Repair Vitest and Playwright suite separation
 
-This milestone creates the mathematical source of truth without changing live combat yet. At its end, pure tests demonstrate exact attack timings/reach, continuous 60 Hz collision, epsilon near misses, and eight-direction rotational symmetry, and the rest of the repository still typechecks.
+This preflight task repairs the automated proof boundary without changing gameplay. Vitest's default include pattern accepts `.spec.ts`, so the Playwright files added under `tests/e2e/` are imported by the wrong runner and throw before their real browser environment exists. At the end, Vitest lists and runs only Vitest-owned files, Playwright retains sole ownership of `tests/e2e/`, and the 200-test baseline is green.
+
+**Owner boundary:** `vitest.config.ts` only. Do not rename browser tests or weaken their Playwright coverage.
+
+1. Reproduce the red baseline:
+
+    npx vitest list --maxWorkers=1
+
+Expected: non-zero exit with “Playwright Test did not expect test() to be called here” from both `tests/e2e/knockout.spec.ts` and `tests/e2e/performance.spec.ts`.
+
+1. Confirm the single hypothesis without editing source:
+
+    npx vitest list --maxWorkers=1 --exclude 'tests/e2e/**'
+
+Expected: zero exit and no path under `tests/e2e/` in the listing.
+
+1. In `vitest.config.ts`, import `configDefaults` beside `defineConfig` from `vitest/config`, then set `test.exclude` to `[...configDefaults.exclude, 'tests/e2e/**']`. Preserving `configDefaults.exclude` keeps `node_modules` and `.git` excluded instead of accidentally replacing Vitest's safe defaults.
+
+1. Verify the repair:
+
+    npx vitest list --maxWorkers=1 > /tmp/neon-relay-vitest-list.txt
+    test -z "$(rg 'tests/e2e/' /tmp/neon-relay-vitest-list.txt || true)"
+    npm test -- --maxWorkers=1
+    npm run typecheck
+    npx eslint vitest.config.ts
+
+Expected: the path check exits zero, Vitest reports 39 passing test files and 200 passing tests with zero failures, both TypeScript projects pass, and ESLint prints no error.
+
+1. Commit only the runner boundary:
+
+    git add vitest.config.ts
+    git commit -m "fix: separate vitest and playwright suites"
+
+---
+
+## Task 1: Add shared attack profiles and continuous combat geometry
+
+This task creates the mathematical source of truth without changing live combat yet. At its end, pure tests demonstrate exact attack timings/reach, continuous 60 Hz collision, epsilon near misses, and eight-direction rotational symmetry, and the rest of the repository still typechecks.
 
 **Owner boundary:** only shared combat profile/geometry files and their tests.
 
@@ -185,7 +231,7 @@ Expected: failure because `profiles.ts` and `geometry.ts` do not exist.
 1. Add explicit degenerate-segment handling so a zero-length sweep behaves as a circle instead of producing `NaN`.
 1. Re-run the focused tests and expect all profile/geometry tests to pass.
 1. Run `npm run typecheck` and expect both TypeScript projects to pass.
-1. Commit only the Milestone 1 files:
+1. Commit only the Task 1 files:
 
     git add src/shared/combat/profiles.ts src/shared/combat/profiles.test.ts src/shared/combat/geometry.ts src/shared/combat/geometry.test.ts
     git commit -m "feat: add shared combat geometry"
@@ -193,9 +239,9 @@ Expected: failure because `profiles.ts` and `geometry.ts` do not exist.
 
 ---
 
-## Milestone 2: Replace pointer combat with keyboard-only input sampling
+## Task 2: Replace pointer combat with keyboard-only input sampling
 
-This milestone makes the browser emit the approved keyboard semantics through the unchanged input wire contract. At its end, focused tests prove every edge/latch/release rule, pointer APIs are absent from gameplay sampling, and an accepted frame still passes the strict protocol schema.
+This task makes the browser emit the approved keyboard semantics through the unchanged input wire contract. At its end, focused tests prove every edge/latch/release rule, pointer APIs are absent from gameplay sampling, and an accepted frame still passes the strict protocol schema.
 
 **Owner boundary:** input sampling and its unit tests only. Do not change shared model or server combat here.
 
@@ -258,7 +304,7 @@ Expected: keyboard attack tests fail because `ArenaInputSource` still requires p
 1. Ensure a heavy latch suppresses quick until all arrow keys return to neutral; releasing `Shift` while an arrow is still held must not create a quick attack.
 1. Keep the outgoing `InputFrame` normalized and monotonic. Update `ArenaSession` only as needed if the unused player-position argument is removed.
 1. Re-run the focused tests and then `npm run typecheck`.
-1. Commit only Milestone 2 files:
+1. Commit only Task 2 files:
 
     git add src/client/game/phaser/ArenaInput.ts src/client/game/phaser/ArenaInput.test.ts src/client/game/phaser/ArenaSession.ts src/client/game/phaser/ArenaSession.test.ts src/shared/protocol.test.ts
     git commit -m "feat: add keyboard-only combat input"
@@ -266,9 +312,9 @@ Expected: keyboard attack tests fail because `ArenaInputSource` still requires p
 
 ---
 
-## Milestone 3: Extend authoritative combat state, snapshots, and events
+## Task 3: Extend authoritative combat state, snapshots, and events
 
-This milestone freezes the data contract required by later server and presentation work. At its end, snapshots deterministically expose attack metadata and pulses, events can represent every new outcome, all neutral fixtures are explicit, and typecheck/lint remain green even though the new mechanics are not resolved yet.
+This task freezes the data contract required by later server and presentation work. At its end, snapshots deterministically expose attack metadata and pulses, events can represent every new outcome, all neutral fixtures are explicit, and typecheck/lint remain green even though the new mechanics are not resolved yet.
 
 **Owner boundary:** shared wire types, server runtime state, serialization, and compile fixture updates. No new contact behavior yet.
 
@@ -414,7 +460,7 @@ Expected: type and assertion failures because snapshots do not contain pulse/act
 1. Serialize `MatchAction` and `MatchPulse` in `snapshotMatch`; sort pulse IDs numerically and every exposed target ID lexicographically. A held pre-release charge serializes as `kind: null`, `phase: 'IDLE'`, `charging: true`, non-zero `chargeMs`, and null attack/profile/locked-facing fields. A committed heavy serializes as `kind: 'HEAVY'`, `charging: false`, preserved release `chargeMs`, and non-null attack/profile/locked-facing fields.
 1. Update test builders with explicit neutral defaults (`charging: false`, null IDs/profile/facing, `activeProgress: 0`, empty target IDs, and `pulses: []`). Do not add a legacy snapshot adapter.
 1. Run the focused tests, `npm run typecheck`, and `npm run lint`.
-1. Commit Milestone 3:
+1. Commit Task 3:
 
     git add src/shared/model.ts src/server/game/state.ts src/server/game/simulation.ts src/client/game/prediction.ts src/shared/protocol.test.ts src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts src/client/game/phaser/ArenaScene.integration.test.ts src/client/game/phaser/AnimationDirector.test.ts src/client/game/phaser/ImpactFx.test.ts src/client/game/phaser/GameAudio.test.ts src/client/game/phaser/LocalActionAudioTracker.test.ts src/client/state/gameStore.test.ts src/client/ui/MatchHud.test.tsx src/client/App.test.tsx src/client/game/PhaserArena.test.tsx
     git commit -m "feat: expose authoritative combat state"
@@ -422,11 +468,11 @@ Expected: type and assertion failures because snapshots do not contain pulse/act
 
 ---
 
-## Milestone 4: Replace sector hits with shared sweeps, clashes, and perfect dodge
+## Task 4: Replace sector hits with shared sweeps, clashes, and perfect dodge
 
-This milestone makes melee contact trustworthy and contestable. At its end, the server no longer uses center-origin range/angle tests; focused combat tests prove visible sweeps, near misses, multi-target deduplication, all clash priorities, charge interruption, and the once-per-dash refund.
+This task makes melee contact trustworthy and contestable. At its end, the server no longer uses center-origin range/angle tests; focused combat tests prove visible sweeps, near misses, multi-target deduplication, all clash priorities, charge interruption, and the once-per-dash refund.
 
-**Owner boundary:** server attack lifecycle, melee interaction resolution, dash refund, and tests. Neon Pulse is Milestone 5.
+**Owner boundary:** server attack lifecycle, melee interaction resolution, dash refund, and tests. Neon Pulse is Task 5.
 
 **Files:**
 
@@ -509,7 +555,7 @@ Expected: clash/dodge tests fail because the simulation still calls the center-s
 1. Remove `AttackTuning.range`, `AttackTuning.arcDeg`, `inAttackArc`, and the obsolete `range`/`arcDeg` combat path once every caller uses shared profiles.
 1. Keep existing late-recovery quick buffering; resolve the buffered step's facing only when the buffered attack commits.
 1. Run focused tests, `npm run typecheck`, and `npm run lint`.
-1. Commit Milestone 4:
+1. Commit Task 4:
 
     git add src/shared/constants.ts src/server/game/combat.ts src/server/game/combatResolution.ts src/server/game/combatResolution.test.ts src/server/game/combat.test.ts src/server/game/movement.ts src/server/game/movement.test.ts src/server/game/simulation.ts src/server/game/simulation.test.ts
     git commit -m "feat: resolve shared-shape combat"
@@ -517,9 +563,9 @@ Expected: clash/dodge tests fail because the simulation still calls the center-s
 
 ---
 
-## Milestone 5: Add authoritative Neon Pulse and align simulation pacing
+## Task 5: Add authoritative Neon Pulse and align simulation pacing
 
-This milestone completes server combat and match tempo. At its end, one fully charged heavy creates one continuously tested pulse, projectile and melee interactions follow the approved order, stale pulses cannot survive their owner/match, KO control returns in 600 ms, and the arena follows the 78/75/40-second schedule without breaking countdown behavior.
+This task completes server combat and match tempo. At its end, one fully charged heavy creates one continuously tested pulse, projectile and melee interactions follow the approved order, stale pulses cannot survive their owner/match, KO control returns in 600 ms, and the arena follows the 78/75/40-second schedule without breaking countdown behavior.
 
 **Owner boundary:** projectile lifecycle, projectile interactions, authoritative phase order, KO/contraction timing, cleanup, and server tests.
 
@@ -608,7 +654,7 @@ This preserves the current countdown rule: the tick that changes `COUNTDOWN` to 
 1. Update `arenaVisualPlan` to derive warning progress from 78 seconds remaining and contraction progress from the new 75-to-40-second window.
 1. On `FINISHED`, rematch/reset, room removal, and server reset, clear all pulse state. When an expired disconnected player is removed from a room, remove its owned pulses.
 1. Run focused tests, `npm run typecheck`, and `npm run lint`.
-1. Commit Milestone 5:
+1. Commit Task 5:
 
     git add src/shared/constants.ts src/server/game/projectiles.ts src/server/game/projectiles.test.ts src/server/game/combat.ts src/server/game/combatResolution.ts src/server/game/combatResolution.test.ts src/server/game/simulation.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.ts src/server/rooms/roomManager.test.ts src/client/game/phaser/arenaVisualPlan.ts src/client/game/phaser/arenaVisualPlan.test.ts
     git commit -m "feat: add neon pulse combat"
@@ -616,9 +662,9 @@ This preserves the current countdown rule: the tick that changes `COUNTDOWN` to 
 
 ---
 
-## Milestone 6: Make prediction and charge/release animation continuous
+## Task 6: Make prediction and charge/release animation continuous
 
-This milestone removes the visible charge snap while keeping the server authoritative. At its end, local steering feels immediate, release facing locks, 180/350/699 ms pose-continuity tests pass, and repeated reconciliation snapshots cannot restart one attack or replay one local cue.
+This task removes the visible charge snap while keeping the server authoritative. At its end, local steering feels immediate, release facing locks, 180/350/699 ms pose-continuity tests pass, and repeated reconciliation snapshots cannot restart one attack or replay one local cue.
 
 **Owner boundary:** client prediction and animation state/pose generation only. Do not render projectile entities or new FX here.
 
@@ -671,7 +717,7 @@ Expected: partial-charge release tests fail because the existing release plan al
 1. Implement charge sampling and release transition without pausing or modifying server time.
 1. Key local action audio deduplication by authoritative attack ID where present and by one monotonic local prediction sequence before acknowledgement.
 1. Run focused tests, `npm run typecheck`, and `npm run lint`.
-1. Commit Milestone 6:
+1. Commit Task 6:
 
     git add src/client/game/prediction.ts src/client/game/prediction.test.ts src/client/game/phaser/animationPlan.ts src/client/game/phaser/animationPlan.test.ts src/client/game/phaser/AnimationDirector.ts src/client/game/phaser/AnimationDirector.test.ts src/client/game/phaser/LocalActionAudioTracker.ts src/client/game/phaser/LocalActionAudioTracker.test.ts
     git commit -m "fix: make charged attacks continuous"
@@ -679,9 +725,9 @@ Expected: partial-charge release tests fail because the existing release plan al
 
 ---
 
-## Milestone 7: Render shared sweeps, charge direction, pulses, and distinct feedback
+## Task 7: Render shared sweeps, charge direction, pulses, and distinct feedback
 
-This milestone makes every approved outcome readable. At its end, Phaser draws the authoritative sweep and pulse positions, charging fighters communicate direction/readiness, clash/dodge/pulse events have distinct deduplicated FX and audio, the HUD contains no mouse instructions, and reduced motion preserves clarity without changing gameplay timing.
+This task makes every approved outcome readable. At its end, Phaser draws the authoritative sweep and pulse positions, charging fighters communicate direction/readiness, clash/dodge/pulse events have distinct deduplicated FX and audio, the HUD contains no mouse instructions, and reduced motion preserves clarity without changing gameplay timing.
 
 **Owner boundary:** Phaser views, FX/audio, HUD copy/state, generated audio assets, styles, and their tests.
 
@@ -748,7 +794,7 @@ Expected: pulse view/module and new adapter methods/cues do not exist, the trail
 1. Update HUD copy to `WASD`, arrows, `Shift + arrows`, and `Space`; show numeric charge and `PULSE READY` without covering arena play.
 1. Extend `scripts/generate-audio.mjs`, run `npm run assets:audio`, and verify all four new WAV files are non-empty.
 1. Run focused tests, `npm run typecheck`, `npm run lint`, and `npm run build`.
-1. Commit Milestone 7:
+1. Commit Task 7:
 
     git add src/client/game/phaser/FighterView.ts src/client/game/phaser/PulseView.ts src/client/game/phaser/PulseView.test.ts src/client/game/phaser/ArenaScene.ts src/client/game/phaser/ArenaScene.integration.test.ts src/client/game/phaser/ImpactFx.ts src/client/game/phaser/ImpactFx.test.ts src/client/game/phaser/PhaserImpactAdapter.ts src/client/game/phaser/PhaserImpactAdapter.test.ts src/client/game/phaser/GameAudio.ts src/client/game/phaser/GameAudio.test.ts src/client/game/phaser/PhaserAudioAdapter.ts src/client/game/phaser/PhaserAudioAdapter.test.ts src/client/ui/MatchHud.tsx src/client/ui/MatchHud.test.tsx src/client/styles/game.css scripts/generate-audio.mjs public/assets/audio/clash.wav public/assets/audio/perfect-dodge.wav public/assets/audio/pulse-spawn.wav public/assets/audio/pulse-break.wav
     git commit -m "feat: present redesigned combat"
@@ -756,9 +802,9 @@ Expected: pulse view/module and new adapter methods/cues do not exist, the trail
 
 ---
 
-## Milestone 8: Prove real LAN gameplay, load, performance, reconnect, and release state
+## Task 8: Prove real LAN gameplay, load, performance, reconnect, and release state
 
-This milestone converts implementation into delivery evidence. At its end, real keyboard input passes the two-context journey, eight clients and eight browsers meet stability/frame gates, both health addresses work, review findings are resolved, documentation matches behavior, and the same accepted SHA is visible in the public repository.
+This task converts implementation into delivery evidence. At its end, real keyboard input passes the two-context journey, eight clients and eight browsers meet stability/frame gates, both health addresses work, review findings are resolved, documentation matches behavior, and the same accepted SHA is visible in the public repository.
 
 **Owner boundary:** integration/E2E/load tests, private harness support, README, live browser acceptance, and delivery evidence. Do not change core mechanics unless a failing acceptance test reveals a scoped defect.
 
@@ -872,7 +918,7 @@ Run every command from `/Users/serkances/dev/game/.worktrees/neon-relay-implemen
     npm --version
     test -d node_modules || npm ci
 
-The first line must print the implementation worktree path, Node must be version 20 or newer, and `npm ci` must finish without changing `package-lock.json`. Follow Milestones 1 through 8 in dependency order, using the focused red/green commands and exact commits embedded in each milestone. Milestones 1 and 2 may run in parallel; every other dependency must be respected.
+The first line must print the implementation worktree path, Node must be version 20 or newer, and `npm ci` must finish without changing `package-lock.json`. Follow Tasks 0 through 8 in dependency order, using the focused red/green commands and exact commits embedded in each task. The selected subagent-driven workflow runs one implementer at a time and requires an independent review before the next task.
 
 After the final implementation commit, run the complete proof on that unchanged SHA:
 
@@ -895,7 +941,7 @@ The command should produce no finding introduced by this redesign. Prepare the e
 
 Assign a read-only reviewer that same repository and commit range together with this exact request: “Review `0d4d180...HEAD` against `docs/superpowers/specs/2026-08-31-core-combat-redesign-design.md` and this ExecPlan. Report only actionable correctness, determinism, security, performance, or test-realism findings, with file and line evidence. Focus on attack/pulse target deduplication, projectile cleanup, blur/release input gating, reconciliation replay, countdown/respawn phase order, and test-only API leakage.” A human reviewer can use the second command's output as the review artifact; an agent reviewer should inspect the same range directly so generated audio binaries do not obscure source review. Record every finding and disposition in `Surprises & Discoveries` or `Decision Log`; fix validated findings, rerun their focused tests, and repeat the complete proof above.
 
-For the live proof, ensure only this project owns port 4173, start `npm run lan`, retain its terminal output, and perform the dual health probes and two-browser journey described in Milestone 8. Stop that server with Ctrl-C after evidence is captured. Update `Progress`, `Outcomes & Retrospective`, and `.superpowers/sdd/2026-08-28-neon-knockout/task-9-report.md` with the final SHA and concise outputs.
+For the live proof, ensure only this project owns port 4173, start `npm run lan`, retain its terminal output, and perform the dual health probes and two-browser journey described in Task 8. Stop that server with Ctrl-C after evidence is captured. Update `Progress`, `Outcomes & Retrospective`, and `.superpowers/sdd/2026-08-28-neon-knockout/task-9-report.md` with the final SHA and concise outputs.
 
 Publish only after all review and acceptance evidence points to the same commit:
 
@@ -929,7 +975,7 @@ Reconnect must preserve identity, chassis, accent, score, statistics, and author
 
 Unit, integration, load, build, health, and browser commands are safe to repeat. `npm run assets:audio` is deterministic and may be rerun; inspect `git diff` afterward and commit only the four new cues plus intentional generator changes. Starting `npm run lan` is reversible with Ctrl-C. Before starting or stopping a server, use `lsof -nP -iTCP:4173 -sTCP:LISTEN` to identify the owning process and stop only the process launched from this project.
 
-Each milestone ends in a green commit, so a failed later milestone can be repaired without touching accepted earlier work. Do not use `git reset --hard`, `git checkout --`, force-push, or broad recursive deletion. If a generated Playwright path must be cleaned, first confirm it is exactly this worktree's `.playwright-cli/` or `output/` directory and that it contains no user-authored artifact; otherwise leave it untracked. If a published change must be reversed, use a normal `git revert` commit and rerun the full gate.
+Each task ends in a green commit, so a failed later task can be repaired without touching accepted earlier work. Do not use `git reset --hard`, `git checkout --`, force-push, or broad recursive deletion. If a generated Playwright path must be cleaned, first confirm it is exactly this worktree's `.playwright-cli/` or `output/` directory and that it contains no user-authored artifact; otherwise leave it untracked. If a published change must be reversed, use a normal `git revert` commit and rerun the full gate.
 
 The private test harness exists only when `enableTestHarness: true`. If an E2E helper is observable through an HTTP route, Socket.IO event, or production `GameServer` instance with the flag disabled, treat that as a release blocker and remove the exposure rather than documenting an exception.
 
@@ -943,12 +989,14 @@ Useful success excerpts should resemble:
     2 passed
     HTTP/1.1 200 OK
 
-Do not copy long logs into this plan. Record only the few lines that prove a milestone, and put unexpected behavior plus its evidence in `Surprises & Discoveries`.
+Do not copy long logs into this plan. Record only the few lines that prove a task, and put unexpected behavior plus its evidence in `Surprises & Discoveries`.
 
 ## Interfaces and Dependencies
 
 No new runtime package is needed. Use the project's existing TypeScript, Socket.IO, Phaser, React, Zod, Vitest, and Playwright versions. Shared combat code under `src/shared/combat/` must import only pure shared types/constants and must not import Phaser, DOM, Socket.IO, or server state. The server consumes shared profiles and geometry; Phaser consumes the same profile/geometry output for trails. This dependency direction prevents the browser from defining separate hit truth.
 
-The final stable interfaces are the `AttackProfile`, `HurtCircle`, and `SweptCapsule` functions in Milestone 1; keyboard `ArenaInputSource` in Milestone 2; `MatchAction`, `MatchPulse`, `GameEvent`, `AttackRuntime`, and `PulseRuntime` in Milestone 3; melee resolution in Milestone 4; projectile lifecycle in Milestone 5; charge pose sampling in Milestone 6; and `AttackTelegraph`, `ChargeIndicatorState`, and `PulseView` in Milestone 7. Their exact signatures and values are embedded above. `InputFrame` and the `match:input` Socket.IO event remain unchanged.
+The final stable interfaces are the `AttackProfile`, `HurtCircle`, and `SweptCapsule` functions in Task 1; keyboard `ArenaInputSource` in Task 2; `MatchAction`, `MatchPulse`, `GameEvent`, `AttackRuntime`, and `PulseRuntime` in Task 3; melee resolution in Task 4; projectile lifecycle in Task 5; charge pose sampling in Task 6; and `AttackTelegraph`, `ChargeIndicatorState`, and `PulseView` in Task 7. Their exact signatures and values are embedded above. `InputFrame` and the `match:input` Socket.IO event remain unchanged.
 
 Plan revision note (2026-08-31 06:28Z): rewrote the initial task list as a self-contained living ExecPlan after review found missing lifecycle sections, an incorrect pulse/countdown phase order, a stale hardcoded LAN address, and implicit review/release steps. The revision preserves the approved design while making progress tracking, recovery, proof, and publication executable by a stateless contributor.
+
+Plan revision note (2026-08-31 06:40Z): added Task 0 after the first clean-worktree baseline exposed that Vitest was collecting Playwright `.spec.ts` files. Also changed the independent Task 1/2 execution note from parallel implementers to sequential reviewed dispatches to match the selected subagent-driven workflow.
