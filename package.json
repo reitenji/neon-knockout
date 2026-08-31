@@ -16,8 +16,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint .",
     "test": "vitest run",
-    "test:e2e": "npm run build && playwright test",
-    "verify": "npm run lint && npm run typecheck && npm test && npm run build"
+    "test:load": "vitest run tests/load/eightClients.test.ts --maxWorkers=1",
+    "test:e2e": "npm run build && playwright test --workers=1",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run test:load && npm run build"
   },
   "dependencies": {
     "express": "^5.2.1",
