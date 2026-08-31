@@ -81,7 +81,7 @@ describe('AnimationDirector', () => {
     expect(target.states).toEqual(['idle', 'quick-1']);
   });
 
-  it('returns from knockout to an authored respawn and then control within 700ms', () => {
+  it('returns from knockout to an authored respawn and then control within 600ms', () => {
     const director = new AnimationDirector(false);
     const target = new RecordingTarget();
 
@@ -91,7 +91,7 @@ describe('AnimationDirector', () => {
     }), target, 0)).toBe('knockout');
     expect(director.apply(player({
       action: action({ kind: 'RESPAWNING' }),
-      respawnRemainingMs: 439
+      respawnRemainingMs: 339
     }), target, 261)).toBe('respawn');
     expect(director.apply(player(), target, GAME.knockoutToControlMs)).toBe('idle');
   });

@@ -90,6 +90,13 @@ function advanceCountdown(subject: ReturnType<typeof fixture>): void {
   for (let index = 0; index < 60; index += 1) subject.manager.advance(50);
 }
 
+function spawnFullChargePulse(subject: ReturnType<typeof fixture>): void {
+  subject.manager.applyInput('c-1', { ...idleInput(0), heavy: true });
+  for (let index = 0; index < 15; index += 1) subject.manager.advance(50);
+  subject.manager.applyInput('c-1', idleInput(1));
+  for (let index = 0; index < 4; index += 1) subject.manager.advance(50);
+}
+
 const idleInput = (seq: number): InputFrame => ({
   seq,
   moveX: 0,
@@ -342,6 +349,36 @@ describe('RoomManager FFA lifecycle', () => {
     expect(subject.roomState(first.roomCode).hostPlayerId).toBe(second.playerId);
     subject.manager.resume('c-3', first.roomCode, first.resumeToken);
     expect(subject.roomState(first.roomCode).hostPlayerId).toBe(second.playerId);
+  });
+
+  it('removes pulses owned by a disconnected player when its reservation expires', () => {
+    const subject = fixture();
+    const { roomCode } = readyAndStart(subject, 3);
+    advanceCountdown(subject);
+    spawnFullChargePulse(subject);
+    expect(subject.snapshot(roomCode).pulses).toEqual([
+      expect.objectContaining({ projectileId: 1, ownerPlayerId: subject.roomState(roomCode).players[0].playerId })
+    ]);
+
+    subject.manager.disconnect('c-1');
+    expect(subject.snapshot(roomCode).pulses).toHaveLength(1);
+    subject.clock.advance(GAME.reconnectGraceMs);
+    subject.manager.advance(50);
+
+    expect(subject.snapshot(roomCode).pulses).toEqual([]);
+  });
+
+  it('drops pulse-bearing rooms on server reset without leaving resumable state', () => {
+    const subject = fixture();
+    const { roomCode } = readyAndStart(subject);
+    advanceCountdown(subject);
+    spawnFullChargePulse(subject);
+    expect(subject.snapshot(roomCode).pulses).toHaveLength(1);
+
+    subject.manager.reset();
+
+    expect(subject.manager.debugRoom(roomCode)).toBeNull();
+    expectErrorCode(() => subject.manager.resume('resume', roomCode, '00'.repeat(32)), 'ROOM_NOT_FOUND');
   });
 
   it('publishes five forced knockouts, records a player result, and resets only match state for a rematch', () => {

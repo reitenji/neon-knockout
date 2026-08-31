@@ -128,11 +128,11 @@ const REGULAR_PLANS: Readonly<Record<FighterAnimationName, FighterAnimationPlan>
     frame(90, { bodyX: 7, bodyY: 6, bodyRotation: 0.75, bodyScale: 0.84, leftArmAngle: -1.1, rightArmAngle: 1.05, coreScale: 0.72, coreAlpha: 0.5, trailIntensity: 1 }),
     frame(260, { bodyX: 12, bodyY: 12, bodyRotation: 1.7, bodyScale: 0.32, leftArmAngle: -1.35, rightArmAngle: 1.3, coreScale: 0.2, coreAlpha: 0, trailIntensity: 0.18, artAlpha: 0 })
   ]),
-  respawn: plan('respawn', 440, false, 0, [
+  respawn: plan('respawn', 340, false, 0, [
     frame(0, { bodyY: 9, bodyScale: 0.18, leftArmAngle: -0.9, rightArmAngle: 0.9, coreScale: 2, coreAlpha: 0, artAlpha: 0 }),
-    frame(90, { bodyY: 5, bodyScale: 0.55, leftArmAngle: -0.5, rightArmAngle: 0.5, coreScale: 1.7, coreAlpha: 1, artAlpha: 0.55 }),
-    frame(240, { bodyY: -2, bodyScale: 1.12, leftArmAngle: -0.14, rightArmAngle: 0.14, coreScale: 1.35, coreAlpha: 1, artAlpha: 1 }),
-    frame(440)
+    frame(70, { bodyY: 5, bodyScale: 0.55, leftArmAngle: -0.5, rightArmAngle: 0.5, coreScale: 1.7, coreAlpha: 1, artAlpha: 0.55 }),
+    frame(185, { bodyY: -2, bodyScale: 1.12, leftArmAngle: -0.14, rightArmAngle: 0.14, coreScale: 1.35, coreAlpha: 1, artAlpha: 1 }),
+    frame(340)
   ]),
   reconnect: plan('reconnect', 180, false, 0, [
     frame(0, { bodyX: -8, bodyScale: 0.82, leftArmAngle: -0.42, rightArmAngle: 0.42, coreScale: 1.8, coreAlpha: 0, artAlpha: 0 }),

@@ -3,9 +3,15 @@ import { profileForAttack } from '../../shared/combat/profiles.js';
 import { normalizeAim, normalizeAxes } from '../../shared/kinematics.js';
 import type { GameEvent, InputFrame, MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import { advanceCombatTimers, startActions } from './combat.js';
-import { buildActiveAttackShapes, resolveMeleeInteractions } from './combatResolution.js';
+import {
+  buildActiveAttackShapes,
+  resolveClashesAndPulseBreaks,
+  resolveSurvivingContacts,
+  type ActiveAttackSlice
+} from './combatResolution.js';
 import { clamp, isKnockedOut } from './geometry.js';
 import { advancePlayers, chooseSafestSpawn, platformAt, separateActivePlayers } from './movement.js';
+import { advancePulses, clearPulses, spawnNeonPulse } from './projectiles.js';
 import { createEmptyInput, type MatchState, type MutableMatchPlayer } from './state.js';
 
 const compareStableIds = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
@@ -80,11 +86,19 @@ function respawnPlayer(state: MatchState, player: MutableMatchPlayer, events: Ga
   events.push({ type: 'RESPAWN', ...eventMetadata(state), playerId: player.playerId, position: { ...player.position } });
 }
 
-function advanceRespawns(state: MatchState, stepMs: number, events: GameEvent[]): void {
+function advanceRespawns(
+  state: MatchState,
+  stepMs: number,
+  events: GameEvent[],
+  knockoutEvents: readonly GameEvent[]
+): void {
   const elapsedMs = Math.max(0, stepMs);
+  const newlyKnockedOut = new Set(knockoutEvents
+    .filter((event): event is Extract<GameEvent, { type: 'KNOCKOUT' }> => event.type === 'KNOCKOUT')
+    .map((event) => event.targetId));
   for (const playerId of Object.keys(state.players).sort(compareStableIds)) {
     const player = state.players[playerId];
-    if (!player.connected || player.respawnRemainingMs <= 0) continue;
+    if (!player.connected || player.respawnRemainingMs <= 0 || newlyKnockedOut.has(playerId)) continue;
     player.respawnRemainingMs = Math.max(0, player.respawnRemainingMs - elapsedMs);
     if (player.respawnRemainingMs === 0) respawnPlayer(state, player, events);
   }
@@ -95,9 +109,9 @@ function updateContraction(state: MatchState): void {
     state.contraction = 1;
     return;
   }
-  const contractionStartRemaining = GAME.contractionWarningLeadMs - GAME.contractionWarningMs;
   state.contraction = clamp(
-    (contractionStartRemaining - state.remainingMs) / GAME.contractionDurationMs,
+    (GAME.contractionStartRemainingMs - state.remainingMs) /
+      (GAME.contractionStartRemainingMs - GAME.contractionMinimumRemainingMs),
     0,
     1
   );
@@ -169,10 +183,6 @@ function resolveBoundaries(state: MatchState): readonly GameEvent[] {
       if (knockoutEvents.length === 0) continue;
       events.push(...knockoutEvents);
       knockedOutPlayerIds.add(playerId);
-      if (knockoutEvents.some((event) => event.type === 'KNOCKOUT' && event.scoreAwardedTo !== null)) {
-        events.push(...evaluateScoringResult(state));
-        if (state.phase === 'FINISHED') break;
-      }
     }
   }
   return events;
@@ -182,7 +192,22 @@ function finishMatch(state: MatchState, winnerPlayerId: string | null, reason: '
   state.phase = 'FINISHED';
   state.winnerPlayerId = winnerPlayerId;
   state.resultReason = reason;
+  clearPulses(state);
   return { type: 'RESULT', ...eventMetadata(state), winnerPlayerId, reason, scores: { ...state.scores } };
+}
+
+function spawnActivatedPulses(
+  state: MatchState,
+  activated: readonly ActiveAttackSlice[],
+  events: GameEvent[]
+): void {
+  for (const slice of [...activated].sort((left, right) =>
+    left.attack.attackId - right.attack.attackId || compareStableIds(left.playerId, right.playerId))) {
+    const owner = state.players[slice.playerId];
+    if (!owner || !owner.connected || owner.respawnRemainingMs > 0) continue;
+    const spawned = spawnNeonPulse(state, owner, slice.attack);
+    if (spawned) events.push(spawned.event);
+  }
 }
 
 function uniqueLeader(state: MatchState): string | null {
@@ -236,16 +261,21 @@ export function stepMatch(
   const events: GameEvent[] = [];
   state.tick += 1;
   acceptInputs(state, inputs);
-  const combatTimers = advanceCombatTimers(state, stepMs);
-  advanceRespawns(state, stepMs, events);
+  const combatStep = advanceCombatTimers(state, stepMs);
   advanceMatchClocks(state, stepMs, events);
   updateContraction(state);
   if (!activeAtStart) return events;
   startActions(state, stepMs);
   advancePlayers(state, stepMs);
   separateActivePlayers(state);
-  events.push(...resolveMeleeInteractions(state, buildActiveAttackShapes(state, combatTimers.activeSlices)));
-  events.push(...resolveBoundaries(state));
+  spawnActivatedPulses(state, combatStep.activated, events);
+  advancePulses(state, stepMs);
+  const shapes = buildActiveAttackShapes(state, combatStep.activeSlices);
+  events.push(...resolveClashesAndPulseBreaks(state, shapes));
+  events.push(...resolveSurvivingContacts(state, shapes));
+  const knockoutEvents = resolveBoundaries(state);
+  events.push(...knockoutEvents);
+  advanceRespawns(state, stepMs, events, knockoutEvents);
   events.push(...evaluateResult(state));
   return events;
 }

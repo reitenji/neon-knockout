@@ -288,7 +288,7 @@ describe('shared input boundary protocol', () => {
     expect(GAME).toMatchObject({
       tickRate: 60, snapshotRate: 30, regulationMs: 120_000, targetScore: 5, minPlayers: 2,
       maxInputFramesPerSecond: 60, inputRateLimitPerSecond: 90,
-      knockoutToControlMs: 700, respawnProtectionMs: 650
+      knockoutToControlMs: 600, respawnProtectionMs: 650
     });
     expect(ACCENTS).toHaveLength(8);
     expect(ARENA.regulationVertices).toHaveLength(8);

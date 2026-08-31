@@ -9,6 +9,7 @@ import { GAME } from '../../shared/constants.js';
 import type { AttackKind, GameEvent } from '../../shared/model.js';
 import { clamp, normalize, subtract } from './geometry.js';
 import type { AttackRuntime, MatchState, MutableMatchPlayer } from './state.js';
+import { removePulse } from './projectiles.js';
 
 export type ActiveAttackShape = Readonly<{
   playerId: string;
@@ -29,6 +30,7 @@ const shapeRuntimeAssociations = new WeakMap<
   ActiveAttackShape,
   Readonly<{ state: MatchState; tick: number; attack: AttackRuntime }>
 >();
+const canceledAttacks = new WeakSet<AttackRuntime>();
 
 export function buildActiveAttackShapes(
   state: MatchState,
@@ -154,14 +156,23 @@ function hitstunFor(impulse: number): number {
   return 90 + progress * 140;
 }
 
-export function resolveMeleeInteractions(
+function orderedAttackShapes(shapes: readonly ActiveAttackShape[]): ActiveAttackShape[] {
+  return [...shapes].sort((left, right) =>
+    left.attackId - right.attackId || compareStableIds(left.playerId, right.playerId));
+}
+
+function pulseCapsule(state: MatchState, projectileId: number): SweptCapsule | null {
+  const pulse = state.pulses[projectileId];
+  return pulse ? { from: pulse.previousPosition, to: pulse.position, radius: pulse.radius } : null;
+}
+
+export function resolveClashesAndPulseBreaks(
   state: MatchState,
   shapes: readonly ActiveAttackShape[]
 ): readonly GameEvent[] {
   const events: GameEvent[] = [];
   const canceledAttackIds = new Set<number>();
-  const orderedShapes = [...shapes].sort((left, right) =>
-    left.attackId - right.attackId || compareStableIds(left.playerId, right.playerId));
+  const orderedShapes = orderedAttackShapes(shapes);
 
   for (let leftIndex = 0; leftIndex < orderedShapes.length; leftIndex += 1) {
     const leftShape = orderedShapes[leftIndex];
@@ -188,6 +199,8 @@ export function resolveMeleeInteractions(
       if (leftHeavy === rightHeavy) {
         moveToRecovery(leftRuntime.player, leftRuntime.attack);
         moveToRecovery(rightRuntime.player, rightRuntime.attack);
+        canceledAttacks.add(leftRuntime.attack);
+        canceledAttacks.add(rightRuntime.attack);
         canceledAttackIds.add(leftShape.attackId);
         canceledAttackIds.add(rightShape.attackId);
         applyOppositeRecoil(
@@ -199,6 +212,7 @@ export function resolveMeleeInteractions(
         const quickShape = leftHeavy ? rightShape : leftShape;
         const quickRuntime = leftHeavy ? rightRuntime : leftRuntime;
         moveToRecovery(quickRuntime.player, quickRuntime.attack);
+        canceledAttacks.add(quickRuntime.attack);
         canceledAttackIds.add(quickShape.attackId);
       }
 
@@ -215,10 +229,112 @@ export function resolveMeleeInteractions(
     }
   }
 
+  for (const projectileId of Object.keys(state.pulses).map(Number).sort((left, right) => left - right)) {
+    const pulse = state.pulses[projectileId];
+    const capsule = pulseCapsule(state, projectileId);
+    if (!pulse || !capsule) continue;
+    const breaker = orderedShapes.find((shape) => {
+      if (shape.playerId === pulse.ownerPlayerId || canceledAttackIds.has(shape.attackId)) return false;
+      const runtime = runtimeForShape(state, shape);
+      return Boolean(runtime && !canceledAttacks.has(runtime.attack) && capsulesIntersect(shape.capsule, capsule));
+    });
+    if (!breaker) continue;
+    removePulse(state, projectileId);
+    events.push({
+      type: 'PULSE_BREAK',
+      eventId: state.nextEventId++,
+      tick: state.tick,
+      projectileId,
+      breakerPlayerId: breaker.playerId,
+      breakerAttackId: breaker.attackId,
+      impactPosition: { ...pulse.position }
+    });
+  }
+
+  return events;
+}
+
+type DodgeEventData = Omit<Extract<GameEvent, { type: 'PERFECT_DODGE' }>, 'eventId' | 'tick'>;
+type HitEventData = Omit<Extract<GameEvent, { type: 'HIT' }>, 'eventId' | 'tick'>;
+
+function applyPerfectDodge(
+  target: MutableMatchPlayer,
+  data: DodgeEventData,
+  dodges: DodgeEventData[]
+): void {
+  if (target.perfectDodgeConsumed) return;
+  target.dashCooldownRemainingMs = Math.max(0, target.dashCooldownRemainingMs - GAME.perfectDodgeRefundMs);
+  target.perfectDodgeConsumed = true;
+  dodges.push(data);
+}
+
+function applyHit(
+  state: MatchState,
+  attacker: MutableMatchPlayer,
+  target: MutableMatchPlayer,
+  attack: AttackRuntime | null,
+  pulseDirection: Readonly<{ x: number; y: number }> | null,
+  overloadGain: number,
+  baseImpulse: number,
+  hits: HitEventData[]
+): void {
+  const hitPlayerIds = attack?.hitPlayerIds;
+  const firstLandedTarget = hitPlayerIds ? hitPlayerIds.size === 0 : false;
+  if (hitPlayerIds) hitPlayerIds.add(target.playerId);
+  if (firstLandedTarget) attacker.stats.landedHits += 1;
+  target.overload = Math.min(GAME.maxOverload, target.overload + overloadGain);
+  const impulse = baseImpulse * (1 + (target.overload / GAME.maxOverload) * 0.9);
+  const direction = pulseDirection ?? normalize(attack?.lockedFacing ?? { x: 1, y: 0 }, { x: 1, y: 0 });
+  target.velocity = {
+    x: target.velocity.x + direction.x * impulse,
+    y: target.velocity.y + direction.y * impulse
+  };
+  target.hitstunRemainingMs = Math.max(target.hitstunRemainingMs, hitstunFor(impulse));
+  target.lastAttackerId = attacker.playerId;
+  target.lastAttackerAtMs = state.nowMs;
+  target.chargeMs = 0;
+  target.charging = false;
+  hits.push({
+    type: 'HIT',
+    attackerId: attacker.playerId,
+    targetId: target.playerId,
+    attack: attack?.kind ?? 'NEON_PULSE',
+    impactPosition: { ...target.position },
+    impulse,
+    resultingOverload: target.overload
+  });
+}
+
+function pulseTravelParameter(
+  from: Readonly<{ x: number; y: number }>,
+  to: Readonly<{ x: number; y: number }>,
+  center: Readonly<{ x: number; y: number }>,
+  radius: number
+): number {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return 0;
+  const offsetX = from.x - center.x;
+  const offsetY = from.y - center.y;
+  const projection = offsetX * dx + offsetY * dy;
+  const discriminant = projection * projection - lengthSquared *
+    (offsetX * offsetX + offsetY * offsetY - radius * radius);
+  if (discriminant < 0) return clamp(-projection / lengthSquared, 0, 1);
+  return clamp((-projection - Math.sqrt(discriminant)) / lengthSquared, 0, 1);
+}
+
+export function resolveSurvivingContacts(
+  state: MatchState,
+  shapes: readonly ActiveAttackShape[]
+): readonly GameEvent[] {
+  const dodges: DodgeEventData[] = [];
+  const hits: HitEventData[] = [];
+  const orderedShapes = orderedAttackShapes(shapes);
+
   for (const shape of orderedShapes) {
-    if (canceledAttackIds.has(shape.attackId)) continue;
     const runtime = runtimeForShape(state, shape);
-    if (!runtime) continue;
+    if (!runtime || canceledAttacks.has(runtime.attack)) continue;
     const { player: attacker, attack } = runtime;
     const profile = profileForAttack(attack.kind);
     const effects = attackEffects(profile, attack);
@@ -228,6 +344,7 @@ export function resolveMeleeInteractions(
         activePlayer(target) &&
         target.protectionRemainingMs <= 0 &&
         !attack.resolvedPlayerIds.has(target.playerId) &&
+        !attack.hitPlayerIds.has(target.playerId) &&
         capsuleIntersectsCircle(shape.capsule, {
           center: target.position,
           radius: GAME.collisionRadius
@@ -237,56 +354,94 @@ export function resolveMeleeInteractions(
     for (const target of targets) {
       attack.resolvedPlayerIds.add(target.playerId);
       if (target.dashInvulnerabilityRemainingMs > 0) {
-        if (!target.perfectDodgeConsumed) {
-          target.dashCooldownRemainingMs = Math.max(
-            0,
-            target.dashCooldownRemainingMs - GAME.perfectDodgeRefundMs
-          );
-          target.perfectDodgeConsumed = true;
-          events.push({
-            type: 'PERFECT_DODGE',
-            eventId: state.nextEventId++,
-            tick: state.tick,
-            playerId: target.playerId,
-            attackerId: attacker.playerId,
-            attackId: attack.attackId,
-            source: attack.kind,
-            projectileId: null,
-            impactPosition: { ...target.position },
-            refundedMs: GAME.perfectDodgeRefundMs
-          });
-        }
+        applyPerfectDodge(target, {
+          type: 'PERFECT_DODGE',
+          playerId: target.playerId,
+          attackerId: attacker.playerId,
+          attackId: attack.attackId,
+          source: attack.kind,
+          projectileId: null,
+          impactPosition: { ...target.position },
+          refundedMs: GAME.perfectDodgeRefundMs
+        }, dodges);
         continue;
       }
 
-      const firstLandedTarget = attack.hitPlayerIds.size === 0;
-      attack.hitPlayerIds.add(target.playerId);
-      if (firstLandedTarget) attacker.stats.landedHits += 1;
-      target.overload = Math.min(GAME.maxOverload, target.overload + effects.overloadGain);
-      const impulse = effects.baseImpulse * (1 + (target.overload / GAME.maxOverload) * 0.9);
-      const direction = normalize(attack.lockedFacing, { x: 1, y: 0 });
-      target.velocity = {
-        x: target.velocity.x + direction.x * impulse,
-        y: target.velocity.y + direction.y * impulse
-      };
-      target.hitstunRemainingMs = Math.max(target.hitstunRemainingMs, hitstunFor(impulse));
-      target.lastAttackerId = attacker.playerId;
-      target.lastAttackerAtMs = state.nowMs;
-      target.chargeMs = 0;
-      target.charging = false;
-      events.push({
-        type: 'HIT',
-        eventId: state.nextEventId++,
-        tick: state.tick,
-        attackerId: attacker.playerId,
-        targetId: target.playerId,
-        attack: attack.kind,
-        impactPosition: { ...target.position },
-        impulse,
-        resultingOverload: target.overload
-      });
+      applyHit(state, attacker, target, attack, null, effects.overloadGain, effects.baseImpulse, hits);
     }
   }
 
-  return events;
+  for (const projectileId of Object.keys(state.pulses).map(Number).sort((left, right) => left - right)) {
+    const pulse = state.pulses[projectileId];
+    if (!pulse) continue;
+    const attacker = state.players[pulse.ownerPlayerId];
+    if (!attacker) {
+      removePulse(state, projectileId);
+      continue;
+    }
+    const capsule = { from: pulse.previousPosition, to: pulse.position, radius: pulse.radius };
+    const target = Object.values(state.players)
+      .filter((candidate) =>
+        candidate.playerId !== pulse.ownerPlayerId &&
+        activePlayer(candidate) &&
+        candidate.protectionRemainingMs <= 0 &&
+        !pulse.hitPlayerIds.has(candidate.playerId) &&
+        capsuleIntersectsCircle(capsule, { center: candidate.position, radius: GAME.collisionRadius }))
+      .map((candidate) => ({
+        candidate,
+        travelParameter: pulseTravelParameter(
+          pulse.previousPosition,
+          pulse.position,
+          candidate.position,
+          pulse.radius + GAME.collisionRadius
+        )
+      }))
+      .sort((left, right) => left.travelParameter - right.travelParameter ||
+        compareStableIds(left.candidate.playerId, right.candidate.playerId))[0]?.candidate;
+    if (!target) continue;
+
+    removePulse(state, projectileId);
+    if (target.dashInvulnerabilityRemainingMs > 0) {
+      applyPerfectDodge(target, {
+        type: 'PERFECT_DODGE',
+        playerId: target.playerId,
+        attackerId: attacker.playerId,
+        attackId: pulse.originatingAttackId,
+        source: 'NEON_PULSE',
+        projectileId,
+        impactPosition: { ...target.position },
+        refundedMs: GAME.perfectDodgeRefundMs
+      }, dodges);
+      continue;
+    }
+
+    const firstLandedTarget = pulse.hitPlayerIds.size === 0;
+    pulse.hitPlayerIds.add(target.playerId);
+    if (firstLandedTarget) attacker.stats.landedHits += 1;
+    applyHit(
+      state,
+      attacker,
+      target,
+      null,
+      normalize(pulse.velocity, { x: 1, y: 0 }),
+      GAME.pulseOverloadGain,
+      GAME.pulseBaseImpulse,
+      hits
+    );
+  }
+
+  return [
+    ...dodges.map((event) => ({ ...event, eventId: state.nextEventId++, tick: state.tick })),
+    ...hits.map((event) => ({ ...event, eventId: state.nextEventId++, tick: state.tick }))
+  ];
+}
+
+export function resolveMeleeInteractions(
+  state: MatchState,
+  shapes: readonly ActiveAttackShape[]
+): readonly GameEvent[] {
+  return [
+    ...resolveClashesAndPulseBreaks(state, shapes),
+    ...resolveSurvivingContacts(state, shapes)
+  ];
 }

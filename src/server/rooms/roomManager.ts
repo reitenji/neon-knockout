@@ -22,6 +22,7 @@ import {
   stepMatch
 } from '../game/simulation.js';
 import { createMatchState, createPlayerStats, type MatchState } from '../game/state.js';
+import { clearPulses, removePulsesOwnedBy } from '../game/projectiles.js';
 import { DomainError } from './domainError.js';
 
 const ROOM_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -96,6 +97,9 @@ export class RoomManager {
   constructor(private readonly deps: RoomManagerDependencies) {}
 
   reset(): void {
+    for (const room of this.rooms.values()) {
+      if (room.match) clearPulses(room.match);
+    }
     this.rooms.clear();
     this.connections.clear();
   }
@@ -229,6 +233,7 @@ export class RoomManager {
       candidate.stats = emptyStats();
       candidate.reconnectAnchor = null;
     }
+    if (room.match) clearPulses(room.match);
     room.match = createMatchState([...room.players.values()].map((candidate) => ({
       playerId: candidate.playerId,
       name: candidate.name,
@@ -326,11 +331,13 @@ export class RoomManager {
       let membershipChanged = false;
       for (const player of [...room.players.values()]) {
         if (!player.connected && player.expiresAt !== null && player.expiresAt <= now) {
+          if (room.match) removePulsesOwnedBy(room.match, player.playerId);
           room.players.delete(player.playerId);
           membershipChanged = true;
         }
       }
       if (room.players.size === 0) {
+        if (room.match) clearPulses(room.match);
         this.rooms.delete(room.roomCode);
         this.deps.publish({ type: 'ROOM_CLOSED', roomCode: room.roomCode });
         continue;
@@ -468,6 +475,7 @@ export class RoomManager {
 
   private enterResult(room: Room): void {
     if (!room.match) return;
+    clearPulses(room.match);
     room.phase = 'RESULT';
     room.accumulatorMs = 0;
     room.snapshotAccumulatorMs = 0;
@@ -481,6 +489,7 @@ export class RoomManager {
   }
 
   private resetMatchToLobby(room: Room): void {
+    if (room.match) clearPulses(room.match);
     room.match = null;
     room.phase = 'LOBBY';
     room.inputs.clear();

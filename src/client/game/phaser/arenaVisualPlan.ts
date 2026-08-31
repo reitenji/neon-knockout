@@ -49,9 +49,9 @@ export function interpolateArenaVertices(progress: number): readonly Vec2[] {
 function warningLeadProgress(phase: MatchPhase, remainingMs: number): number {
   if (phase !== 'REGULATION' && phase !== 'SUDDEN_DEATH') return 0;
   if (phase === 'SUDDEN_DEATH') return 1;
-  const leadWindow = GAME.contractionWarningLeadMs - GAME.contractionWarningMs;
+  const leadWindow = GAME.contractionWarningRemainingMs - GAME.contractionStartRemainingMs;
   if (leadWindow <= 0) return 0;
-  return clamp((GAME.contractionWarningLeadMs - remainingMs) / leadWindow, 0, 1);
+  return clamp((GAME.contractionWarningRemainingMs - remainingMs) / leadWindow, 0, 1);
 }
 
 export function buildArenaVisualModel(

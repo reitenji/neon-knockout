@@ -35,7 +35,7 @@ describe('animationPlanFor', () => {
     expect(at105).not.toEqual(atStart);
   });
 
-  it('fits knockout and respawn poses inside the 700ms control-return contract', () => {
+  it('fits knockout and respawn poses inside the 600ms control-return contract', () => {
     const knockout = animationPlanFor('knockout', false);
     const respawn = animationPlanFor('respawn', false);
 

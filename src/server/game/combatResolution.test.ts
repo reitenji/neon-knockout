@@ -5,11 +5,14 @@ import { profileForAttack } from '../../shared/combat/profiles.js';
 import type { AttackKind, Vec2 } from '../../shared/model.js';
 import {
   buildActiveAttackShapes,
+  resolveClashesAndPulseBreaks,
   resolveMeleeInteractions,
+  resolveSurvivingContacts,
   type ActiveAttackShape,
   type ActiveAttackSlice
 } from './combatResolution.js';
 import { advanceCombatTimers, startActions } from './combat.js';
+import { advancePulses, spawnNeonPulse } from './projectiles.js';
 import { snapshotMatch } from './simulation.js';
 import { createMatchState, type AttackRuntime, type MatchState } from './state.js';
 
@@ -313,5 +316,138 @@ describe('shared-shape melee resolution', () => {
     expect(built.capsule.from.y).toBeCloseTo(from.y, 6);
     expect(built.capsule.to.x).toBeCloseTo(to.x, 6);
     expect(built.capsule.to.y).toBeCloseTo(to.y, 6);
+  });
+
+  it('breaks an intersecting pulse before any fighter contact and consumes it once', () => {
+    const state = createState();
+    const breaker = attack(state, 'p2', 4, 'QUICK_1', { x: -1, y: 0 });
+    const origin = attack(state, 'p1', 3, 'HEAVY');
+    const pulse = spawnNeonPulse(state, state.players.p1, origin)!.pulse;
+    pulse.previousPosition = { x: 620, y: 360 };
+    pulse.position = { x: 680, y: 360 };
+    state.players.p3.position = { x: 650, y: 360 };
+    const breakerShape = shape('p2', breaker, { x: 650, y: 330 }, { x: 650, y: 390 });
+
+    const clashEvents = resolveClashesAndPulseBreaks(state, [breakerShape]);
+    const contactEvents = resolveSurvivingContacts(state, [breakerShape]);
+
+    expect(clashEvents).toEqual([expect.objectContaining({
+      type: 'PULSE_BREAK', projectileId: 1, breakerPlayerId: 'p2', breakerAttackId: 4
+    })]);
+    expect(contactEvents.some((event) => event.type === 'HIT' && event.attack === 'NEON_PULSE')).toBe(false);
+    expect(state.pulses).toEqual({});
+  });
+
+  it('consumes a surviving pulse on the nearest eligible travel contact, then stable player ID', () => {
+    const nearest = createState();
+    const nearestAttack = attack(nearest, 'p1', 1, 'HEAVY');
+    const nearestPulse = spawnNeonPulse(nearest, nearest.players.p1, nearestAttack)!.pulse;
+    nearestPulse.previousPosition = { x: 600, y: 360 };
+    nearestPulse.position = { x: 800, y: 360 };
+    nearest.players.p2.position = { x: 710, y: 360 };
+    nearest.players.p3.position = { x: 650, y: 360 };
+
+    expect(resolveSurvivingContacts(nearest, [])).toEqual([
+      expect.objectContaining({ type: 'HIT', attack: 'NEON_PULSE', targetId: 'p3' })
+    ]);
+    expect(nearest.pulses).toEqual({});
+
+    const tied = createState();
+    const tiedAttack = attack(tied, 'p1', 1, 'HEAVY');
+    const tiedPulse = spawnNeonPulse(tied, tied.players.p1, tiedAttack)!.pulse;
+    tiedPulse.previousPosition = { x: 600, y: 360 };
+    tiedPulse.position = { x: 800, y: 360 };
+    tied.players.p2.position = { x: 670, y: 360 };
+    tied.players.p3.position = { x: 670, y: 360 };
+
+    expect(resolveSurvivingContacts(tied, [])).toEqual([
+      expect.objectContaining({ type: 'HIT', attack: 'NEON_PULSE', targetId: 'p2' })
+    ]);
+  });
+
+  it('shares melee hit deduplication and consumes on the first still-valid pulse target', () => {
+    const state = createState();
+    const origin = attack(state, 'p1', 1, 'HEAVY');
+    origin.hitPlayerIds.add('p2');
+    const pulse = spawnNeonPulse(state, state.players.p1, origin)!.pulse;
+    pulse.previousPosition = { x: 600, y: 360 };
+    pulse.position = { x: 800, y: 360 };
+    state.players.p2.position = { x: 640, y: 360 };
+    state.players.p3.position = { x: 700, y: 360 };
+
+    const events = resolveSurvivingContacts(state, []);
+
+    expect(pulse.hitPlayerIds).toBe(origin.hitPlayerIds);
+    expect(events).toEqual([expect.objectContaining({
+      type: 'HIT', attackerId: 'p1', targetId: 'p3', attack: 'NEON_PULSE'
+    })]);
+    expect([...origin.hitPlayerIds].sort()).toEqual(['p2', 'p3']);
+    expect(state.pulses).toEqual({});
+  });
+
+  it('does not let the originating melee attack hit a target already consumed by its pulse', () => {
+    const state = createState();
+    const origin = attack(state, 'p1', 1, 'HEAVY');
+    const pulse = spawnNeonPulse(state, state.players.p1, origin)!.pulse;
+    pulse.previousPosition = { x: 600, y: 360 };
+    pulse.position = { x: 700, y: 360 };
+    state.players.p2.position = { x: 650, y: 360 };
+
+    expect(resolveSurvivingContacts(state, [])).toEqual([
+      expect.objectContaining({ type: 'HIT', targetId: 'p2', attack: 'NEON_PULSE' })
+    ]);
+    const overloadAfterPulse = state.players.p2.overload;
+
+    expect(resolveSurvivingContacts(state, [
+      shape('p1', origin, { x: 620, y: 340 }, { x: 680, y: 380 }, 10)
+    ])).toEqual([]);
+    expect(state.players.p2.overload).toBe(overloadAfterPulse);
+  });
+
+  it('consumes a pulse at the first dash-invulnerable contact and refunds once per dash', () => {
+    const state = createState();
+    const origin = attack(state, 'p1', 7, 'HEAVY');
+    const pulse = spawnNeonPulse(state, state.players.p1, origin)!.pulse;
+    pulse.previousPosition = { x: 600, y: 360 };
+    pulse.position = { x: 800, y: 360 };
+    state.players.p2.position = { x: 650, y: 360 };
+    state.players.p2.dashInvulnerabilityRemainingMs = 50;
+    state.players.p2.dashCooldownRemainingMs = 900;
+
+    const events = resolveSurvivingContacts(state, []);
+
+    expect(events).toEqual([expect.objectContaining({
+      type: 'PERFECT_DODGE', playerId: 'p2', attackerId: 'p1', attackId: 7,
+      source: 'NEON_PULSE', projectileId: 1, refundedMs: 550
+    })]);
+    expect(state.players.p2.dashCooldownRemainingMs).toBe(350);
+    expect(state.players.p2.perfectDodgeConsumed).toBe(true);
+    expect(origin.hitPlayerIds.size).toBe(0);
+    expect(state.pulses).toEqual({});
+
+    const second = spawnNeonPulse(state, state.players.p1, attack(state, 'p1', 8, 'HEAVY'))!.pulse;
+    second.previousPosition = { x: 600, y: 360 };
+    second.position = { x: 800, y: 360 };
+    expect(resolveSurvivingContacts(state, [])).toEqual([]);
+    expect(state.players.p2.dashCooldownRemainingMs).toBe(350);
+    expect(state.pulses).toEqual({});
+  });
+
+  it('uses the continuous pulse capsule rather than its endpoint for contacts', () => {
+    const state = createState();
+    const origin = attack(state, 'p1', 1, 'HEAVY');
+    const pulse = spawnNeonPulse(state, state.players.p1, origin)!.pulse;
+    pulse.position = { x: 600, y: 360 };
+    pulse.previousPosition = { x: 600, y: 360 };
+    pulse.velocity = { x: 900, y: 0 };
+    state.players.p2.position = { x: 680, y: 360 };
+    state.players.p3.position = { x: 900, y: 360 };
+
+    advancePulses(state, 200);
+
+    expect(pulse.position).toEqual({ x: 780, y: 360 });
+    expect(resolveSurvivingContacts(state, [])).toEqual([
+      expect.objectContaining({ type: 'HIT', targetId: 'p2', attack: 'NEON_PULSE' })
+    ]);
   });
 });

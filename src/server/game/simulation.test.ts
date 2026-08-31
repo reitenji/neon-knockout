@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ARENA, GAME } from '../../shared/constants.js';
-import type { InputFrame } from '../../shared/model.js';
+import { profileForAttack } from '../../shared/combat/profiles.js';
+import type { AttackKind, InputFrame, Vec2 } from '../../shared/model.js';
 import { advanceCombatTimers } from './combat.js';
+import { spawnNeonPulse } from './projectiles.js';
 import { forceKnockout, resumePausedMatch, setMatchPaused, setPlayerConnected, snapshotMatch, stepMatch } from './simulation.js';
-import { createMatchState, type MatchState } from './state.js';
+import { createMatchState, type AttackRuntime, type MatchState } from './state.js';
 
 const idle = (seq: number, overrides: Partial<InputFrame> = {}): InputFrame => ({
   seq, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides
@@ -16,6 +18,31 @@ function regulationState(): MatchState {
   const state = createMatchState(seeds(), 0);
   state.phase = 'REGULATION';
   return state;
+}
+
+function activeAttack(
+  state: MatchState,
+  playerId: string,
+  attackId: number,
+  kind: AttackKind,
+  facing: Vec2
+): AttackRuntime {
+  const profile = profileForAttack(kind);
+  const attack: AttackRuntime = {
+    attackId,
+    kind,
+    profileId: profile.id,
+    phase: 'ACTIVE',
+    phaseRemainingMs: profile.activeMs,
+    phaseElapsedMs: 0,
+    previousActiveProgress: 0,
+    lockedFacing: facing,
+    chargeMs: kind === 'HEAVY' ? GAME.heavyMaxChargeMs : 0,
+    hitPlayerIds: new Set(),
+    resolvedPlayerIds: new Set()
+  };
+  state.players[playerId].attack = attack;
+  return attack;
 }
 
 describe('authoritative match simulation', () => {
@@ -125,7 +152,7 @@ describe('authoritative match simulation', () => {
     expect(stepMatch(state, new Map(), 0)).toContainEqual(expect.objectContaining({ type: 'KNOCKOUT', scoreAwardedTo: null }));
   });
 
-  it('finishes for the first target scorer in stable simultaneous-boundary order', () => {
+  it('resolves every simultaneous knockout before selecting the stable target-score winner', () => {
     const state = createMatchState([
       { playerId: 'z-scorer', name: 'Zoe', accent: 3, chassis: 'WRAITH' },
       { playerId: 'p2', name: 'Linus', accent: 1, chassis: 'BASTION' },
@@ -144,14 +171,15 @@ describe('authoritative match simulation', () => {
 
     const events = stepMatch(state, new Map(), 0);
 
-    expect(events.map((event) => event.type)).toEqual(['KNOCKOUT', 'RESULT']);
-    expect(events.map((event) => event.eventId)).toEqual([1, 2]);
+    expect(events.map((event) => event.type)).toEqual(['KNOCKOUT', 'KNOCKOUT', 'RESULT']);
+    expect(events.map((event) => event.eventId)).toEqual([1, 2, 3]);
     expect(events[0]).toMatchObject({ targetId: 'p1', scoreAwardedTo: 'z-scorer' });
-    expect(events[1]).toMatchObject({ winnerPlayerId: 'z-scorer', reason: 'TARGET_SCORE' });
+    expect(events[1]).toMatchObject({ targetId: 'p2', scoreAwardedTo: 'a-scorer' });
+    expect(events[2]).toMatchObject({ winnerPlayerId: 'a-scorer', reason: 'TARGET_SCORE' });
     expect(state.scores['z-scorer']).toBe(GAME.targetScore);
-    expect(state.scores['a-scorer']).toBe(GAME.targetScore - 1);
-    expect(state.players.p2.stats.falls).toBe(0);
-    expect(state.players.p2.respawnRemainingMs).toBe(0);
+    expect(state.scores['a-scorer']).toBe(GAME.targetScore);
+    expect(state.players.p2.stats.falls).toBe(1);
+    expect(state.players.p2.respawnRemainingMs).toBe(GAME.knockoutToControlMs);
   });
 
   it('does not credit a recent attacker knocked out earlier in the same boundary phase', () => {
@@ -171,10 +199,11 @@ describe('authoritative match simulation', () => {
     expect(state.players.p1.stats.knockouts).toBe(0);
   });
 
-  it('returns control at 700 ms with a deterministic spawn and 650 ms protection', () => {
+  it('returns control at exactly 600 ms with a deterministic spawn and 650 ms protection', () => {
     const state = regulationState();
     forceKnockout(state, 'p1', 'p2');
-    expect(stepMatch(state, new Map(), GAME.knockoutToControlMs - 1)).toEqual([]);
+    expect(GAME.knockoutToControlMs).toBe(600);
+    expect(stepMatch(state, new Map(), 599)).toEqual([]);
     const events = stepMatch(state, new Map(), 1);
     expect(events).toContainEqual(expect.objectContaining({ type: 'RESPAWN', playerId: 'p2' }));
     expect(state.players.p2.position).toEqual(ARENA.spawnAnchors[3]);
@@ -182,16 +211,31 @@ describe('authoritative match simulation', () => {
     expect(state.players.p2.protectionRemainingMs).toBe(GAME.respawnProtectionMs);
   });
 
-  it('warns for three seconds, contracts for seventeen, and stays at minimum size', () => {
+  it('does not decrement a knockout timer on the same tick that creates it', () => {
     const state = regulationState();
-    state.remainingMs = 30_000;
-    stepMatch(state, new Map(), 2_999);
-    expect(state.contraction).toBe(0);
+    state.players.p2.position = { x: 640, y: 0 };
+
+    const events = stepMatch(state, new Map(), 100);
+
+    expect(events).toContainEqual(expect.objectContaining({ type: 'KNOCKOUT', targetId: 'p2' }));
+    expect(state.players.p2.respawnRemainingMs).toBe(600);
+    expect(stepMatch(state, new Map(), 599)).toEqual([]);
+    expect(stepMatch(state, new Map(), 1)).toContainEqual(expect.objectContaining({ type: 'RESPAWN', playerId: 'p2' }));
+  });
+
+  it('warns at 78 seconds, contracts from 75 to 40 seconds, and stays at minimum size', () => {
+    const state = regulationState();
+    state.remainingMs = 78_001;
     stepMatch(state, new Map(), 1);
     expect(state.contraction).toBe(0);
-    stepMatch(state, new Map(), 8_500);
+    state.remainingMs = 75_000;
+    stepMatch(state, new Map(), 0);
+    expect(state.contraction).toBe(0);
+    state.remainingMs = 57_500;
+    stepMatch(state, new Map(), 0);
     expect(state.contraction).toBeCloseTo(0.5, 8);
-    stepMatch(state, new Map(), 8_500);
+    state.remainingMs = 40_000;
+    stepMatch(state, new Map(), 0);
     expect(state.contraction).toBe(1);
   });
 
@@ -207,7 +251,108 @@ describe('authoritative match simulation', () => {
     state.scores = { p1: 2, p2: 2 };
     state.remainingMs = 1;
     expect(stepMatch(state, new Map(), 1)).toContainEqual(expect.objectContaining({ type: 'PHASE', phase: 'SUDDEN_DEATH' }));
+    expect(state.contraction).toBe(1);
     expect(forceKnockout(state, 'p1', 'p2')).toContainEqual(expect.objectContaining({ type: 'RESULT', winnerPlayerId: 'p1', reason: 'SUDDEN_DEATH' }));
+  });
+
+  it('resets overload after a self-fall without changing either score', () => {
+    const state = regulationState();
+    state.players.p2.overload = 120;
+    state.players.p2.position = { x: 640, y: 0 };
+
+    expect(stepMatch(state, new Map(), 0)).toContainEqual(expect.objectContaining({
+      type: 'KNOCKOUT', targetId: 'p2', scoreAwardedTo: null
+    }));
+    expect(state.scores).toEqual({ p1: 0, p2: 0 });
+    stepMatch(state, new Map(), 600);
+    expect(state.players.p2.overload).toBe(0);
+    expect(state.scores).toEqual({ p1: 0, p2: 0 });
+  });
+
+  it('spawns one full-charge pulse after movement from the separated owner position', () => {
+    const state = regulationState();
+    const owner = state.players.p1;
+    owner.position = { x: 500, y: 360 };
+    state.players.p2.position = { x: 900, y: 360 };
+    owner.latestInput = idle(0, { moveX: 1, aimX: 1, heavy: true });
+    owner.chargeMs = GAME.heavyMaxChargeMs;
+    owner.charging = true;
+    owner.previousHeavy = true;
+    stepMatch(state, new Map([['p1', idle(1, { moveX: 1, aimX: 1, heavy: false })]]), 0);
+
+    const events = stepMatch(state, new Map([['p1', idle(2, { moveX: 1, aimX: 1 })]]), GAME.heavyWindupMs);
+
+    expect(events).toEqual([expect.objectContaining({ type: 'PULSE_SPAWN', ownerPlayerId: 'p1' })]);
+    expect(Object.values(state.pulses)).toHaveLength(1);
+    expect(state.pulses[1].position.x).toBeCloseTo(owner.position.x + 74 + GAME.pulseSpeed * GAME.heavyWindupMs / 1_000, 8);
+    expect(state.pulses[1].position.y).toBeCloseTo(owner.position.y, 8);
+
+    stepMatch(state, new Map([['p1', idle(3)]]), 0);
+    expect(Object.values(state.pulses)).toHaveLength(1);
+  });
+
+  it('clears every pulse when a result finishes the match', () => {
+    const state = regulationState();
+    const attack = activeAttack(state, 'p1', 1, 'HEAVY', { x: 1, y: 0 });
+    spawnNeonPulse(state, state.players.p1, attack);
+    state.scores.p1 = GAME.targetScore - 1;
+
+    const events = forceKnockout(state, 'p1', 'p2');
+
+    expect(events.map((event) => event.type)).toEqual(['KNOCKOUT', 'RESULT']);
+    expect(state.phase).toBe('FINISHED');
+    expect(state.pulses).toEqual({});
+  });
+
+  it('emits CLASH, PULSE_BREAK, PERFECT_DODGE, HIT, KNOCKOUT, RESULT in phase order with stable IDs', () => {
+    const playerIds = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9', 'p10'];
+    const state = createMatchState(playerIds.map((playerId, index) => ({
+      playerId, name: playerId, chassis: 'RIFT' as const, accent: (index % 8) as 0
+    })), 0);
+    state.phase = 'REGULATION';
+    for (const player of Object.values(state.players)) player.position = { x: 1_000, y: 600 };
+
+    state.players.p1.position = { x: 400, y: 300 };
+    state.players.p2.position = { x: 480, y: 300 };
+    activeAttack(state, 'p1', 1, 'HEAVY', { x: 1, y: 0 });
+    activeAttack(state, 'p2', 2, 'HEAVY', { x: -1, y: 0 });
+
+    state.players.p3.position = { x: 600, y: 200 };
+    activeAttack(state, 'p3', 3, 'QUICK_1', { x: 1, y: 0 });
+    const breakPulse = spawnNeonPulse(state, state.players.p4, activeAttack(state, 'p4', 4, 'HEAVY', { x: 1, y: 0 }))!.pulse;
+    state.players.p4.attack = null;
+    breakPulse.position = { x: 550, y: 200 };
+    breakPulse.previousPosition = { x: 550, y: 200 };
+    breakPulse.velocity = { x: 900, y: 0 };
+
+    const dodgePulse = spawnNeonPulse(state, state.players.p5, activeAttack(state, 'p5', 5, 'HEAVY', { x: 1, y: 0 }))!.pulse;
+    state.players.p5.attack = null;
+    dodgePulse.position = { x: 700, y: 350 };
+    dodgePulse.previousPosition = { x: 700, y: 350 };
+    dodgePulse.velocity = { x: 900, y: 0 };
+    state.players.p6.position = { x: 750, y: 350 };
+    state.players.p6.dashInvulnerabilityRemainingMs = 100;
+    state.players.p6.dashCooldownRemainingMs = 900;
+
+    const hitPulse = spawnNeonPulse(state, state.players.p7, activeAttack(state, 'p7', 6, 'HEAVY', { x: 1, y: 0 }))!.pulse;
+    state.players.p7.attack = null;
+    hitPulse.position = { x: 700, y: 480 };
+    hitPulse.previousPosition = { x: 700, y: 480 };
+    hitPulse.velocity = { x: 900, y: 0 };
+    state.players.p8.position = { x: 750, y: 480 };
+
+    state.players.p9.position = { x: 640, y: 0 };
+    state.players.p9.lastAttackerId = 'p10';
+    state.players.p9.lastAttackerAtMs = state.nowMs;
+    state.scores.p10 = GAME.targetScore - 1;
+    state.nextEventId = 1;
+
+    const events = stepMatch(state, new Map(), GAME.heavyActiveMs);
+
+    expect(events.map((event) => event.type)).toEqual([
+      'CLASH', 'PULSE_BREAK', 'PERFECT_DODGE', 'HIT', 'KNOCKOUT', 'RESULT'
+    ]);
+    expect(events.map((event) => event.eventId)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
   it('finishes immediately at the target score', () => {
