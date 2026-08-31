@@ -1,10 +1,10 @@
-# Room Settings Implementation Plan
+# Room Settings and Leave Lifecycle Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add host-controlled 90/120/180-second and 3/5/7/10-knockout room settings that remain server-authoritative across the full LAN lobby, match, reconnect, result, and rematch lifecycle.
+**Goal:** Add host-controlled 90/120/180-second and 3/5/7/10-knockout room settings plus a complete explicit leave-room flow that remain server-authoritative across the full LAN lobby, match, reconnect, result, and rematch lifecycle.
 
-**Architecture:** A strict shared settings contract is owned by `RoomManager`, copied into immutable match state at start, and published in both `RoomState` and `MatchSnapshot`. Server simulation and client presentation use one proportional timing helper; the lobby submits complete setting pairs through one acknowledged Socket.IO event and never applies optimistic rule state.
+**Architecture:** A strict shared settings contract is owned by `RoomManager`, copied into immutable match state at start, and published in both `RoomState` and `MatchSnapshot`. Server simulation and client presentation use one proportional timing helper; the lobby submits complete setting pairs through one acknowledged Socket.IO event and never applies optimistic rule state. A second acknowledged `room:leave` event atomically removes membership/resume authority while keeping the transport reusable, then applies host migration, empty-room destruction, or the existing active-population policy.
 
 **Tech Stack:** TypeScript, Node.js 20+, Socket.IO, Zod, React 19, Phaser 4, Vitest, Testing Library, Playwright.
 
@@ -21,12 +21,15 @@
 - [ ] Preserve settings through reconnect, host migration, result, return-to-lobby, direct rematch, and repeated rematches.
 - [ ] Use the shared 13/20, 5/8, and 1/3 timing ratios on server, HUD, and Phaser presentation.
 - [ ] Do not add free numeric inputs, modes, maps, persistence, compatibility fallbacks, or test-only production routes.
+- [ ] Permit every current participant to leave from any room phase; invalidate only that room session, keep the socket connected, migrate the host, and close an empty room.
+- [ ] During an active match, remove the leaver's entity, score, input, and owned pulses, then apply the existing connected/reserved population policy.
+- [ ] On result-screen leave, return remaining players to `LOBBY` with the configured settings preserved.
 - [ ] Write a failing behavioral test before each production change, observe the intended RED failure, then implement the minimum GREEN change.
 - [ ] After each task, commit only that task's owned files and record focused command output in the SDD report/ledger.
 
 ---
 
-## Task 1: Shared settings contract and strict protocol
+## Task 1: Shared settings contract and strict room protocol
 
 **Files:**
 
@@ -95,15 +98,16 @@ export function matchTimingFor(durationMs: MatchDurationMs): MatchTiming;
 - [ ] Add a table that accepts all 12 supported duration/target pairs.
 - [ ] Reject `100_000` duration, target `8`, missing fields, and extra fields such as `map`.
 - [ ] Prove the accepted object contains the complete pair.
+- [ ] Prove strict `roomLeaveSchema` accepts only `{}` and rejects every extra field.
 - [ ] Run and observe RED:
 
 ```bash
 npx vitest run src/shared/protocol.test.ts -t "room settings" --maxWorkers=1
 ```
 
-Expected RED: `lobbySettingsSchema` and `lobby:settings` do not exist.
+Expected RED: `lobbySettingsSchema`, `roomLeaveSchema`, `lobby:settings`, and `room:leave` do not exist.
 
-### Step 4: Add the acknowledged protocol event
+### Step 4: Add the acknowledged protocol events
 
 - [ ] Export a strict `lobbySettingsSchema` containing numeric literal unions.
 - [ ] Export `LobbySettingsPayload = z.infer<typeof lobbySettingsSchema>`.
@@ -112,6 +116,15 @@ Expected RED: `lobbySettingsSchema` and `lobby:settings` do not exist.
 ```ts
 'lobby:settings': (
   payload: LobbySettingsPayload,
+  acknowledge: (ack: Ack<null>) => void
+) => void;
+```
+
+- [ ] Export `roomLeaveSchema = z.object({}).strict()` and add:
+
+```ts
+'room:leave': (
+  payload: z.infer<typeof roomLeaveSchema>,
   acknowledge: (ack: Ack<null>) => void
 ) => void;
 ```
@@ -209,6 +222,7 @@ git commit -m "feat: apply room settings to match rules"
 - Modify: `src/server/rooms/roomManager.ts`
 - Modify: `src/server/rooms/roomManager.test.ts`
 - Modify: `src/server/network/socketHandlers.ts`
+- Modify: `src/server/network/createGameServer.ts`
 - Modify: `tests/integration/socketFlow.test.ts`
 
 ### Step 1: Write failing room-domain tests
@@ -221,6 +235,10 @@ git commit -m "feat: apply room settings to match rules"
 - [ ] Prove host writes in `COUNTDOWN`, `MATCH`, or `RESULT` get `INVALID_PHASE`.
 - [ ] Prove settings survive current host disconnect/migration, former-host resume, return-to-lobby, direct rematch, and repeated rematches.
 - [ ] Prove `MATCH_STARTED` carries the copied pair.
+- [ ] Prove leave in `LOBBY` removes membership/token authority immediately, preserves other readiness, migrates host, and closes the last-player room.
+- [ ] Prove leave in `RESULT` returns survivors to `LOBBY` with settings preserved.
+- [ ] Prove active 3+ leave removes the match entity, score, input, and owned pulses while a viable match continues.
+- [ ] Prove active two-player leave produces immediate `NO_CONTEST` and no reconnect reservation for the leaver.
 - [ ] Run and observe RED:
 
 ```bash
@@ -244,6 +262,8 @@ setRoomSettings(connectionId: string, settings: RoomSettings): void
 - [ ] Pass `room.settings` to `createMatchState` in `startMatch`.
 - [ ] Include a copied pair in `publishRoom`.
 - [ ] Leave reset/rematch code free of settings reassignment so room settings naturally persist.
+- [ ] Add `leaveRoom(connectionId: string): string`. Remove connection/player/input and match-owned state atomically, invalidate the deleted player's resume token, migrate host, close an empty room, reset a result room to lobby, or invoke existing population reconciliation for an active room.
+- [ ] If an active viable match continues, publish an updated snapshot and room state without a ghost scoreboard entry.
 
 ### Step 3: Write failing socket integration tests
 
@@ -252,6 +272,7 @@ setRoomSettings(connectionId: string, settings: RoomSettings): void
 - [ ] Prove a later real update clears both ready flags.
 - [ ] Prove guest update acknowledgement is `NOT_HOST` and neither client receives a changed pair.
 - [ ] Prove unsupported/extra fields receive `INVALID_PAYLOAD` through the existing schema handler.
+- [ ] Prove `room:leave` succeeds, clears the old Socket.IO room/player-connection mapping, allows the same connected socket to create/join again, and makes the old resume token fail.
 - [ ] Run and observe RED:
 
 ```bash
@@ -262,6 +283,7 @@ npx vitest run tests/integration/socketFlow.test.ts -t "room settings" --maxWork
 
 - [ ] Register `lobby:settings` beside existing lobby actions in `registerSocketHandlers`.
 - [ ] Parse with `lobbySettingsSchema` and call `manager.setRoomSettings(socket.id, payload)` through the existing acknowledged-handler path.
+- [ ] Register strict `room:leave` through the same acknowledged path. After manager mutation, leave the Socket.IO channel and clear `playerConnections` without disconnecting the socket.
 - [ ] Do not add a fire-and-forget alternative.
 - [ ] Run focused GREEN:
 
@@ -273,8 +295,8 @@ npm run typecheck
 ### Step 5: Commit Task 3
 
 ```bash
-git add src/server/rooms/roomManager.ts src/server/rooms/roomManager.test.ts src/server/network/socketHandlers.ts tests/integration/socketFlow.test.ts
-git commit -m "feat: synchronize host room settings"
+git add src/server/rooms/roomManager.ts src/server/rooms/roomManager.test.ts src/server/network/socketHandlers.ts src/server/network/createGameServer.ts tests/integration/socketFlow.test.ts
+git commit -m "feat: synchronize room lifecycle"
 ```
 
 ---
@@ -294,6 +316,9 @@ git commit -m "feat: synchronize host room settings"
 - [ ] Prove store pending action becomes `settings` while acknowledgement is unresolved and then clears.
 - [ ] Prove the displayed/canonical `room.settings` remains unchanged until a server `room:state` arrives; no optimistic replacement is allowed.
 - [ ] Prove a failed acknowledgement preserves the last authoritative pair and sets `errorAction: 'settings'`.
+- [ ] Prove `leaveRoom()` emits one acknowledged empty `room:leave` request.
+- [ ] Prove successful leave clears the departed resume token/last-room pointer and resets room, match, session, errors, and reconnect UI to `LANDING` while preserving connection and sound state.
+- [ ] Prove failed or timed-out leave preserves session, room, match, and stored resume authority.
 - [ ] Run and observe RED:
 
 ```bash
@@ -304,9 +329,12 @@ npx vitest run src/client/network/GameClient.test.ts src/client/state/gameStore.
 
 - [ ] Add `setRoomSettings(settings: RoomSettings): Promise<Ack<null>>` to `GameClient` and `SocketGameClient`.
 - [ ] Add `'settings'` to `PendingAction`.
+- [ ] Add `'leave-room'` to `PendingAction`.
 - [ ] Add `actions.setRoomSettings(settings: RoomSettings): Promise<void>`.
+- [ ] Add `GameClient.leaveRoom(): Promise<Ack<null>>` and `actions.leaveRoom(): Promise<void>`.
 - [ ] Use the existing `runAcknowledgedAction('settings', ...)` path.
 - [ ] Do not patch `state.room` inside the action; wait for authoritative `room:state`.
+- [ ] Implement leave as a dedicated acknowledged action: clear persisted/canonical state only after success and suppress automatic resume for the departed session.
 - [ ] Run focused GREEN and typecheck:
 
 ```bash
@@ -318,12 +346,12 @@ npm run typecheck
 
 ```bash
 git add src/client/network/GameClient.ts src/client/network/GameClient.test.ts src/client/state/gameStore.ts src/client/state/gameStore.test.ts
-git commit -m "feat: expose room settings client action"
+git commit -m "feat: expose room lifecycle client actions"
 ```
 
 ---
 
-## Task 5: Lobby controls and host/guest UX
+## Task 5: Lobby controls and room-exit UX
 
 **Files:**
 
@@ -331,6 +359,8 @@ git commit -m "feat: expose room settings client action"
 - Modify: `src/client/App.test.tsx`
 - Modify: `src/client/ui/LobbyScreen.tsx`
 - Modify: `src/client/ui/LobbyScreen.test.tsx`
+- Modify: `src/client/ui/TopBar.tsx`
+- Create: `src/client/ui/TopBar.test.tsx`
 - Modify: `src/client/styles/layout.css`
 
 ### Step 1: Write failing UI behavior tests
@@ -341,10 +371,11 @@ git commit -m "feat: expose room settings client action"
 - [ ] Prove changing duration from 120 to 90 submits exactly `{ durationMs: 90_000, knockoutTarget: 5 }`.
 - [ ] Prove changing target from 5 to 7 submits exactly `{ durationMs: 120_000, knockoutTarget: 7 }`.
 - [ ] Prove a settings failure uses the existing recoverable inline error surface.
+- [ ] Prove the top bar shows `Odadan Çık` in `LOBBY`, `MATCH`, and `RESULT`, hides it on `LANDING`, disables it for any pending action, and calls exactly one leave action.
 - [ ] Run and observe RED:
 
 ```bash
-npx vitest run src/client/ui/LobbyScreen.test.tsx src/client/App.test.tsx -t "room settings" --maxWorkers=1
+npx vitest run src/client/ui/LobbyScreen.test.tsx src/client/ui/TopBar.test.tsx src/client/App.test.tsx -t "room settings|leave room" --maxWorkers=1
 ```
 
 ### Step 2: Build the compact lobby section
@@ -363,19 +394,20 @@ onSetRoomSettings: (settings: RoomSettings) => Promise<void>;
 - [ ] Each change submits one full pair made from the selected value and the other current authoritative value.
 - [ ] Disable both selects for non-hosts, missing self player, or any pending action; set `aria-busy` for the settings action.
 - [ ] Include `settings` in the existing lobby error-action filter.
+- [ ] Pass `store.actions.leaveRoom` into `TopBar` and render one quiet `Odadan Çık` utility action whenever `state.session` and `state.room` exist. Do not duplicate the button inside each screen.
 - [ ] Style the section with the existing quiet panel, label, focus-ring, spacing, and responsive grammar. Do not add a modal, decorative card stack, or colored ground effects.
 - [ ] Run focused GREEN:
 
 ```bash
-npx vitest run src/client/ui/LobbyScreen.test.tsx src/client/App.test.tsx --maxWorkers=1
+npx vitest run src/client/ui/LobbyScreen.test.tsx src/client/ui/TopBar.test.tsx src/client/App.test.tsx --maxWorkers=1
 npm run typecheck
 ```
 
 ### Step 3: Commit Task 5
 
 ```bash
-git add src/client/App.tsx src/client/App.test.tsx src/client/ui/LobbyScreen.tsx src/client/ui/LobbyScreen.test.tsx src/client/styles/layout.css
-git commit -m "feat: add host room settings controls"
+git add src/client/App.tsx src/client/App.test.tsx src/client/ui/LobbyScreen.tsx src/client/ui/LobbyScreen.test.tsx src/client/ui/TopBar.tsx src/client/ui/TopBar.test.tsx src/client/styles/layout.css
+git commit -m "feat: add room controls"
 ```
 
 Before committing, inspect `git diff --cached --name-only` and unstage any unrelated client files.
@@ -453,6 +485,8 @@ git commit -m "feat: present configured match rules"
 - [ ] Reconnect one client and prove the pair remains.
 - [ ] Reach result through authoritative test choreography, direct-rematch, and prove the same pair remains in the next match snapshot/HUD.
 - [ ] Return to lobby in a separate branch of the scenario and prove the controls retain the pair and are editable by the current host.
+- [ ] From the guest browser, click `Odadan Çık` and prove it reaches landing, the host roster updates live, the old resume token cannot restore membership, and the same connected guest can join again.
+- [ ] In a second room, make the host leave and prove the earliest connected player becomes host with the configured settings unchanged.
 - [ ] Run and observe RED:
 
 ```bash
@@ -482,6 +516,7 @@ Expected: only `MatchTiming` field names and helper-driven local variables remai
 ### Step 4: Update user-facing documentation
 
 - [ ] Document host-only room settings, exact choices/defaults, ready reset, and persistence in `README.md`.
+- [ ] Document explicit leave availability, host migration, empty-room cleanup, and active-match population/no-contest behavior.
 - [ ] Keep WASD/J/K/Space controls and corrected one-renderer LAN performance methodology intact.
 - [ ] Do not claim WAN, mobile, bots, maps, or other modes.
 
@@ -490,7 +525,7 @@ Expected: only `MatchTiming` field names and helper-driven local variables remai
 - [ ] Focused room settings:
 
 ```bash
-npx vitest run src/shared/roomSettings.test.ts src/shared/protocol.test.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.test.ts src/client/network/GameClient.test.ts src/client/state/gameStore.test.ts src/client/ui/LobbyScreen.test.tsx src/client/ui/MatchHud.test.tsx src/client/game/phaser/arenaVisualPlan.test.ts src/client/game/phaser/ArenaView.test.ts tests/integration/socketFlow.test.ts --maxWorkers=1
+npx vitest run src/shared/roomSettings.test.ts src/shared/protocol.test.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.test.ts src/client/network/GameClient.test.ts src/client/state/gameStore.test.ts src/client/ui/LobbyScreen.test.tsx src/client/ui/TopBar.test.tsx src/client/ui/MatchHud.test.tsx src/client/game/phaser/arenaVisualPlan.test.ts src/client/game/phaser/ArenaView.test.ts tests/integration/socketFlow.test.ts --maxWorkers=1
 ```
 
 - [ ] Full non-browser gate:
@@ -534,10 +569,11 @@ git commit -m "test: prove configurable LAN matches"
 
 ## Definition of Done
 
-- [ ] Host-only settings are authoritative and strict.
+- [ ] Host-only settings and participant leave requests are authoritative and strict.
 - [ ] Every client sees one synchronized pair and real changes reset readiness.
 - [ ] Duration, score victory, contraction, HUD, reconnect, result, and rematch use the copied match pair.
 - [ ] Defaults remain behaviorally identical to the former 120-second/first-to-five rules.
 - [ ] No obsolete global rule constant or optimistic client settings state remains.
+- [ ] Leave works from every room screen, invalidates resume authority, preserves a viable room, migrates host, and destroys an empty room.
 - [ ] Focused, full, load, two-browser, representative performance, lint, typecheck, and build gates pass on the same accepted commit.
 - [ ] Reviewed code is merged and pushed to public `main`, and the LAN server is reachable.

@@ -83,6 +83,92 @@ async function release(page: Page, ...keys: string[]): Promise<void> {
   await Promise.all(keys.map((key) => page.keyboard.up(key)));
 }
 
+test('host room settings remain authoritative through a guest leave and clean rejoin', async ({ browser, game }) => {
+  const configuredSettings = { durationMs: 90_000, knockoutTarget: 3 } as const;
+  const match = await createTwoPlayerMatch(browser, game, configuredSettings);
+  try {
+    const started = snapshot(game, match.code);
+    expect(started.settings).toEqual(configuredSettings);
+    expect(started.remainingMs).toBeGreaterThan(85_000);
+    expect(started.remainingMs).toBeLessThanOrEqual(configuredSettings.durationMs);
+
+    for (const participant of [match.host, match.guest]) {
+      await expect(participant.page.getByRole('timer', { name: 'Kalan süre' }))
+        .toHaveText(/^01:(?:[0-2]\d|30)$/);
+      await expect(participant.page.getByLabel('Kazanma hedefi')).toHaveText('İlk 3 knockout');
+      await expect(participant.page.getByRole('button', { name: 'Odadan Çık' })).toHaveCount(1);
+    }
+
+    const leaveMarker = marker(game, match.code);
+    await match.guest.page.getByRole('button', { name: 'Odadan Çık' }).click();
+
+    await expect(match.guest.page.getByRole('heading', { name: 'NEON KNOCKOUT' })).toBeVisible();
+    await expect(match.guest.page.getByRole('button', { name: 'Odadan Çık' })).toHaveCount(0);
+    const noContest = await waitForEvent(
+      game,
+      match.code,
+      leaveMarker,
+      'RESULT',
+      (event) => event.reason === 'NO_CONTEST'
+    );
+    expect(noContest).toMatchObject({ winnerPlayerId: null, reason: 'NO_CONTEST' });
+
+    await expect(match.host.page.getByRole('region', { name: 'Oda lobisi' })).toBeVisible();
+    await expect.poll(() => game.server.rooms.debugRoom(match.code)).toMatchObject({
+      phase: 'LOBBY',
+      connectedCount: 1,
+      reservedCount: 0,
+      playerIds: [match.hostPlayerId]
+    });
+    await expect(match.host.page.getByLabel('Maç süresi')).toHaveValue('90000');
+    await expect(match.host.page.getByLabel('Kazanma hedefi')).toHaveValue('3');
+    await expect(match.host.page.getByLabel('Maç süresi')).toBeEnabled();
+    await expect(match.host.page.getByLabel('Kazanma hedefi')).toBeEnabled();
+    await expect(match.host.page.getByRole('list', { name: 'Oyuncular' }).getByText('Linus')).toHaveCount(0);
+
+    expect(await match.guest.page.evaluate((roomCode) => ({
+      lastRoom: window.localStorage.getItem('neon-relay:last-room'),
+      resumeToken: window.localStorage.getItem(`neon-relay:${roomCode}:resume`)
+    }), match.code)).toEqual({ lastRoom: null, resumeToken: null });
+
+    await match.guest.page.getByLabel('Oyuncu adı').fill('Linus');
+    await match.guest.page.getByLabel('Oda kodu').fill(match.code);
+    await match.guest.page.getByRole('button', { name: 'Odaya Katıl' }).click();
+    await expect(match.guest.page.getByRole('region', { name: 'Oda lobisi' })).toBeVisible();
+    await expect(match.guest.page.getByLabel('Maç süresi')).toHaveValue('90000');
+    await expect(match.guest.page.getByLabel('Kazanma hedefi')).toHaveValue('3');
+    await expect(match.guest.page.getByLabel('Maç süresi')).toBeDisabled();
+    await expect(match.guest.page.getByLabel('Kazanma hedefi')).toBeDisabled();
+    await expect(match.host.page.getByRole('list', { name: 'Oyuncular' }).getByText('Linus')).toBeVisible();
+    await expect.poll(() => game.server.rooms.debugRoom(match.code)).toMatchObject({
+      phase: 'LOBBY',
+      connectedCount: 2,
+      reservedCount: 0
+    });
+    const rejoinedIds = game.server.rooms.debugRoom(match.code)?.playerIds ?? [];
+    expect(rejoinedIds).toContain(match.hostPlayerId);
+    expect(rejoinedIds).not.toContain(match.guestPlayerId);
+
+    await match.guest.page.getByRole('button', { name: 'Odadan Çık' }).click();
+    await expect(match.guest.page.getByRole('heading', { name: 'NEON KNOCKOUT' })).toBeVisible();
+    await expect(match.host.page.getByRole('list', { name: 'Oyuncular' }).getByText('Linus')).toHaveCount(0);
+    await expect.poll(() => game.server.rooms.debugRoom(match.code)?.playerIds).toEqual([match.hostPlayerId]);
+    expect(await match.guest.page.evaluate((roomCode) => ({
+      lastRoom: window.localStorage.getItem('neon-relay:last-room'),
+      resumeToken: window.localStorage.getItem(`neon-relay:${roomCode}:resume`)
+    }), match.code)).toEqual({ lastRoom: null, resumeToken: null });
+
+    await match.guest.page.reload();
+    await expect(match.guest.page.getByRole('heading', { name: 'NEON KNOCKOUT' })).toBeVisible();
+    await expect(match.guest.page.getByText('Bağlı', { exact: true })).toBeVisible();
+    await expect(match.guest.page.getByRole('button', { name: 'Odadan Çık' })).toHaveCount(0);
+    await expect.poll(() => game.server.rooms.debugRoom(match.code)?.playerIds).toEqual([match.hostPlayerId]);
+    await assertNoUnexpectedErrors(game, match.host, match.guest);
+  } finally {
+    await match.close();
+  }
+});
+
 test('two keyboard-only production contexts prove combat, reconnect, result, and rematch', async ({ browser, game }) => {
   const match = await createTwoPlayerMatch(browser, game);
   const journeyMarker = marker(game, match.code);

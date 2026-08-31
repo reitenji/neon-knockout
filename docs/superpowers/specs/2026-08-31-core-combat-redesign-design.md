@@ -53,34 +53,37 @@ There is one control scheme for every player:
 
 | Input | Action |
 | --- | --- |
-| `WASD` | Move |
-| Arrow key(s) | Immediate quick attack in that direction |
-| Hold `Shift` + arrow key(s) | Charge a heavy attack and steer its direction |
-| Release `Shift` | Lock the current direction and release the heavy attack |
+| `WASD` | Move and update the shared eight-direction attack aim |
+| `J` | Start one quick attack in the current or last valid `WASD` direction |
+| Hold `K` | Charge a heavy attack; steer it with `WASD` |
+| Release `K` | Lock the retained direction and release the heavy attack |
 | `Space` | Dash along movement input, or facing when stationary |
 
-Opposing direction pairs cancel. Two perpendicular arrow keys form a normalized
-diagonal. A quick attack begins on the transition from no held attack direction
-to one or more arrow keys while `Shift` is not held.
+Opposing `WASD` direction pairs cancel. Two perpendicular movement keys form a
+normalized diagonal. Any non-zero `WASD` vector updates the retained attack
+direction; releasing every movement key preserves the last valid direction, so
+a stationary fighter can still attack deliberately. The initial retained
+direction is right.
 
-Holding an arrow never auto-repeats a quick attack: every combo step needs an
-arrow release followed by a new press. Heavy charge begins when `Shift` is
-pressed with a valid arrow direction already held, or when a valid arrow
-direction is first pressed while `Shift` is held.
+A quick attack begins only on the rising edge of physical `J`. Holding `J`
+never auto-repeats, changing `WASD` while `J` remains held never creates another
+quick, and another combo step requires releasing and pressing `J` again.
 
-While `Shift` is held, arrow changes update the heavy aim in eight directions.
-Releasing all arrows retains the last valid heavy direction and continues the
-charge. Releasing `Shift` locks that direction for windup, contact, recovery,
-and any full-charge projectile. A release before the existing 180 ms minimum
-charge cancels without producing an attack.
+Holding physical `K` sends the existing heavy-held signal. `WASD` changes update
+the heavy aim while the charge continues, and releasing all movement keys keeps
+the last valid heavy direction. Releasing `K` locks that direction for windup,
+contact, recovery, and any full-charge projectile. A release before the existing
+180 ms minimum charge cancels without producing an attack. Pressing `J` while
+`K` is held does not create a quick, and keeping `J` held through the `K`
+release cannot synthesize one.
 
 The client continues to send normalized `moveX`, `moveY`, `aimX`, `aimY`,
 `quick`, `heavy`, and `dash` fields. Their protocol shape remains stable; only
-the input source changes. Mouse position and mouse buttons no longer influence
-gameplay. Gameplay keys prevent their browser scrolling/default actions while
-the arena owns focus. Blur, hidden-document, scene shutdown, and disconnect
-clear every held key and require a full release before accepting held input
-again.
+the input source changes. Mouse position, mouse buttons, arrow keys, and either
+`Shift` key do not influence gameplay. Gameplay keys prevent their browser
+scrolling/default actions while the arena owns focus. Blur, hidden-document,
+scene shutdown, and disconnect clear every held key and require a full physical
+release before accepting held input again.
 
 ## Combat model
 
@@ -110,7 +113,7 @@ the direction held when the buffered attack becomes committed.
 
 ### Heavy charge and release
 
-Heavy charge remains steerable until `Shift` is released. Any confirmed hit
+Heavy charge remains steerable until `K` is released. Any confirmed hit
 during charge cancels it. The release begins from the exact pose represented by
 the current authoritative charge duration rather than assuming a full charge.
 
@@ -194,6 +197,9 @@ Animation timing is driven by the same combat profiles as the server.
   client-only trajectory.
 - `CLASH`, `PERFECT_DODGE`, pulse spawn, pulse break, hit, and knockout each have
   deduplicated event feedback.
+- Fighters have no colored ground-footprint, underglow, or decorative contact
+  polygon beneath them. Chassis accent, local-player marker, charge direction,
+  attack trail, and authoritative combat feedback remain the readable cues.
 
 Server time never pauses. Hit-stop is presentation-only, local to the affected
 fighters, and capped at 35 ms. Reduced-motion mode keeps state clarity while
@@ -256,9 +262,9 @@ access stays private to automated tests.
 
 ### Unit and property tests
 
-- Keyboard sampling: cardinal/diagonal quick edges, Shift charge steering,
-  release locking, early cancel, dash direction, blur suppression, and 60 Hz
-  cap.
+- Keyboard sampling: cardinal/diagonal retained `WASD` aim, `J` quick edges,
+  `K` charge steering and release locking, early cancel, dash direction, inert
+  arrows/Shift/mouse, blur suppression, and 60 Hz cap.
 - Shared geometry: swept-capsule/hurt-circle boundaries, continuous collision,
   profile reach, rotational symmetry, and no duplicate target hit.
 - Animation: partial-charge release begins from the exact preceding pose; active
@@ -296,9 +302,9 @@ access stays private to automated tests.
 The redesign is accepted only when all of the following are demonstrated on one
 commit:
 
-1. No mouse action changes movement, facing, or attacks.
-2. Keyboard quick, steerable charge, locked release, dash, and diagonal input
-   work in a real two-browser match.
+1. No mouse, arrow-key, or `Shift` action changes movement, facing, or attacks.
+2. `WASD` movement/aim, rising-edge `J` quick, steerable `K` charge, locked
+   release, dash, and diagonal input work in a real two-browser match.
 3. Partial heavy release has pose continuity; full charge visibly produces one
    authoritative Neon Pulse.
 4. Every confirmed hit intersects the shared visible shape and target hurtbox;

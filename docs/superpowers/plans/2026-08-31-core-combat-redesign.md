@@ -8,7 +8,7 @@ This ExecPlan is a living document. The sections `Progress`, `Surprises & Discov
 
 After this work, two to eight friends on the same local network can play a two-minute browser brawler using only a keyboard. Attacks visibly travel through the same space the server tests for a hit; a partially charged heavy no longer jumps to a full-charge pose; full charge launches one short Neon Pulse; clashes and well-timed dashes create readable counterplay. The existing room creation, join, ready, reconnect, result, and rematch flow remains intact.
 
-The result is visible by running `npm run lan`, opening the printed local address in two isolated browser contexts, creating and joining a room, and playing with `WASD`, the arrow keys, `Shift`, and `Space`. Completion requires the automated unit, integration, load, build, browser, and performance gates plus this real two-browser LAN journey to pass on the same commit.
+The result is visible by running `npm run lan`, opening the printed local address in two isolated browser contexts, creating and joining a room, and playing with `WASD`, `J`, `K`, and `Space`. Completion requires the automated unit, integration, load, build, browser, and performance gates plus this real two-browser LAN journey to pass on the same commit.
 
 ## Progress
 
@@ -70,8 +70,8 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - Decision: retain Knockout FFA at 120 seconds or five credited knockouts; defer Neon Crown and Knockout Rounds without adding a mode framework.
   Rationale: the user approved those as later modes and asked to make the current core mechanics good first.
   Date/Author: 2026-08-31, user and Codex.
-- Decision: use one keyboard-only scheme: `WASD` movement, arrow-key quick direction, `Shift` plus arrows for steerable heavy charge, `Shift` release to lock/release, and `Space` dash.
-  Rationale: it removes mouse-button ambiguity and gives every LAN player the same directional capability.
+- Decision: use one keyboard-only scheme: `WASD` moves and retains the eight-direction attack aim, rising-edge `J` starts one quick, held/released `K` charges and releases a steerable heavy, and `Space` dashes; arrows, `Shift`, and mouse are inert.
+  Rationale: live play showed that a second directional cluster made aiming harder; sharing movement and aim while separating quick/heavy onto adjacent keys keeps attacks deliberate and equally usable on every LAN keyboard.
   Date/Author: 2026-08-31, user and Codex.
 - Decision: keep the existing `InputFrame` wire fields and change only their physical input source.
   Rationale: the normalized move/aim/button contract already crosses prediction, Socket.IO, and the authoritative simulation cleanly.
@@ -123,7 +123,9 @@ The test stack is Vitest for pure/unit/integration/load tests and Playwright for
 ## Fixed decisions and constraints
 
 - The shipping mode remains Knockout FFA: 120 seconds or first to five credited knockouts.
-- `WASD` moves, arrow keys attack in eight directions, `Shift` charges/steers heavy, releasing `Shift` locks and releases, and `Space` dashes.
+- `WASD` moves and updates retained eight-direction aim, rising-edge `J` starts one quick, held/released `K` charges and releases a steerable heavy, and `Space` dashes. The initial retained aim is right.
+- Releasing all `WASD` keys retains the last non-zero aim. Holding `J` never repeats; `J` pressed during `K` charge is suppressed through release until `J` itself is released and pressed again.
+- Arrow keys and either `Shift` key are inert and uncaptured by gameplay.
 - Mouse input has zero gameplay effect. No controller, touch, alternate preset, mode framework, Crown mode, or Rounds mode is added in this work.
 - The wire shape of `InputFrame` stays unchanged.
 - The server is the only source of hit, clash, dodge, pulse, knockout, score, and phase truth.
@@ -134,11 +136,11 @@ The test stack is Vitest for pure/unit/integration/load tests and Playwright for
 
 ## Plan of Work
 
-Task 0 first restores trustworthy test-runner separation. The first feature stage then establishes two independent foundations: Task 1 creates the shared profile and geometry library without changing live combat, while Task 2 changes only the physical input adapter and keeps the existing wire frame. Their file ownership does not overlap, but the selected subagent-driven workflow runs them sequentially so each diff receives an isolated review. Each must finish with focused tests and typecheck green before its commit is accepted.
+Task 0 first restores trustworthy test-runner separation. The first feature stage then establishes two independent foundations: Task 1 creates the shared profile and geometry library without changing live combat, while Task 2 records the first keyboard-only physical input adapter and keeps the existing wire frame. After live play, the user replaced Task 2's arrow/Shift mapping with the final `WASD` plus `J`/`K` mapping in Task 8; Task 8's control addendum supersedes only Task 2's physical-key semantics while preserving its protocol and lifecycle work.
 
 The second stage moves gameplay truth to the new model. Task 3 freezes the state and event interfaces, Task 4 replaces melee sector tests with shared swept shapes plus clash/perfect-dodge rules, and Task 5 adds projectiles and pacing while aligning the full server phase order. These tasks are sequential because every later one consumes the runtime types and deterministic ordering established by the former. `src/server/rooms/roomManager.ts` belongs to Task 5 until that commit is green; Task 8 may extend it only afterward for private test-harness access, so parallel workers cannot collide there.
 
-The third stage makes the new truth feel good. Task 6 fixes local prediction and animation continuity. After the shared snapshot interface is frozen it may overlap with the server-only portion of Task 5, but it must not invent projectile or hit outcomes. Task 7 then renders shared sweep paths, authoritative pulses, charge direction, event effects, audio, and HUD feedback. Task 8 proves the whole product through real inputs, load/performance checks, LAN health, review, and public GitHub state.
+The third stage makes the new truth feel good. Task 6 fixes local prediction and animation continuity. After the shared snapshot interface is frozen it may overlap with the server-only portion of Task 5, but it must not invent projectile or hit outcomes. Task 7 then renders shared sweep paths, authoritative pulses, charge direction, event effects, audio, and HUD feedback. Task 8 first applies the user-approved final control remap, then proves the whole product through real inputs, load/performance checks, LAN health, review, and public GitHub state.
 
 Prerequisite L is inserted immediately after Task 3 implementation review because the new full-lint gate exposed two older Playwright fixture errors. It is behavior-neutral, independently committed and reviewed, and must pass before Task 3 is marked complete or Task 4 starts.
 
@@ -865,14 +867,23 @@ Expected: pulse view/module and new adapter methods/cues do not exist, the trail
 
 ## Task 8: Prove real LAN gameplay, load, performance, reconnect, and release state
 
-This task converts implementation into delivery evidence. At its end, real keyboard input passes the two-context journey, eight clients and eight browsers meet stability/frame gates, both health addresses work, review findings are resolved, documentation matches behavior, and the same accepted SHA is visible in the public repository.
+This task converts implementation into delivery evidence. At its end, real keyboard input passes the two-context journey, eight clients meet the stability gate, one real browser meets the frame gate while rendering an authoritative eight-player match, both health addresses work, review findings are resolved, documentation matches behavior, and the same accepted SHA is visible in the public repository.
 
-**Owner boundary:** integration/E2E/load tests, private harness support, README, live browser acceptance, and delivery evidence. Do not change core mechanics unless a failing acceptance test reveals a scoped defect.
+**Owner boundary:** final physical input adapter and its direct HUD/test consumers; integration/E2E/load tests; private harness support; README; live browser acceptance; and delivery evidence. Do not change the `InputFrame` wire shape or server combat mechanics unless a failing acceptance test reveals a scoped defect.
 
 **Files:**
 
 - Modify: `src/server/network/createGameServer.ts`
-- Modify: `src/server/rooms/roomManager.ts` only if a private deterministic harness method is required
+- Modify: `src/server/rooms/roomManager.ts` for the private deterministic harness and the acceptance-proven pending quick/dash edge coalescing defect
+- Modify: `src/server/rooms/roomManager.test.ts` for the pending-edge regression only
+- Modify: `src/client/game/phaser/ArenaInput.ts`
+- Modify: `src/client/game/phaser/ArenaInput.test.ts`
+- Modify: `src/client/game/phaser/ArenaSession.test.ts` only if its direct input fixture consumes the old physical mapping
+- Modify: `src/client/game/phaser/ArenaView.ts` and `src/client/game/phaser/ArenaView.test.ts` only if profiling proves unchanged per-frame graphics redraw causes the exact browser frame-budget failure
+- Modify: `src/client/game/phaser/FighterView.ts` and `src/client/game/phaser/FighterView.test.ts` for the proven redraw cache and the user-requested removal of the decorative colored ground footprint; preserve local marker, charge, attack, and gameplay cues
+- Modify: `src/client/ui/MatchHud.tsx`
+- Modify: `src/client/ui/MatchHud.test.tsx`
+- Modify: `src/client/App.test.tsx` only for its direct control-copy expectation
 - Modify: `tests/integration/socketFlow.test.ts`
 - Modify: `tests/e2e/fixtures.ts`
 - Modify: `tests/e2e/knockout.spec.ts`
@@ -894,6 +905,12 @@ The private test harness may gain only in-process helpers with no network exposu
 
 `recentEvents` is a bounded cloned ring buffer enabled only when `enableTestHarness` is true and cleared on server stop. It exists so browser tests assert authoritative outcomes rather than infer hits from animation.
 
+1. Add red `ArenaInput` tests proving normalized `WASD` movement also updates aim, released movement retains the last direction, initial aim is right, a `J` rising edge emits exactly one quick, held `J` never repeats while `WASD` changes, held `K` charges and steers through `WASD`, and `K` release emits the existing heavy fall used for sub-180 ms cancellation or committed release. Prove `J` during `K` cannot synthesize a quick through release.
+1. Add red lifecycle/source tests proving raw `KeyJ`/`KeyK` release gates survive Phaser reset across blur/pause/sleep, gameplay captures are exactly `W`, `A`, `S`, `D`, `J`, `K`, and `Space`, and arrows plus both `Shift` keys are inert and uncaptured. Mouse remains absent from the gameplay input path.
+1. Implement the minimum input-source/state change through the unchanged `{seq, moveX, moveY, aimX, aimY, quick, heavy, dash}` frame. Update the HUD and README to show `WASD`, `J`, `K`, and `Space`; remove arrow/Shift instructions.
+1. Run `npx vitest run src/client/game/phaser/ArenaInput.test.ts src/client/game/phaser/ArenaSession.test.ts src/client/ui/MatchHud.test.tsx src/client/App.test.tsx --maxWorkers=1`, first observing the new assertions fail for the old mapping and then pass after implementation.
+1. Add a real FighterView harness assertion that fighter creation emits no ground-footprint polygons, observe it fail while `createContactFootprint()` exists, then remove that complete decorative layer and its pose writes. Keep the local-player marker, chassis accent, charge indicator, attack trail, labels, and combat feedback unchanged; rerun focused view and browser visual gates.
+1. Add a red RoomManager regression in which a quick or dash rising-edge frame is followed by a newer neutral frame before one simulation advance. Coalesce only unprocessed `quick` and `dash` flags into the newest queued frame while taking sequence, movement, aim, and heavy state from that newest frame; each edge must be processed once, never lost or delayed.
 1. Rewrite the integration combat matrix to prove quick/quick, heavy/quick, heavy/heavy, attack/pulse, pulse/player, perfect dodge, charge interruption, event order, 600 ms respawn, contraction, and sudden death from real `InputFrame` sequences.
 1. Rewrite `knockout.spec.ts` as a keyboard-only two-context journey:
   - mouse movement/click does not change facing, action, or position;
@@ -905,7 +922,8 @@ The private test harness may gain only in-process helpers with no network exposu
   - reconnect preserves identity/score/stats and starts neutral;
   - result and rematch still work.
 1. Keep `forceKnockout` only to shorten the final result/rematch setup after at least one real combat knockout or authoritative combat contact has been proven.
-1. Rewrite the eight-browser performance burst to use arrow quick edges, full-charge releases, and `Space` dashes. Preserve the acceptance thresholds: median at least 58 FPS and p95 frame duration below 25 ms.
+1. Rewrite the performance burst around the real LAN resource boundary: one measured browser renders the complete authoritative eight-player match, while seven lightweight Socket.IO/GameClient participants stay connected and generate legal monotonic `WASD`/`J`/`K`/`Space`-semantic frames without local renderers. The measured browser must show all eight players, execute real keyboard quick/heavy/dash input, receive the burst's snapshots/effects, and sustain median at least 58 FPS with p95 frame duration below 25 ms. Multi-renderer runs on one physical host are diagnostics only and are not an acceptance model.
+1. Cache only proven unchanged Phaser graphics work, with regressions that unchanged inputs skip redraw while changed phase/progress/facing redraw correctly. Do not lower thresholds, player count, server input load, rendered player count, or effect coverage.
 1. Rewrite the eight-client 10-second load pattern with monotonic 60 Hz keyboard-semantic inputs: movement windows, quick edges, heavy holds/releases, dash edges, and idle windows. Preserve at least 250 snapshots per client, no unexpected server error, and clean handle shutdown.
 1. Update README controls, Neon Pulse, clashes, perfect dodge, 600 ms return, 78/75/40 pacing, LAN launch, health checks, and verification commands.
 1. Run the focused integration gate:
@@ -928,7 +946,7 @@ Expected: lint, both typechecks, all Vitest suites, the 8-client load test, and 
     npm run test:e2e
 
 
-Expected: two-context combat journey and eight-context performance test pass with no console/page errors.
+Expected: the two-context combat journey and representative one-browser/eight-player performance test pass with no console/page/server errors.
 
 1. Start the exact accepted production build:
 
@@ -988,7 +1006,7 @@ After the final implementation commit, run the complete proof on that unchanged 
     git diff --check
     git status --short
 
-`npm run verify` must finish with zero failed lint rules, zero TypeScript errors, zero failed Vitest tests, one passing eight-client load test, and a successful production build. `npm run test:e2e` must report both Playwright scenarios passed: the two-context combat journey and the eight-context frame-budget test. `git diff --check` must print nothing. `git status --short` may show the known generated `.playwright-cli/` and `output/` paths but no unstaged source change.
+`npm run verify` must finish with zero failed lint rules, zero TypeScript errors, zero failed Vitest tests, one passing eight-client load test, and a successful production build. `npm run test:e2e` must report both Playwright scenarios passed: the two-context combat journey and the representative one-browser/eight-player frame-budget test. `git diff --check` must print nothing. `git status --short` may show the known generated `.playwright-cli/` and `output/` paths but no unstaged source change.
 
 Search for unfinished implementation markers without making this plan match its own search command:
 
@@ -1024,13 +1042,13 @@ If the main checkout is dirty, the fast-forward is impossible, or the remote mov
 
 ## Validation and Acceptance
 
-Acceptance is behavioral. In a real two-browser match, moving or clicking the mouse must leave movement, facing, and attack state unchanged. `WASD` must move; a cardinal or diagonal arrow press must make one quick attack and must not repeat while held; holding `Shift` and changing arrows must steer charge; releasing all arrows must retain the last direction; releasing `Shift` at or after 180 ms must lock and release; `Space` must dash.
+Acceptance is behavioral. In a real two-browser match, moving or clicking the mouse and pressing arrows or `Shift` must leave gameplay unchanged. `WASD` must move and set normalized cardinal/diagonal aim; releasing it must retain the last non-zero aim. A `J` rising edge must make one quick in the current/retained direction and must not repeat while held. Holding `K` and changing `WASD` must steer charge; releasing all movement keys must retain the last direction; releasing `K` before 180 ms must cancel and releasing it at or after 180 ms must lock and release. `Space` must dash.
 
 A partial heavy must begin its release from the exact visible charge pose and create no pulse. A 700 ms charge must create exactly one server-owned pulse visible at the same position in both browsers. A quick/quick clash, heavy/quick priority, heavy/heavy clash, attack/pulse break, and first avoided dash contact must match the deterministic server tests and produce distinct, one-time visual/audio feedback. Confirmed hits must intersect the shared visible capsule and known epsilon-outside near misses must not create `HIT` events.
 
 A knockout must restore control in 600 ms, reset overload, preserve score/statistics, and apply no extra penalty. A self-fall must award no point. The warning must begin at 78 seconds remaining, contraction at 75, minimum arena at 40, and a tied regulation result must enter minimum-arena sudden death where only the next credited knockout wins.
 
-Reconnect must preserve identity, chassis, accent, score, statistics, and authoritative overload while clearing client-held keys. Result and rematch must still work. The eight-client load test must deliver at least 250 snapshots per client in ten seconds with no unexpected errors or leaked handles. The eight-browser performance scenario must sustain median 58 FPS or better and p95 frame duration below 25 ms on the acceptance host. Both localhost and the printed private-LAN `/health` URL must return HTTP 200. GitHub must show the accepted commit in the public `reitenji/neon-relay` repository.
+Reconnect must preserve identity, chassis, accent, score, statistics, and authoritative overload while clearing client-held keys. Result and rematch must still work. The eight-client load test must deliver at least 250 snapshots per client in ten seconds with no unexpected errors or leaked handles. The representative performance scenario—one real browser rendering all eight fighters while seven lightweight network participants drive the same match—must sustain median 58 FPS or better and p95 frame duration below 25 ms on the acceptance host. Both localhost and the printed private-LAN `/health` URL must return HTTP 200. GitHub must show the accepted commit in the public `reitenji/neon-relay` repository.
 
 ## Idempotence and Recovery
 

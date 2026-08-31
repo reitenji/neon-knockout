@@ -1,6 +1,7 @@
 import { expect, test as base, type Browser, type BrowserContext, type ConsoleMessage, type Page } from '@playwright/test';
 import { createGameServer, type GameServer } from '../../src/server/network/createGameServer.js';
 import type { MatchSnapshot } from '../../src/shared/model.js';
+import type { RoomSettings } from '../../src/shared/roomSettings.js';
 
 const REGULATION_TIMEOUT_MS = 12_000;
 
@@ -77,13 +78,47 @@ async function chooseChassisAndReady(player: PlayerPage, chassis: string): Promi
   await player.page.getByRole('button', { name: 'Hazırım' }).click();
 }
 
+async function applyRoomSettings(
+  host: PlayerPage,
+  guest: PlayerPage,
+  settings: RoomSettings
+): Promise<void> {
+  const hostDuration = host.page.getByLabel('Maç süresi');
+  const hostTarget = host.page.getByLabel('Kazanma hedefi');
+  const guestDuration = guest.page.getByLabel('Maç süresi');
+  const guestTarget = guest.page.getByLabel('Kazanma hedefi');
+
+  await expect(hostDuration).toBeEnabled();
+  await expect(hostTarget).toBeEnabled();
+  await expect(guestDuration).toBeDisabled();
+  await expect(guestTarget).toBeDisabled();
+
+  if (await hostDuration.inputValue() !== String(settings.durationMs)) {
+    await hostDuration.selectOption(String(settings.durationMs));
+  }
+  await expect(hostDuration).toHaveValue(String(settings.durationMs));
+  await expect(guestDuration).toHaveValue(String(settings.durationMs));
+
+  if (await hostTarget.inputValue() !== String(settings.knockoutTarget)) {
+    await hostTarget.selectOption(String(settings.knockoutTarget));
+  }
+  await expect(hostTarget).toHaveValue(String(settings.knockoutTarget));
+  await expect(guestTarget).toHaveValue(String(settings.knockoutTarget));
+  await expect(guestDuration).toBeDisabled();
+  await expect(guestTarget).toBeDisabled();
+}
+
 function playerId(snapshot: MatchSnapshot, name: string): string {
   const player = snapshot.players.find((candidate) => candidate.name === name);
   if (!player) throw new Error(`Missing ${name} in match snapshot.`);
   return player.playerId;
 }
 
-export async function createTwoPlayerMatch(browser: Browser, game: E2eGame): Promise<MatchPages> {
+export async function createTwoPlayerMatch(
+  browser: Browser,
+  game: E2eGame,
+  settings?: RoomSettings
+): Promise<MatchPages> {
   const host = await openPlayer(browser, game.origin);
   const guest = await openPlayer(browser, game.origin);
   try {
@@ -97,6 +132,8 @@ export async function createTwoPlayerMatch(browser: Browser, game: E2eGame): Pro
     await guest.page.getByLabel('Oda kodu').fill(code);
     await guest.page.getByRole('button', { name: 'Odaya Katıl' }).click();
     await expect(guest.page.getByRole('region', { name: 'Oda lobisi' })).toBeVisible();
+
+    if (settings) await applyRoomSettings(host, guest, settings);
 
     await chooseChassisAndReady(host, 'WRAITH');
     await chooseChassisAndReady(guest, 'PULSE');

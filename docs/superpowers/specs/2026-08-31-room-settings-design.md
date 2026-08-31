@@ -1,8 +1,8 @@
-# Neon Knockout Room Settings
+# Neon Knockout Room Settings and Leave Lifecycle
 
 **Status:** Approved for implementation planning
 **Date:** 2026-08-31
-**Scope:** Existing Knockout FFA lobby and match only
+**Scope:** Existing Knockout FFA room, lobby, match, and result lifecycle only
 
 ## Context
 
@@ -24,6 +24,11 @@ or custom-rules framework.
   and rematch flows.
 - Scale arena contraction with the selected duration so each option preserves
   the approved combat tempo.
+- Let a participant explicitly leave from any room screen, invalidate that room
+  session immediately, and return to the landing screen without disconnecting
+  the underlying Socket.IO transport.
+- Keep the remaining room usable: migrate the host, close an empty room, and
+  apply the existing population/no-contest policy to an active match.
 
 ## Non-goals
 
@@ -32,6 +37,8 @@ or custom-rules framework.
 - Changing settings during countdown, regulation, sudden death, or result.
 - Adding a compatibility layer for clients that do not understand room
   settings.
+- Kicking another player, banning, ownership selection, room discovery,
+  spectator mode, or a room-management framework.
 
 ## Fixed options and defaults
 
@@ -85,6 +92,34 @@ Host migration changes write authority, not the settings. A disconnected
 former host does not regain authority when resuming unless it is still the
 current host according to the existing migration rule.
 
+## Explicit leave lifecycle
+
+Every participant can send one acknowledged `room:leave` request with a strict
+empty payload from `LOBBY`, `COUNTDOWN`, `MATCH`, or `RESULT`. This is an
+intentional departure rather than a recoverable transport interruption:
+
+1. the server removes the connection membership, player record, pending input,
+   match entity, score entry, and player-owned pulses immediately;
+2. the removed resume token is no longer valid and receives no reconnect grace;
+3. the Socket.IO connection stays open, leaves the old room channel, and may
+   create or join another room;
+4. if the departing player was host, authority moves to the earliest connected
+   remaining player;
+5. if no player remains, the room is destroyed and publishes `ROOM_CLOSED`;
+6. a lobby departure publishes the smaller roster without clearing the other
+   players' ready flags;
+7. a result-screen departure returns the remaining roster to `LOBBY` with the
+   same room settings and reset readiness; and
+8. during countdown or match, two or more remaining/validly-reserved players
+   continue under the existing population policy. If the remaining population
+   can no longer reach the two-player minimum, the match becomes `NO_CONTEST`
+   immediately and the remaining roster returns to the lobby.
+
+The leaving client clears only the departed room's resume token and last-room
+pointer after a successful acknowledgement, then resets its canonical room,
+match, and session state to `LANDING`. A rejected or timed-out request leaves
+the current session intact and uses the existing recoverable error surface.
+
 ## Match rules and pacing
 
 `MatchState.remainingMs` starts at `settings.durationMs`. A credited knockout
@@ -128,12 +163,20 @@ The match HUD keeps the authoritative timer and adds a compact
 **İlk N knockout** rule label. Result/rematch continues to show real scores;
 returning to the lobby exposes the editable settings again.
 
+The existing top bar shows one quiet **Odadan Çık** action whenever the client
+owns a room session, so the same exit remains available in lobby, match, and
+result without duplicating controls across screens. It is disabled while
+another acknowledged action is pending and disappears immediately after a
+successful leave.
+
 ## Interfaces
 
-The shared protocol adds one strict request and extends existing state:
+The shared protocol adds two strict requests and extends existing state:
 
 ```ts
 type RoomSettingsPayload = RoomSettings;
+
+type RoomLeavePayload = Record<string, never>;
 
 type RoomState = Readonly<{
   // existing fields
@@ -149,7 +192,9 @@ type MatchSnapshot = Readonly<{
 `GameClient.setRoomSettings(settings)` emits `lobby:settings` and resolves only
 after the server acknowledgement. The game store exposes one corresponding
 action and otherwise treats `RoomState` and `MatchSnapshot` as the source of
-truth. No test-only network route or production bypass is added.
+truth. `GameClient.leaveRoom()` emits `room:leave`; the store clears persisted
+room credentials and transitions to `LANDING` only after a successful
+acknowledgement. No test-only network route or production bypass is added.
 
 ## Error and lifecycle behavior
 
@@ -162,6 +207,13 @@ truth. No test-only network route or production bypass is added.
   pair until a current host changes it in the lobby.
 - Room destruction discards the settings with the room; there is no disk or
   account persistence.
+- Explicit leave is accepted in every room phase, invalidates resume authority,
+  removes the socket from the old room channel, and never creates a reconnect
+  reservation for the leaver.
+- Host leave migrates ownership; last-player leave destroys the room.
+- Active-match leave continues with a viable population or immediately follows
+  the existing pause/no-contest population rule. Result leave returns remaining
+  players to the lobby.
 
 ## Verification
 
@@ -176,6 +228,10 @@ truth. No test-only network route or production bypass is added.
 - 90/120/180-second matches seed the exact duration and milestones;
 - scores finish at 3/5/7/10 while self-falls remain uncredited;
 - every snapshot carries the immutable match settings.
+- explicit leave removes player/session/match ownership atomically;
+- host migration, empty-room destruction, active 3+ continuation,
+  two-player no-contest, result-to-lobby, and invalidated resume token behavior
+  are covered.
 
 ### Client and UI tests
 
@@ -186,6 +242,10 @@ truth. No test-only network route or production bypass is added.
 - ready-state reset is visible to every lobby client;
 - HUD reads the snapshot target and shared proportional timing rather than
   global fixed values.
+- successful leave clears only the departed room credentials and canonical
+  state; failed leave preserves both;
+- the top-bar leave action is shown on all room screens, hidden on landing, and
+  disabled during pending work.
 
 ### Browser acceptance
 
@@ -195,6 +255,11 @@ later settings change, and the host starts only after everyone readies again.
 The match snapshot, timer, target label, contraction schedule, result, reconnect,
 and rematch all retain the selected pair. A guest mutation attempt is rejected
 without changing either screen.
+
+The guest then uses **Odadan Çık** and returns to the landing screen while the
+host sees the roster update without refreshing. The same live socket can join
+again as a new session. A second room proves host departure transfers ownership
+and the new host retains the configured settings.
 
 The representative performance test remains one real browser rendering the
 complete eight-player match while seven lightweight network participants supply
@@ -213,3 +278,6 @@ processes into that LAN performance boundary.
 5. Unit, protocol, server, client, UI, integration, two-browser E2E, load,
    representative performance, build, lint, and typecheck gates pass on the
    same accepted commit.
+6. `Odadan Çık` works from lobby, match, and result, clears the leaving session,
+   preserves a viable room, migrates host authority, and destroys an empty
+   room.
