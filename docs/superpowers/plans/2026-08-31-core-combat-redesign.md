@@ -15,7 +15,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 06:10Z) Investigated the live game and traced pointer input, center-sector hits, charge-release snapping, old KO timing, and late contraction to their source files.
 - [x] (2026-08-31 06:18Z) Recorded and received user approval for `docs/superpowers/specs/2026-08-31-core-combat-redesign-design.md`.
 - [x] (2026-08-31 06:28Z) Mapped client, server, presentation, and acceptance surfaces and wrote this self-contained ExecPlan.
-- [ ] Task 0: repair Vitest/Playwright suite separation so the baseline is trustworthy.
+- [x] (2026-08-31 06:49Z) Task 0: repaired Vitest/Playwright suite separation; 39 Vitest files and 200 tests pass, with Playwright specs left to the Playwright runner (`df6fa6a`).
 - [ ] Task 1: add shared attack profiles and continuous geometry.
 - [ ] Task 2: replace pointer combat with keyboard-only input.
 - [ ] Task 3: extend authoritative state, snapshots, and events.
@@ -37,6 +37,8 @@ The result is visible by running `npm run lan`, opening the printed local addres
   Evidence: review against the approved nine-step phase order and `src/server/game/simulation.test.ts` showed that pulse origin/movement and countdown behavior would regress; Task 5 now preserves the gate and spawns/advances pulses after movement and separation.
 - Observation: the first full baseline test run found that Vitest imports Playwright's two `.spec.ts` files and fails before executing them as Playwright tests.
   Evidence: `npm test -- --maxWorkers=1` produced `2 failed | 39 passed` files and `200 passed` Vitest tests; both failures were “Playwright Test did not expect test() to be called here.” `npx vitest list --maxWorkers=1 --exclude 'tests/e2e/**'` exited zero, proving the missing runner exclusion is the boundary defect.
+- Observation: preserving `configDefaults.exclude` while adding the path-scoped `tests/e2e/**` exclusion restores a trustworthy baseline without moving or editing either Playwright spec.
+  Evidence: commit `df6fa6a` passed 39 Vitest files / 200 tests, typecheck, targeted ESLint, and an independent spec-and-quality review with no findings.
 
 ## Decision Log
 
@@ -70,7 +72,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 
 ## Outcomes & Retrospective
 
-Implementation has not started. The approved design and this execution plan are complete; the next concrete action is Task 0, followed by Tasks 1 and 2 sequentially. At every finished task, record the accepted behavior, exact test result, commit SHA, remaining gap, and any lesson that changes a later task here.
+Implementation started with the test-runner boundary. Task 0 is accepted at `df6fa6a`: Vitest now excludes only `tests/e2e/**` in addition to its defaults, all 39 Vitest files / 200 tests pass, typecheck and targeted ESLint pass, and the isolated review found no specification or quality issues. The remaining implementation starts with shared combat profiles and continuous geometry in Task 1, followed by keyboard-only input in Task 2.
 
 ## Context and Orientation
 
