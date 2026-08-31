@@ -76,11 +76,19 @@ function useConnection(bridge: GamePresentationBridge): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-function PhaseAnnouncement({ announcement }: Readonly<{ announcement: Readonly<{ label: string; text: string }> }>) {
+function PhaseAnnouncement({
+  announcement,
+  variant = 'center'
+}: Readonly<{
+  announcement: Readonly<{ label: string; text: string }>;
+  variant?: 'center' | 'sudden-death';
+}>) {
   return (
     <strong
       key={`${announcement.label}-${announcement.text}`}
-      className="match-hud__announcement"
+      className={variant === 'sudden-death'
+        ? 'match-hud__announcement match-hud__announcement--sudden-death'
+        : 'match-hud__announcement'}
       role="status"
       aria-label={announcement.label}
       aria-live="assertive"
@@ -98,7 +106,14 @@ function SuddenDeathAnnouncement() {
     return () => window.clearTimeout(timeout);
   }, []);
 
-  return visible ? <PhaseAnnouncement announcement={{ label: 'Raunt durumu', text: 'SON VURUŞ' }} /> : null;
+  return visible ? (
+    <div className="match-hud__announcement-slot">
+      <PhaseAnnouncement
+        announcement={{ label: 'Raunt durumu', text: 'SON VURUŞ' }}
+        variant="sudden-death"
+      />
+    </div>
+  ) : null;
 }
 
 function Ranking({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot; localPlayerId: string }>) {
@@ -228,7 +243,8 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
 
       <ControlsHint />
 
-      {snapshot?.phase === 'SUDDEN_DEATH' ? <SuddenDeathAnnouncement /> : announcement ? <PhaseAnnouncement announcement={announcement} /> : null}
+      {snapshot?.phase === 'SUDDEN_DEATH' ? <SuddenDeathAnnouncement /> : null}
+      {snapshot?.phase !== 'SUDDEN_DEATH' && announcement ? <PhaseAnnouncement announcement={announcement} /> : null}
     </aside>
   );
 }

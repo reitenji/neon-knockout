@@ -197,7 +197,10 @@ describe('MatchHud', () => {
     expect(screen.queryByRole('status', { name: 'Raunt durumu' })).not.toBeInTheDocument();
 
     act(() => bridge.publish(snapshot({ phase: 'SUDDEN_DEATH', remainingMs: 30_000 })));
-    expect(screen.getByRole('status', { name: 'Raunt durumu' })).toHaveTextContent('SON VURUŞ');
+    const announcement = screen.getByRole('status', { name: 'Raunt durumu' });
+    expect(announcement).toHaveTextContent('SON VURUŞ');
+    expect(announcement).toHaveClass('match-hud__announcement--sudden-death');
+    expect(announcement.closest('.match-hud__announcement-slot')).toBeInTheDocument();
 
     act(() => bridge.publish(snapshot({ phase: 'SUDDEN_DEATH', remainingMs: 29_500 })));
     act(() => vi.advanceTimersByTime(1_099));

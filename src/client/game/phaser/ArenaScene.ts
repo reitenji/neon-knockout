@@ -212,10 +212,6 @@ export class ArenaScene extends Phaser.Scene {
       this.clearPulseViews();
       return;
     }
-    const snapshotIds = new Set(snapshot.pulses.map((pulse) => pulse.projectileId));
-    for (const projectileId of this.retiredPulseIds) {
-      if (!snapshotIds.has(projectileId)) this.retiredPulseIds.delete(projectileId);
-    }
     const activeIds = new Set<number>();
     for (const pulse of snapshot.pulses) {
       if (this.retiredPulseIds.has(pulse.projectileId)) continue;

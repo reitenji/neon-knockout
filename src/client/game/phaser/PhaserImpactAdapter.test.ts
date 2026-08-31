@@ -22,6 +22,16 @@ class FakeObject {
 
 class FakeTween {
   removed = 0;
+  private readonly listeners = new Map<string, Array<() => void>>();
+  once(event: string, listener: () => void): this {
+    this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
+    return this;
+  }
+  emit(event: string): void {
+    const listeners = this.listeners.get(event) ?? [];
+    this.listeners.delete(event);
+    for (const listener of listeners) listener();
+  }
   remove(): this { this.removed += 1; return this; }
 }
 
@@ -141,5 +151,26 @@ describe('PhaserImpactAdapter', () => {
     expect(stub.tweens.every(({ tween }) => tween.removed === 1)).toBe(true);
     expect(stub.objects.every(({ object }) => object.destroyed === 1)).toBe(true);
     expect(stub.content).toMatchObject({ alpha: 1, scaleX: 1, scaleY: 1 });
+  });
+
+  it('releases completed or stopped tweens from retention while keeping disposal idempotent for live tweens', () => {
+    const stub = harness();
+    const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+    adapter.flashTarget('p1', 0.8);
+    adapter.holdHitPose('p1', 35);
+    adapter.nudgeCamera({ x: 1, y: 0 }, 0.5);
+
+    const completedTween = stub.tweens[0]!.tween;
+    const stoppedTween = stub.tweens[1]!.tween;
+    const liveTween = stub.tweens[2]!.tween;
+    completedTween.emit('complete');
+    stoppedTween.emit('stop');
+
+    adapter.dispose();
+    adapter.dispose();
+
+    expect(completedTween.removed).toBe(0);
+    expect(stoppedTween.removed).toBe(0);
+    expect(liveTween.removed).toBe(1);
   });
 });

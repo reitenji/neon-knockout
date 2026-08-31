@@ -273,6 +273,9 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
     if (this.disposed) return;
     const tween = this.scene.tweens.add(config);
     this.tweens.add(tween);
+    const release = () => this.tweens.delete(tween);
+    tween.once('complete', release);
+    tween.once('stop', release);
   }
 
   private fadeAndDestroy<T extends Phaser.GameObjects.GameObject>(

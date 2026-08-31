@@ -358,4 +358,36 @@ describe('ArenaScene live presentation integration', () => {
     expect(probes.pulseDestroy).toHaveBeenCalledTimes(2);
     expect(probes.createPulseView).toHaveBeenCalledTimes(2);
   });
+
+  it('keeps consumed pulse tombstones across absence and stale snapshots, then clears them on scene reset', () => {
+    const bridge = new Bridge();
+    const authoritativePulse = {
+      projectileId: 29, ownerPlayerId: 'p1', originatingAttackId: 24,
+      position: { x: 350, y: 360 }, velocity: { x: 900, y: 0 }, radius: 18,
+      remainingMs: 400, hitTargetIds: []
+    } as const;
+    bridge.current = snapshot({ tick: 20, pulses: [authoritativePulse] });
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+    scene.create();
+    scene.update();
+
+    bridge.emitEvent({
+      eventId: 50, tick: 20, type: 'PULSE_BREAK', projectileId: 29,
+      breakerPlayerId: 'p1', breakerAttackId: 25, impactPosition: { x: 360, y: 360 }
+    });
+    bridge.publish(snapshot({ tick: 21, pulses: [] }));
+    scene.update();
+    bridge.publish(snapshot({ tick: 19, pulses: [authoritativePulse] }));
+    scene.update();
+
+    expect(probes.createPulseView).toHaveBeenCalledTimes(1);
+    expect(probes.pulseDestroy).toHaveBeenCalledTimes(1);
+
+    (scene.events as unknown as FakeEvents).emit(Phaser.Scenes.Events.SHUTDOWN);
+    bridge.current = snapshot({ tick: 1, pulses: [authoritativePulse] });
+    scene.create();
+    scene.update();
+
+    expect(probes.createPulseView).toHaveBeenCalledTimes(2);
+  });
 });
