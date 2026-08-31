@@ -1,5 +1,5 @@
 import { timingSafeEqual } from 'node:crypto';
-import { CHASSIS, GAME } from '../../shared/constants.js';
+import { ARENA, CHASSIS, GAME } from '../../shared/constants.js';
 import type {
   Chassis,
   GameEvent,
@@ -71,6 +71,11 @@ type RoomManagerDependencies = Readonly<{
   now: () => number;
   randomBytes: (size: number) => Uint8Array;
   publish: (event: RoomPublication) => void;
+  bindTestHarness?: (harness: RoomManagerTestHarness) => void;
+}>;
+
+export type RoomManagerTestHarness = Readonly<{
+  placePlayer(roomCode: string, playerId: string, position: Vec2, facing: Vec2): void;
 }>;
 
 export type DebugRoom = Readonly<{
@@ -94,7 +99,12 @@ export class RoomManager {
   private readonly rooms = new Map<string, Room>();
   private readonly connections = new Map<string, ConnectionSession>();
 
-  constructor(private readonly deps: RoomManagerDependencies) {}
+  constructor(private readonly deps: RoomManagerDependencies) {
+    deps.bindTestHarness?.({
+      placePlayer: (roomCode, playerId, position, facing) =>
+        this.placePlayerForTesting(roomCode, playerId, position, facing)
+    });
+  }
 
   reset(): void {
     for (const room of this.rooms.values()) {
@@ -254,10 +264,13 @@ export class RoomManager {
     if (!room.match || (room.phase !== 'COUNTDOWN' && room.phase !== 'MATCH')) {
       throw new DomainError('INVALID_PHASE', 'Bu işlem şu anda kullanılamaz.', true);
     }
-    const queued = room.inputs.get(player.playerId)?.seq ?? -1;
+    const queued = room.inputs.get(player.playerId);
     const processed = room.match.players[player.playerId]?.lastProcessedInputSeq ?? -1;
-    if (input.seq <= Math.max(queued, processed)) return;
-    room.inputs.set(player.playerId, input);
+    if (input.seq <= Math.max(queued?.seq ?? -1, processed)) return;
+    const unprocessed = queued && queued.seq > processed ? queued : null;
+    room.inputs.set(player.playerId, unprocessed
+      ? { ...input, quick: unprocessed.quick || input.quick, dash: unprocessed.dash || input.dash }
+      : input);
   }
 
   forceKnockout(roomCode: string, attackerId: string, targetId: string): void {
@@ -508,6 +521,37 @@ export class RoomManager {
       .filter((player) => !player.connected && player.expiresAt !== null && player.expiresAt > now)
       .map((player) => player.expiresAt! - now);
     return deadlines.length > 0 ? Math.max(...deadlines) : null;
+  }
+
+  private placePlayerForTesting(roomCode: string, playerId: string, position: Vec2, facing: Vec2): void {
+    const room = this.requireRoom(roomCode);
+    const player = room.match?.players[playerId];
+    if (!player || room.phase !== 'MATCH') throw new Error('Test placement requires an active match player.');
+    const withinTestBounds = position.x >= 0 && position.x <= ARENA.width && position.y >= 0 && position.y <= ARENA.height;
+    const facingLength = Math.hypot(facing.x, facing.y);
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y) || !withinTestBounds ||
+      !Number.isFinite(facingLength) || facingLength === 0) {
+      throw new RangeError('Test placement requires bounded finite position and facing values.');
+    }
+    const normalizedFacing = { x: facing.x / facingLength, y: facing.y / facingLength };
+    player.position = { x: position.x, y: position.y };
+    player.velocity = { x: 0, y: 0 };
+    player.facing = normalizedFacing;
+    player.latestInput = {
+      ...player.latestInput,
+      moveX: 0,
+      moveY: 0,
+      aimX: normalizedFacing.x,
+      aimY: normalizedFacing.y,
+      quick: false,
+      heavy: false,
+      dash: false
+    };
+    player.previousQuick = false;
+    player.previousHeavy = false;
+    player.previousDash = false;
+    room.inputs.delete(playerId);
+    this.publishSnapshot(room);
   }
 
   private assertConnectionAvailable(connectionId: string): void {

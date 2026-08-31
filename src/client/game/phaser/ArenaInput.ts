@@ -4,7 +4,7 @@ import { normalizeAxes } from '../../../shared/kinematics.js';
 import type { InputFrame, Vec2 } from '../../../shared/model.js';
 
 type HeldMovement = Readonly<{ up: boolean; down: boolean; left: boolean; right: boolean; dash: boolean }>;
-type HeldAttack = Readonly<{ up: boolean; down: boolean; left: boolean; right: boolean; shift: boolean }>;
+type HeldAttack = Readonly<{ quick: boolean; heavy: boolean }>;
 
 export interface ArenaInputSource {
   movement(): HeldMovement;
@@ -23,29 +23,21 @@ export type ArenaInputLifecycle = Readonly<{
 const INPUT_STEP_MS = 1_000 / GAME.maxInputFramesPerSecond;
 const SCENE_PAUSE_EVENT = 'pause';
 const SCENE_SLEEP_EVENT = 'sleep';
-const CAPTURED_KEY_CODES = [87, 65, 83, 68, 38, 40, 37, 39, 16, 32];
+const CAPTURED_KEY_CODES = [87, 65, 83, 68, 74, 75, 32];
 const GAMEPLAY_CODE_TO_KEY = new Map([
   ['KeyW', 'moveUp'], ['KeyA', 'moveLeft'], ['KeyS', 'moveDown'], ['KeyD', 'moveRight'], ['Space', 'dash'],
-  ['ArrowUp', 'attackUp'], ['ArrowDown', 'attackDown'], ['ArrowLeft', 'attackLeft'], ['ArrowRight', 'attackRight'],
-  ['ShiftLeft', 'shift'], ['ShiftRight', 'shift']
+  ['KeyJ', 'quick'], ['KeyK', 'heavy']
 ]);
-type GameplayKey = 'moveUp' | 'moveDown' | 'moveLeft' | 'moveRight' | 'dash' | 'attackUp' | 'attackDown' | 'attackLeft' | 'attackRight' | 'shift';
+type GameplayKey = 'moveUp' | 'moveDown' | 'moveLeft' | 'moveRight' | 'dash' | 'quick' | 'heavy';
 type CaptureLease = { owners: number; addedByUs: boolean };
 const captureLeases = new WeakMap<object, Map<number, CaptureLease>>();
-
-function resolveAttackDirection(held: HeldAttack): Vec2 | null {
-  const direction = normalizeAxes(Number(held.right) - Number(held.left), Number(held.down) - Number(held.up));
-  return direction.x === 0 && direction.y === 0 ? null : direction;
-}
 
 export class ArenaInput {
   private lastSampleAtMs = Number.NEGATIVE_INFINITY;
   private lastAttackFacing: Vec2 = { x: 1, y: 0 };
-  private attackDirectionHeld = false;
-  private heavyLatched = false;
-  private previousShift = false;
+  private previousQuick = false;
+  private previousHeavy = false;
   private previousDash = false;
-  private suppressQuickUntilNeutral = false;
   private suppressHeldUntilRelease = false;
   private disposed = false;
   private readonly rawHeldCodes = new Set<string>();
@@ -88,21 +80,15 @@ export class ArenaInput {
       Number(movementHeld.right) - Number(movementHeld.left),
       Number(movementHeld.down) - Number(movementHeld.up)
     );
-    const attackDirection = resolveAttackDirection(attackHeld);
-    const physicalAttackDirectionHeld = attackHeld.up || attackHeld.down || attackHeld.left || attackHeld.right;
-    const releasedHeavy = this.previousShift && !attackHeld.shift && this.heavyLatched;
-    if (releasedHeavy) this.suppressQuickUntilNeutral = true;
-    const quick = attackDirection !== null && !attackHeld.shift && !this.attackDirectionHeld && !this.suppressQuickUntilNeutral;
-    if (attackHeld.shift && attackDirection !== null) this.heavyLatched = true;
-    const heavy = attackHeld.shift && (this.heavyLatched || attackDirection !== null);
+    const movementDirection = movement.x === 0 && movement.y === 0 ? null : movement;
+    const quick = attackHeld.quick && !this.previousQuick && !attackHeld.heavy && !this.previousHeavy;
+    const heavy = attackHeld.heavy;
     const dash = movementHeld.dash && !this.previousDash;
-    const aim = attackDirection ?? this.lastAttackFacing;
+    const aim = movementDirection ?? this.lastAttackFacing;
 
-    if (attackDirection) this.lastAttackFacing = attackDirection;
-    if (!physicalAttackDirectionHeld) this.suppressQuickUntilNeutral = false;
-    if (!attackHeld.shift) this.heavyLatched = false;
-    this.attackDirectionHeld = physicalAttackDirectionHeld;
-    this.previousShift = attackHeld.shift;
+    if (movementDirection) this.lastAttackFacing = movementDirection;
+    this.previousQuick = attackHeld.quick;
+    this.previousHeavy = attackHeld.heavy;
     this.previousDash = movementHeld.dash;
 
     return { seq, moveX: movement.x, moveY: movement.y, aimX: aim.x, aimY: aim.y, quick, heavy, dash };
@@ -116,11 +102,9 @@ export class ArenaInput {
       if (!hasRawHeldKey(this.rawHeldCodes, key)) this.blockedSourceKeys.add(key);
     }
     this.source.reset();
-    this.attackDirectionHeld = false;
-    this.heavyLatched = false;
-    this.previousShift = false;
+    this.previousQuick = false;
+    this.previousHeavy = false;
     this.previousDash = false;
-    this.suppressQuickUntilNeutral = false;
     this.suppressHeldUntilRelease = this.blockedRawCodes.size > 0 || this.blockedSourceKeys.size > 0;
   }
 
@@ -162,8 +146,7 @@ export function createPhaserInputSource(scene: PhaserSceneInput): ArenaInputSour
   if (!keyboard) throw new Error('Keyboard input is required for Neon Knockout.');
   const keys = keyboard.addKeys({
     w: 'W', a: 'A', s: 'S', d: 'D',
-    up: 'UP', down: 'DOWN', left: 'LEFT', right: 'RIGHT',
-    shift: 'SHIFT', dash: 'SPACE'
+    quick: 'J', heavy: 'K', dash: 'SPACE'
   }) as Record<string, Phaser.Input.Keyboard.Key>;
   const releaseCaptures = acquireCaptures(keyboard);
   const onSuspend = (listener: () => void): (() => void) => {
@@ -180,8 +163,7 @@ export function createPhaserInputSource(scene: PhaserSceneInput): ArenaInputSour
       left: Boolean(keys.a?.isDown), right: Boolean(keys.d?.isDown), dash: Boolean(keys.dash?.isDown)
     }),
     attack: () => ({
-      up: Boolean(keys.up?.isDown), down: Boolean(keys.down?.isDown),
-      left: Boolean(keys.left?.isDown), right: Boolean(keys.right?.isDown), shift: Boolean(keys.shift?.isDown)
+      quick: Boolean(keys.quick?.isDown), heavy: Boolean(keys.heavy?.isDown)
     }),
     reset: () => keyboard.resetKeys(),
     dispose: releaseCaptures,
@@ -193,9 +175,8 @@ function heldSourceKeys(movement: HeldMovement, attack: HeldAttack): GameplayKey
   return [
     ...(movement.up ? ['moveUp' as const] : []), ...(movement.down ? ['moveDown' as const] : []),
     ...(movement.left ? ['moveLeft' as const] : []), ...(movement.right ? ['moveRight' as const] : []),
-    ...(movement.dash ? ['dash' as const] : []), ...(attack.up ? ['attackUp' as const] : []),
-    ...(attack.down ? ['attackDown' as const] : []), ...(attack.left ? ['attackLeft' as const] : []),
-    ...(attack.right ? ['attackRight' as const] : []), ...(attack.shift ? ['shift' as const] : [])
+    ...(movement.dash ? ['dash' as const] : []), ...(attack.quick ? ['quick' as const] : []),
+    ...(attack.heavy ? ['heavy' as const] : [])
   ];
 }
 
@@ -204,7 +185,7 @@ function hasRawHeldKey(codes: ReadonlySet<string>, key: GameplayKey): boolean {
 }
 
 function isSourceKeyHeld(key: GameplayKey, movement: HeldMovement, attack: HeldAttack): boolean {
-  return ({ moveUp: movement.up, moveDown: movement.down, moveLeft: movement.left, moveRight: movement.right, dash: movement.dash, attackUp: attack.up, attackDown: attack.down, attackLeft: attack.left, attackRight: attack.right, shift: attack.shift } as Record<GameplayKey, boolean>)[key];
+  return ({ moveUp: movement.up, moveDown: movement.down, moveLeft: movement.left, moveRight: movement.right, dash: movement.dash, quick: attack.quick, heavy: attack.heavy } as Record<GameplayKey, boolean>)[key];
 }
 
 function acquireCaptures(keyboard: Phaser.Input.Keyboard.KeyboardPlugin): () => void {

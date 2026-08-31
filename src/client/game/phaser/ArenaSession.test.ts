@@ -35,9 +35,9 @@ class Bridge implements GamePresentationBridge {
   setConnected(connected: boolean): void { this.connected = connected; for (const listener of this.connectionListeners) listener(connected); }
 }
 
-function controls(): ArenaInputSource & { movementHeld: Record<'up' | 'down' | 'left' | 'right' | 'dash', boolean>; attackHeld: Record<'up' | 'down' | 'left' | 'right' | 'shift', boolean> } {
+function controls(): ArenaInputSource & { movementHeld: Record<'up' | 'down' | 'left' | 'right' | 'dash', boolean>; attackHeld: Record<'quick' | 'heavy', boolean> } {
   const movementHeld = { up: false, down: false, left: false, right: false, dash: false };
-  const attackHeld = { up: false, down: false, left: false, right: false, shift: false };
+  const attackHeld = { quick: false, heavy: false };
   return {
     movementHeld, attackHeld, movement: () => ({ ...movementHeld }), attack: () => ({ ...attackHeld }),
     reset() {},
@@ -53,8 +53,7 @@ describe('ArenaSession', () => {
     const session = new ArenaSession(bridge, 'p-local', new ArenaInput(source), () => now);
     session.start();
     source.movementHeld.right = true;
-    source.attackHeld.shift = true;
-    source.attackHeld.right = true;
+    source.attackHeld.heavy = true;
     expect(session.step(16)!.position.x).toBeGreaterThan(100);
     expect(bridge.sent.at(-1)?.heavy).toBe(true);
     bridge.setConnected(false);
@@ -67,12 +66,11 @@ describe('ArenaSession', () => {
     session.step(16);
     expect(bridge.sent.at(-1)?.heavy).toBe(false);
     source.movementHeld.right = false;
-    source.attackHeld.right = false;
-    source.attackHeld.shift = false;
+    source.attackHeld.heavy = false;
     now += 17;
     session.step(16);
-    source.attackHeld.shift = true;
-    source.attackHeld.right = true;
+    source.movementHeld.right = true;
+    source.attackHeld.heavy = true;
     now += 17;
     session.step(16);
     expect(bridge.sent.at(-1)?.heavy).toBe(true);

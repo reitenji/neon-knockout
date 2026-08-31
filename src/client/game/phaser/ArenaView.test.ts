@@ -64,6 +64,34 @@ describe('ArenaView', () => {
     expect(overlay.calls.filter((call) => call.method === 'fillCircle').length).toBeGreaterThanOrEqual(8);
   });
 
+  it('skips inert pre-warning redraws while redrawing warning onset and visible pulse changes', () => {
+    const stub = scene();
+    const arena = createArenaView(stub as never, { reducedMotion: false });
+    const overlay = stub.graphics[2]!;
+
+    arena.apply({ phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0 }, 100);
+    arena.apply({ phase: 'REGULATION', remainingMs: 99_000, platformProgress: 0 }, 900);
+    expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(1);
+
+    arena.apply({ phase: 'REGULATION', remainingMs: 78_000, platformProgress: 0 }, 900);
+    expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(2);
+
+    arena.apply({ phase: 'REGULATION', remainingMs: 78_000, platformProgress: 0 }, 1_180);
+    expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(3);
+  });
+
+  it('redraws immediately when contraction progress or phase changes', () => {
+    const stub = scene();
+    const arena = createArenaView(stub as never, { reducedMotion: true });
+    const overlay = stub.graphics[2]!;
+
+    arena.apply({ phase: 'REGULATION', remainingMs: 70_000, platformProgress: 0 }, 100);
+    arena.apply({ phase: 'REGULATION', remainingMs: 70_000, platformProgress: 0.2 }, 100);
+    arena.apply({ phase: 'SUDDEN_DEATH', remainingMs: 0, platformProgress: 0.2 }, 100);
+
+    expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(3);
+  });
+
   it('destroys every owned graphics layer exactly once', () => {
     const stub = scene();
     const arena = createArenaView(stub as never, { reducedMotion: true });

@@ -146,9 +146,9 @@ function Ranking({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot
 function ControlsHint() {
   return (
     <div className="match-hud__controls" aria-label="Kontroller">
-      <span><kbd>WASD</kbd><small>Hareket</small></span>
-      <span><kbd>Oklar</kbd><small>Kombo / yön</small></span>
-      <span><kbd>Shift + oklar</kbd><small>Yükle / vur</small></span>
+      <span><kbd>WASD</kbd><small>Hareket / yön</small></span>
+      <span><kbd>J</kbd><small>Hızlı vur</small></span>
+      <span><kbd>K</kbd><small>Yükle / vur</small></span>
       <span><kbd>Space</kbd><small>Dash</small></span>
     </div>
   );

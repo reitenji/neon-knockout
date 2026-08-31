@@ -3,9 +3,9 @@ import { createServer, type Server as HttpServer } from 'node:http';
 import { resolve } from 'node:path';
 import express from 'express';
 import { Server } from 'socket.io';
-import type { MatchSnapshot, SessionWelcome } from '../../shared/model.js';
+import type { GameEvent, MatchSnapshot, SessionWelcome, Vec2 } from '../../shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
-import { RoomManager, type RoomPublication } from '../rooms/roomManager.js';
+import { RoomManager, type RoomManagerTestHarness, type RoomPublication } from '../rooms/roomManager.js';
 import { registerSocketHandlers, type GameSocket } from './socketHandlers.js';
 
 export interface GameServer {
@@ -15,6 +15,8 @@ export interface GameServer {
   testHarness: {
     forceKnockout(roomCode: string, attackerId: string, targetId: string): void;
     disconnectPlayer(roomCode: string, playerId: string): void;
+    placePlayer(roomCode: string, playerId: string, position: Vec2, facing: Vec2): void;
+    recentEvents(roomCode: string): readonly GameEvent[];
     matchSnapshot(roomCode: string): MatchSnapshot | null;
   } | null;
 }
@@ -28,6 +30,8 @@ export type CreateGameServerOptions = Readonly<{
 }>;
 
 type PlayerConnection = Readonly<{ roomCode: string; socketId: string }>;
+
+const TEST_EVENT_HISTORY_LIMIT = 256;
 
 function updateSnapshot(snapshot: MatchSnapshot, publication: Extract<RoomPublication, { type: 'MATCH_EVENT' }>): MatchSnapshot {
   const event = publication.event;
@@ -57,6 +61,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
   });
   const roomCodes = new Set<string>();
   const snapshots = new Map<string, MatchSnapshot>();
+  const testEventHistory = options.enableTestHarness ? new Map<string, GameEvent[]>() : null;
   const playerConnections = new Map<string, PlayerConnection>();
   const pendingPublications = new Set<NodeJS.Immediate>();
   let startedAt = now();
@@ -79,11 +84,21 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     if (publication.type === 'ROOM_CLOSED') {
       roomCodes.delete(publication.roomCode);
       snapshots.delete(publication.roomCode);
+      testEventHistory?.delete(publication.roomCode);
     }
     if (publication.type === 'MATCH_STARTED' || publication.type === 'MATCH_SNAPSHOT') {
+      if (publication.type === 'MATCH_STARTED') testEventHistory?.delete(publication.roomCode);
       snapshots.set(publication.roomCode, publication.snapshot);
     }
     if (publication.type === 'MATCH_EVENT') {
+      if (testEventHistory) {
+        const history = testEventHistory.get(publication.roomCode) ?? [];
+        history.push(structuredClone(publication.event));
+        if (history.length > TEST_EVENT_HISTORY_LIMIT) {
+          history.splice(0, history.length - TEST_EVENT_HISTORY_LIMIT);
+        }
+        testEventHistory.set(publication.roomCode, history);
+      }
       const snapshot = snapshots.get(publication.roomCode);
       if (snapshot) snapshots.set(publication.roomCode, updateSnapshot(snapshot, publication));
     }
@@ -94,7 +109,15 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     pendingPublications.add(immediate);
   };
 
-  const rooms = new RoomManager({ now, randomBytes, publish });
+  let roomTestHarness: RoomManagerTestHarness | null = null;
+  const rooms = new RoomManager({
+    now,
+    randomBytes,
+    publish,
+    ...(options.enableTestHarness
+      ? { bindTestHarness: (harness: RoomManagerTestHarness): void => { roomTestHarness = harness; } }
+      : {})
+  });
 
   app.get('/health', (_request, response) => {
     response.json({
@@ -112,7 +135,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
         next();
         return;
       }
-      response.sendFile(resolve(clientDirectory, 'index.html'), (error) => {
+      response.sendFile('index.html', { root: clientDirectory }, (error) => {
         if (error) next(error);
       });
     });
@@ -211,6 +234,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
         rooms.reset();
         roomCodes.clear();
         snapshots.clear();
+        testEventHistory?.clear();
         playerConnections.clear();
         activeAddress = null;
       } finally {
@@ -229,6 +253,12 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
           if (!connection || connection.roomCode !== roomCode) return;
           io.sockets.sockets.get(connection.socketId)?.disconnect(true);
         },
+        placePlayer: (roomCode: string, playerId: string, position: Vec2, facing: Vec2): void => {
+          if (!roomTestHarness) throw new Error('Test harness was not bound.');
+          roomTestHarness.placePlayer(roomCode, playerId, position, facing);
+        },
+        recentEvents: (roomCode: string): readonly GameEvent[] =>
+          structuredClone(testEventHistory?.get(roomCode) ?? []),
         matchSnapshot: (roomCode: string): MatchSnapshot | null => {
           const snapshot = snapshots.get(roomCode);
           return snapshot ? structuredClone(snapshot) : null;

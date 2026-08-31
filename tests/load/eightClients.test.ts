@@ -69,8 +69,28 @@ async function connect(origin: string): Promise<GameClient> {
   return client;
 }
 
-function input(seq: number): InputFrame {
-  return { seq, moveX: 1, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false };
+function input(seq: number, clientIndex: number): InputFrame {
+  const cycle = seq % 240;
+  const cardinal = [
+    { x: 1, y: 0 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 0, y: -1 }
+  ][clientIndex % 4]!;
+  const steered = { x: -cardinal.y, y: cardinal.x };
+  const movementActive = cycle < 45 || (cycle >= 120 && cycle < 160);
+  const charging = cycle >= 60 && cycle < 104;
+  const aim = charging && cycle >= 82 ? steered : cardinal;
+  return {
+    seq,
+    moveX: movementActive ? cardinal.x : 0,
+    moveY: movementActive ? cardinal.y : 0,
+    aimX: aim.x,
+    aimY: aim.y,
+    quick: cycle === 4 || cycle === 30,
+    heavy: charging,
+    dash: cycle === 124
+  };
 }
 
 describe('eight-client delivery load', () => {
@@ -84,7 +104,14 @@ describe('eight-client delivery load', () => {
   });
 
   it('keeps eight websocket clients receiving snapshots through ten seconds of legal sixty-hertz input', async () => {
-    server = createGameServer({ host: '127.0.0.1', port: 0, enableTestHarness: true, clientDirectory: false });
+    const serverErrors: string[] = [];
+    server = createGameServer({
+      host: '127.0.0.1',
+      port: 0,
+      enableTestHarness: true,
+      clientDirectory: false,
+      logger: { error: (...values: unknown[]) => { serverErrors.push(values.map(String).join(' ')); } }
+    });
     const { origin } = await server.start();
     const snapshotCounts = new Array<number>(CLIENT_COUNT).fill(0);
     const errors: ServerError[] = [];
@@ -115,7 +142,9 @@ describe('eight-client delivery load', () => {
     const startedAt = performance.now();
     let sequence = 0;
     while (performance.now() - startedAt < INPUT_DURATION_MS) {
-      for (const client of clients) client.emit('match:input', input(sequence));
+      for (let index = 0; index < clients.length; index += 1) {
+        clients[index]!.emit('match:input', input(sequence, index));
+      }
       sequence += 1;
       await new Promise((resolve) => setTimeout(resolve, 1_000 / 60));
     }
@@ -125,6 +154,15 @@ describe('eight-client delivery load', () => {
     expect(server.testHarness?.matchSnapshot(host.roomCode)?.players).toHaveLength(CLIENT_COUNT);
     expect(welcomes).toHaveLength(CLIENT_COUNT);
     expect(errors).toEqual([]);
+    expect(serverErrors).toEqual([]);
     expect(snapshotCounts).toSatisfy((counts: number[]) => counts.every((count) => count >= 250));
+    console.info(`LOAD_SNAPSHOT_COUNTS ${JSON.stringify(snapshotCounts)}`);
+
+    const runningServer = server;
+    for (const client of clients.splice(0)) client.disconnect();
+    await runningServer.stop();
+    expect(runningServer.testHarness?.matchSnapshot(host.roomCode)).toBeNull();
+    expect(runningServer.testHarness?.recentEvents(host.roomCode)).toEqual([]);
+    server = null;
   }, 35_000);
 });

@@ -145,7 +145,8 @@ describe('App', () => {
 
     expect(screen.getByLabelText('Neon Knockout oyun alanı')).toBeVisible();
     expect(screen.getByRole('complementary', { name: 'Maç bilgileri' })).toBeVisible();
-    expect(screen.getByLabelText('Kontroller')).toHaveTextContent('Shift + oklar');
+    expect(screen.getByLabelText('Kontroller')).toHaveTextContent('K');
+    expect(screen.getByLabelText('Kontroller')).not.toHaveTextContent(/oklar|shift/i);
     expect(gameFactory).toHaveBeenCalledOnce();
     expect(screen.queryByRole('dialog', { name: 'Bağlantı kesildi' })).toBeNull();
   });

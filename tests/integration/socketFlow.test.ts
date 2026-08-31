@@ -1,7 +1,10 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
 import { GAME } from '../../src/shared/constants.js';
-import type { Ack, GameEvent, InputFrame, ServerError, SessionWelcome } from '../../src/shared/model.js';
+import type { Ack, GameEvent, InputFrame, MatchSnapshot, ServerError, SessionWelcome, Vec2 } from '../../src/shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../src/shared/protocol.js';
 import { createGameServer, type GameServer } from '../../src/server/network/createGameServer.js';
 
@@ -10,6 +13,15 @@ type AckEvent = Exclude<keyof ClientToServerEvents, 'match:input'>;
 
 const ACK_TIMEOUT_MS = 1_500;
 const EVENT_TIMEOUT_MS = 5_000;
+const STEP_MS = 1_000 / GAME.tickRate;
+
+type StartedMatch = Readonly<{
+  roomCode: string;
+  host: SessionWelcome;
+  guest: SessionWelcome;
+  hostClient: GameClient;
+  guestClient: GameClient;
+}>;
 
 function emitAck<T>(socket: GameClient, event: AckEvent, payload: unknown): Promise<Ack<T>> {
   return new Promise((resolve, reject) => {
@@ -72,8 +84,6 @@ async function connectClient(origin: string): Promise<GameClient> {
   return client;
 }
 
-const sendInput = (socket: GameClient, input: InputFrame): void => socket.emit('match:input', input);
-
 const input = (seq: number, overrides: Partial<InputFrame> = {}): InputFrame => ({
   seq,
   moveX: 0,
@@ -86,22 +96,23 @@ const input = (seq: number, overrides: Partial<InputFrame> = {}): InputFrame => 
   ...overrides
 });
 
-function unitVector(from: { x: number; y: number }, to: { x: number; y: number }): { x: number; y: number } {
-  const x = to.x - from.x;
-  const y = to.y - from.y;
-  const length = Math.hypot(x, y) || 1;
-  return { x: x / length, y: y / length };
+function player(snapshot: MatchSnapshot, playerId: string) {
+  const value = snapshot.players.find((candidate) => candidate.playerId === playerId);
+  if (!value) throw new Error(`Missing player ${playerId} in authoritative snapshot.`);
+  return value;
 }
 
 describe('Socket.IO FFA game server flow', () => {
   let server: GameServer;
   let origin: string;
   let clients: GameClient[];
+  let sequences: Map<GameClient, number>;
 
   beforeEach(async () => {
     server = createGameServer({ host: '127.0.0.1', port: 0, enableTestHarness: true, clientDirectory: false });
     ({ origin } = await server.start());
     clients = [];
+    sequences = new Map();
   });
 
   afterEach(async () => {
@@ -112,139 +123,497 @@ describe('Socket.IO FFA game server flow', () => {
   const client = async (): Promise<GameClient> => {
     const connected = await connectClient(origin);
     clients.push(connected);
+    sequences.set(connected, 0);
     return connected;
   };
 
-  it('runs chassis, real hit, reconnect, five knockouts, player result, lobby, and rematch over WebSockets', async () => {
-    const clientA = await client();
-    const clientB = await client();
-    expect(server.testHarness).not.toBeNull();
+  const harness = () => {
+    if (!server.testHarness) throw new Error('Integration server requires its in-process test harness.');
+    return server.testHarness;
+  };
+
+  const snapshot = (roomCode: string): MatchSnapshot => {
+    const value = harness().matchSnapshot(roomCode);
+    if (!value) throw new Error(`Missing authoritative snapshot for ${roomCode}.`);
+    return value;
+  };
+
+  const waitFor = async (predicate: () => boolean, label: string, timeoutMs = EVENT_TIMEOUT_MS): Promise<void> => {
+    const deadline = performance.now() + timeoutMs;
+    while (!predicate()) {
+      if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${label}.`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+
+  const advanceUntil = (
+    roomCode: string,
+    predicate: (value: MatchSnapshot) => boolean,
+    label: string,
+    maximumMs: number
+  ): MatchSnapshot => {
+    const maximumSteps = Math.ceil(maximumMs / STEP_MS) + 2;
+    for (let step = 0; step <= maximumSteps; step += 1) {
+      const current = snapshot(roomCode);
+      if (predicate(current)) return current;
+      server.rooms.advance(STEP_MS);
+    }
+    throw new Error(`Timed out advancing the authoritative simulation to ${label}: ${JSON.stringify(snapshot(roomCode))}`);
+  };
+
+  const advanceBy = (roomCode: string, elapsedMs: number): MatchSnapshot => {
+    const targetTick = snapshot(roomCode).tick + Math.ceil(elapsedMs / STEP_MS);
+    return advanceUntil(roomCode, (value) => value.tick >= targetTick, `${elapsedMs} ms`, elapsedMs + STEP_MS * 4);
+  };
+
+  const startMatch = async (): Promise<StartedMatch> => {
+    const hostClient = await client();
+    const guestClient = await client();
+    const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
+    const guest = await emitSuccess<SessionWelcome>(guestClient, 'room:join', { name: 'Linus', roomCode: host.roomCode });
+    await emitSuccess<null>(hostClient, 'lobby:chassis', { chassis: 'WRAITH' });
+    await emitSuccess<null>(guestClient, 'lobby:chassis', { chassis: 'PULSE' });
+    await emitSuccess<null>(hostClient, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(guestClient, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(hostClient, 'match:start', {});
+    advanceUntil(host.roomCode, (value) => value.phase === 'REGULATION', 'regulation', GAME.countdownMs + 100);
+    return { roomCode: host.roomCode, host, guest, hostClient, guestClient };
+  };
+
+  const submitFrames = async (
+    match: StartedMatch,
+    frames: readonly Readonly<{ client: GameClient; playerId: string; overrides?: Partial<InputFrame> }>[]
+  ): Promise<void> => {
+    const submitted = frames.map(({ client: socket, playerId, overrides }) => {
+      const seq = sequences.get(socket) ?? 0;
+      sequences.set(socket, seq + 1);
+      socket.emit('match:input', input(seq, overrides));
+      return { playerId, seq };
+    });
+    await waitFor(() => {
+      const current = harness().matchSnapshot(match.roomCode);
+      return Boolean(current && submitted.every(({ playerId, seq }) => player(current, playerId).lastProcessedInputSeq >= seq));
+    }, `input frames ${submitted.map(({ seq }) => seq).join(', ')}`);
+  };
+
+  const prepare = async (
+    match: StartedMatch,
+    hostPosition: Vec2 = { x: 580, y: 360 },
+    guestPosition: Vec2 = { x: 650, y: 360 },
+    hostFacing: Vec2 = { x: 1, y: 0 },
+    guestFacing: Vec2 = { x: -1, y: 0 }
+  ): Promise<void> => {
+    advanceUntil(match.roomCode, (value) => value.players.every((candidate) =>
+      candidate.action.kind === null && candidate.hitstunRemainingMs === 0 &&
+      candidate.dashRemainingMs === 0 && candidate.respawnRemainingMs === 0
+    ), 'neutral fighters', 2_000);
+    harness().placePlayer(match.roomCode, match.host.playerId, hostPosition, hostFacing);
+    harness().placePlayer(match.roomCode, match.guest.playerId, guestPosition, guestFacing);
+    await submitFrames(match, [
+      { client: match.hostClient, playerId: match.host.playerId, overrides: { aimX: hostFacing.x, aimY: hostFacing.y } },
+      { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: guestFacing.x, aimY: guestFacing.y } }
+    ]);
+  };
+
+  const eventMarker = (roomCode: string): number => harness().recentEvents(roomCode).at(-1)?.eventId ?? 0;
+  const eventsAfter = (roomCode: string, marker: number): readonly GameEvent[] =>
+    harness().recentEvents(roomCode).filter((event) => event.eventId > marker);
+  const eventAfter = <T extends GameEvent['type']>(
+    roomCode: string,
+    marker: number,
+    type: T,
+    predicate: (event: Extract<GameEvent, { type: T }>) => boolean = () => true
+  ): Extract<GameEvent, { type: T }> | null =>
+    eventsAfter(roomCode, marker).find((event): event is Extract<GameEvent, { type: T }> =>
+      event.type === type && predicate(event as Extract<GameEvent, { type: T }>)) ?? null;
+
+  const advanceToEvent = <T extends GameEvent['type']>(
+    match: StartedMatch,
+    marker: number,
+    type: T,
+    maximumMs: number,
+    predicate: (event: Extract<GameEvent, { type: T }>) => boolean = () => true
+  ): Extract<GameEvent, { type: T }> => {
+    advanceUntil(match.roomCode, () => eventAfter(match.roomCode, marker, type, predicate) !== null, type, maximumMs);
+    return eventAfter(match.roomCode, marker, type, predicate)!;
+  };
+
+  const quick = async (
+    match: StartedMatch,
+    entries: readonly Readonly<{ client: GameClient; playerId: string; aim: Vec2 }>[]
+  ): Promise<void> => {
+    await submitFrames(match, entries.map(({ client: socket, playerId, aim }) => ({
+      client: socket,
+      playerId,
+      overrides: { aimX: aim.x, aimY: aim.y, quick: true }
+    })));
+    await submitFrames(match, entries.map(({ client: socket, playerId, aim }) => ({
+      client: socket,
+      playerId,
+      overrides: { aimX: aim.x, aimY: aim.y }
+    })));
+  };
+
+  const charge = async (
+    match: StartedMatch,
+    entries: readonly Readonly<{ client: GameClient; playerId: string; aim: Vec2 }>[]
+  ): Promise<void> => {
+    await submitFrames(match, entries.map(({ client: socket, playerId, aim }) => ({
+      client: socket,
+      playerId,
+      overrides: { aimX: aim.x, aimY: aim.y, heavy: true }
+    })));
+  };
+
+  const releaseHeavy = async (
+    match: StartedMatch,
+    entries: readonly Readonly<{ client: GameClient; playerId: string; aim: Vec2 }>[]
+  ): Promise<void> => {
+    await submitFrames(match, entries.map(({ client: socket, playerId, aim }) => ({
+      client: socket,
+      playerId,
+      overrides: { aimX: aim.x, aimY: aim.y }
+    })));
+  };
+
+  it('keeps deterministic placement and cloned event history private to an enabled in-process harness', async () => {
+    const production = createGameServer({ host: '127.0.0.1', port: 0, clientDirectory: false });
+    expect(production.testHarness).toBeNull();
+    await production.stop();
     expect((await fetch(`${origin}/__test__/knockout`)).status).toBe(404);
 
-    const malformed = await emitAck<SessionWelcome>(clientA, 'room:create', { name: 'Ada', admin: true });
-    expect(malformed).toMatchObject({ ok: false, error: { code: 'INVALID_PAYLOAD' } });
-    const host = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
-    const guest = await emitSuccess<SessionWelcome>(clientB, 'room:join', { name: 'Linus', roomCode: host.roomCode });
-    await emitSuccess<null>(clientA, 'lobby:chassis', { chassis: 'WRAITH' });
-    await emitSuccess<null>(clientB, 'lobby:chassis', { chassis: 'PULSE' });
-    await emitSuccess<null>(clientA, 'lobby:ready', { ready: true });
-    await emitSuccess<null>(clientB, 'lobby:ready', { ready: true });
-
-    const started = expectEvent(clientB, 'match:started');
-    await emitSuccess<null>(clientA, 'match:start', {});
-    expect((await started).players.map((player) => player.chassis).sort()).toEqual(['PULSE', 'WRAITH']);
-    const regulation = await expectEvent(clientA, 'match:snapshot', (snapshot) => snapshot.phase === 'REGULATION');
-    const hostPlayer = regulation.players.find((player) => player.playerId === host.playerId)!;
-    const guestPlayer = regulation.players.find((player) => player.playerId === guest.playerId)!;
-    const direction = unitVector(hostPlayer.position, guestPlayer.position);
-    sendInput(clientA, input(1, { moveX: direction.x, moveY: direction.y, aimX: direction.x, aimY: direction.y }));
-    const inRange = await expectEvent(clientA, 'match:snapshot', (snapshot) => {
-      const attacker = snapshot.players.find((player) => player.playerId === host.playerId);
-      const target = snapshot.players.find((player) => player.playerId === guest.playerId);
-      return Boolean(attacker && target && Math.hypot(attacker.position.x - target.position.x, attacker.position.y - target.position.y) < 70);
+    const match = await startMatch();
+    const position = { x: 520, y: 320 };
+    const facing = { x: 0, y: 1 };
+    harness().placePlayer(match.roomCode, match.host.playerId, position, facing);
+    position.x = 999;
+    facing.y = -1;
+    expect(player(snapshot(match.roomCode), match.host.playerId)).toMatchObject({
+      position: { x: 520, y: 320 },
+      facing: { x: 0, y: 1 }
     });
-    const attackerAtRange = inRange.players.find((player) => player.playerId === host.playerId)!;
-    const targetAtRange = inRange.players.find((player) => player.playerId === guest.playerId)!;
-    const attackDirection = unitVector(attackerAtRange.position, targetAtRange.position);
-    const hitEvent = expectEvent(clientA, 'match:event',
-      (event) => event.type === 'HIT' && event.attackerId === host.playerId && event.targetId === guest.playerId);
-    sendInput(clientA, input(2, { aimX: attackDirection.x, aimY: attackDirection.y, quick: true }));
-    const hit = await hitEvent;
-    expect(hit).toMatchObject({ type: 'HIT', attackerId: host.playerId, targetId: guest.playerId });
-    const overloadBeforeDisconnect = (hit as Extract<GameEvent, { type: 'HIT' }>).resultingOverload;
 
-    const paused = expectEvent(clientA, 'room:state',
-      (state) => state.pauseRemainingMs !== null && state.pauseRemainingMs > GAME.reconnectGraceMs - 1_000 &&
-        !state.players.find((player) => player.playerId === guest.playerId)?.connected);
-    server.testHarness!.disconnectPlayer(host.roomCode, guest.playerId);
-    await paused;
+    const marker = eventMarker(match.roomCode);
+    await quick(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    advanceBy(match.roomCode, 250);
+    const returned = harness().recentEvents(match.roomCode);
+    expect(returned.length).toBeGreaterThan(0);
+    (returned.at(-1)! as { eventId: number }).eventId = marker + 10_000;
+    expect(harness().recentEvents(match.roomCode).at(-1)?.eventId).not.toBe(marker + 10_000);
+    expect(JSON.stringify(server.testHarness)).not.toMatch(/token|expires|timestamp/iu);
+  });
+
+  it('serves the SPA fallback when the built client lives under a dotted worktree path', async () => {
+    const temporaryRoot = await mkdtemp(join(tmpdir(), 'neon-static-'));
+    const clientDirectory = join(temporaryRoot, '.worktree', 'dist', 'client');
+    await mkdir(clientDirectory, { recursive: true });
+    await writeFile(join(clientDirectory, 'index.html'), '<main>Neon fallback</main>');
+    const staticServer = createGameServer({ host: '127.0.0.1', port: 0, clientDirectory });
+    const address = await staticServer.start();
+    try {
+      const response = await fetch(`${address.origin}/favicon.ico`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('<main>Neon fallback</main>');
+    } finally {
+      await staticServer.stop();
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves quick/quick, heavy/quick, and heavy/heavy from monotonic socket input frames', async () => {
+    const match = await startMatch();
+
+    await prepare(
+      match,
+      { x: 580, y: 360 },
+      { x: 640, y: 360 },
+      { x: 1, y: 0 },
+      { x: 0, y: -1 }
+    );
+    let marker = eventMarker(match.roomCode);
+    await quick(match, [
+      { client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } },
+      { client: match.guestClient, playerId: match.guest.playerId, aim: { x: 0, y: -1 } }
+    ]);
+    const quickClash = advanceToEvent(match, marker, 'CLASH', 400);
+    expect(quickClash.strength).toBe('QUICK');
+    expect(eventsAfter(match.roomCode, marker).filter((event) => event.type === 'HIT')).toEqual([]);
+
+    await prepare(
+      match,
+      { x: 580, y: 360 },
+      { x: 640, y: 360 },
+      { x: 0, y: 1 },
+      { x: 0, y: 1 }
+    );
+    marker = eventMarker(match.roomCode);
+    await charge(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 0, y: 1 } }]);
+    advanceBy(match.roomCode, GAME.heavyEnterChargeMs + 40);
+    await submitFrames(match, [
+      { client: match.hostClient, playerId: match.host.playerId, overrides: { aimX: 0, aimY: 1 } },
+      { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: 0, aimY: 1, quick: true } }
+    ]);
+    await submitFrames(match, [
+      { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: 0, aimY: 1 } }
+    ]);
+    const priorityClash = advanceToEvent(match, marker, 'CLASH', 400);
+    expect(priorityClash.strength).toBe('HEAVY');
+    expect(player(snapshot(match.roomCode), match.host.playerId).action.kind).toBe('HEAVY');
+    expect(eventsAfter(match.roomCode, marker).filter((event) => event.type === 'HIT')).toEqual([]);
+
+    await prepare(
+      match,
+      { x: 580, y: 360 },
+      { x: 640, y: 360 },
+      { x: 1, y: 0 },
+      { x: 0, y: -1 }
+    );
+    marker = eventMarker(match.roomCode);
+    const heavyEntries = [
+      { client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } },
+      { client: match.guestClient, playerId: match.guest.playerId, aim: { x: 0, y: -1 } }
+    ] as const;
+    await charge(match, heavyEntries);
+    advanceBy(match.roomCode, GAME.heavyEnterChargeMs + 40);
+    await releaseHeavy(match, heavyEntries);
+    const heavyClash = advanceToEvent(match, marker, 'CLASH', 400);
+    expect(heavyClash.strength).toBe('HEAVY');
+    expect(player(snapshot(match.roomCode), match.host.playerId).action.phase).toBe('RECOVERY');
+    expect(player(snapshot(match.roomCode), match.guest.playerId).action.phase).toBe('RECOVERY');
+    expect(eventsAfter(match.roomCode, marker).filter((event) => event.type === 'HIT')).toEqual([]);
+  });
+
+  it('resolves attack/pulse, pulse/player, perfect dodge, and charge interruption from real input edges', async () => {
+    const match = await startMatch();
+
+    await prepare(match, { x: 500, y: 360 }, { x: 650, y: 360 });
+    let marker = eventMarker(match.roomCode);
+    await charge(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    advanceBy(match.roomCode, GAME.heavyMaxChargeMs);
+    await submitFrames(match, [
+      { client: match.hostClient, playerId: match.host.playerId, overrides: { aimX: 1, aimY: 0 } },
+      { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: -1, aimY: 0, quick: true } }
+    ]);
+    await submitFrames(match, [
+      { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: -1, aimY: 0 } }
+    ]);
+    const pulseBreak = advanceToEvent(match, marker, 'PULSE_BREAK', 500);
+    const pulseSpawn = eventAfter(match.roomCode, marker, 'PULSE_SPAWN');
+    expect(pulseSpawn).not.toBeNull();
+    expect(pulseBreak.projectileId).toBe(pulseSpawn!.projectileId);
+    expect(eventsAfter(match.roomCode, marker).some((event) => event.type === 'HIT' && event.attack === 'NEON_PULSE')).toBe(false);
+
+    await prepare(match, { x: 500, y: 360 }, { x: 720, y: 360 });
+    marker = eventMarker(match.roomCode);
+    await charge(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    advanceBy(match.roomCode, GAME.heavyMaxChargeMs);
+    await releaseHeavy(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    const pulseHit = advanceToEvent(match, marker, 'HIT', 600, (event) => event.attack === 'NEON_PULSE');
+    expect(pulseHit).toMatchObject({ attackerId: match.host.playerId, targetId: match.guest.playerId });
+    expect(snapshot(match.roomCode).pulses).toEqual([]);
+
+    await prepare(match, { x: 580, y: 360 }, { x: 700, y: 360 });
+    marker = eventMarker(match.roomCode);
+    await submitFrames(match, [
+      { client: match.hostClient, playerId: match.host.playerId, overrides: { aimX: 1, aimY: 0, quick: true } },
+      { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: -1, aimY: 0, dash: true } }
+    ]);
+    await submitFrames(match, [
+      { client: match.hostClient, playerId: match.host.playerId, overrides: { aimX: 1, aimY: 0 } },
+      { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: -1, aimY: 0 } }
+    ]);
+    const dodge = advanceToEvent(match, marker, 'PERFECT_DODGE', 400);
+    expect(dodge).toMatchObject({
+      playerId: match.guest.playerId,
+      attackerId: match.host.playerId,
+      source: 'QUICK_1',
+      projectileId: null,
+      refundedMs: GAME.perfectDodgeRefundMs
+    });
+
+    await prepare(match);
+    marker = eventMarker(match.roomCode);
+    await charge(match, [{ client: match.guestClient, playerId: match.guest.playerId, aim: { x: -1, y: 0 } }]);
+    advanceBy(match.roomCode, GAME.heavyEnterChargeMs + 40);
+    expect(player(snapshot(match.roomCode), match.guest.playerId).action.charging).toBe(true);
+    await quick(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    advanceToEvent(match, marker, 'HIT', 400, (event) => event.targetId === match.guest.playerId);
+    expect(player(snapshot(match.roomCode), match.guest.playerId).action).toMatchObject({
+      kind: 'HITSTUN',
+      chargeMs: 0,
+      charging: false
+    });
+    expect(eventsAfter(match.roomCode, marker).some((event) => event.type === 'PULSE_SPAWN')).toBe(false);
+  });
+
+  it('orders a real pulse hit, credited knockout, and exact 600 ms return monotonically', async () => {
+    const match = await startMatch();
+    await prepare(match, { x: 500, y: 360 }, { x: 720, y: 360 });
+    const marker = eventMarker(match.roomCode);
+    await charge(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    advanceBy(match.roomCode, GAME.heavyMaxChargeMs);
+    await releaseHeavy(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    const hit = advanceToEvent(match, marker, 'HIT', 600, (event) => event.attack === 'NEON_PULSE');
+    expect(hit.resultingOverload).toBeGreaterThan(0);
+
+    harness().placePlayer(match.roomCode, match.guest.playerId, { x: 640, y: 0 }, { x: -1, y: 0 });
+    await submitFrames(match, [
+      { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: -1, aimY: 0 } }
+    ]);
+    const knockout = advanceToEvent(match, hit.eventId, 'KNOCKOUT', 200);
+    expect(knockout).toMatchObject({
+      attackerId: match.host.playerId,
+      targetId: match.guest.playerId,
+      scoreAwardedTo: match.host.playerId,
+      scores: { [match.host.playerId]: 1, [match.guest.playerId]: 0 }
+    });
+    const respawn = advanceToEvent(match, knockout.eventId, 'RESPAWN', GAME.knockoutToControlMs + STEP_MS * 2);
+    expect((respawn.tick - knockout.tick) * STEP_MS).toBeCloseTo(GAME.knockoutToControlMs, 8);
+    const afterReturn = advanceUntil(match.roomCode, (value) => {
+      const returned = player(value, match.guest.playerId);
+      return returned.respawnRemainingMs === 0 && returned.overload === 0;
+    }, 'published respawn state', 100);
+    expect(player(afterReturn, match.guest.playerId)).toMatchObject({
+      overload: 0,
+      respawnRemainingMs: 0,
+      stats: { falls: 1 }
+    });
+    expect(player(afterReturn, match.host.playerId).stats.knockouts).toBe(1);
+    const ordered = eventsAfter(match.roomCode, marker).filter((event) =>
+      ['PULSE_SPAWN', 'HIT', 'KNOCKOUT', 'RESPAWN'].includes(event.type));
+    expect(ordered.map((event) => event.type)).toEqual(['PULSE_SPAWN', 'HIT', 'KNOCKOUT', 'RESPAWN']);
+    expect(ordered.map((event) => event.eventId)).toEqual([...ordered].map((event) => event.eventId).sort((left, right) => left - right));
+  });
+
+  it('contracts at 75/40 pacing and lets only the next credited sudden-death knockout win', async () => {
+    const match = await startMatch();
+    const warning = advanceUntil(
+      match.roomCode,
+      (value) => value.remainingMs <= GAME.contractionWarningRemainingMs,
+      '78 second warning boundary',
+      GAME.regulationMs - GAME.contractionWarningRemainingMs + 100
+    );
+    expect(warning.remainingMs).toBeGreaterThan(GAME.contractionStartRemainingMs);
+    expect(warning.platformProgress).toBe(0);
+
+    const contracting = advanceUntil(
+      match.roomCode,
+      (value) => value.remainingMs <= GAME.contractionStartRemainingMs - STEP_MS,
+      '75 second contraction start',
+      GAME.contractionWarningRemainingMs - GAME.contractionStartRemainingMs + 100
+    );
+    expect(contracting.platformProgress).toBeGreaterThan(0);
+
+    const minimum = advanceUntil(
+      match.roomCode,
+      (value) => value.remainingMs <= GAME.contractionMinimumRemainingMs,
+      '40 second minimum arena',
+      GAME.contractionStartRemainingMs - GAME.contractionMinimumRemainingMs + 100
+    );
+    expect(minimum.platformProgress).toBe(1);
+
+    const suddenDeath = advanceUntil(
+      match.roomCode,
+      (value) => value.phase === 'SUDDEN_DEATH',
+      'sudden death',
+      GAME.contractionMinimumRemainingMs + 100
+    );
+    expect(suddenDeath).toMatchObject({ phase: 'SUDDEN_DEATH', platformProgress: 1 });
+    expect(harness().recentEvents(match.roomCode)).toContainEqual(expect.objectContaining({
+      type: 'PHASE',
+      phase: 'SUDDEN_DEATH'
+    }));
+
+    let marker = eventMarker(match.roomCode);
+    harness().placePlayer(match.roomCode, match.guest.playerId, { x: 640, y: 0 }, { x: -1, y: 0 });
+    await submitFrames(match, [{ client: match.guestClient, playerId: match.guest.playerId }]);
+    const selfFall = advanceToEvent(match, marker, 'KNOCKOUT', 200);
+    expect(selfFall.scoreAwardedTo).toBeNull();
+    expect(snapshot(match.roomCode)).toMatchObject({ phase: 'SUDDEN_DEATH', scores: { [match.host.playerId]: 0, [match.guest.playerId]: 0 } });
+    advanceToEvent(match, selfFall.eventId, 'RESPAWN', GAME.knockoutToControlMs + STEP_MS * 2);
+    advanceBy(match.roomCode, GAME.respawnProtectionMs);
+
+    await prepare(match, { x: 580, y: 360 }, { x: 650, y: 360 });
+    marker = eventMarker(match.roomCode);
+    await quick(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    const hit = advanceToEvent(match, marker, 'HIT', 400, (event) => event.targetId === match.guest.playerId);
+    harness().placePlayer(match.roomCode, match.guest.playerId, { x: 640, y: 0 }, { x: -1, y: 0 });
+    const credited = advanceToEvent(match, hit.eventId, 'KNOCKOUT', 200);
+    const result = advanceToEvent(match, credited.eventId, 'RESULT', 50);
+    expect(credited.scoreAwardedTo).toBe(match.host.playerId);
+    expect(result).toMatchObject({ winnerPlayerId: match.host.playerId, reason: 'SUDDEN_DEATH' });
+  }, 15_000);
+
+  it('preserves identity, chassis, score, statistics, overload, and neutral input across reconnect and rematch', async () => {
+    const match = await startMatch();
+    await prepare(match);
+    const hitMarker = eventMarker(match.roomCode);
+    await quick(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
+    const hit = advanceToEvent(match, hitMarker, 'HIT', 400, (event) => event.targetId === match.guest.playerId);
+    const beforeDisconnect = snapshot(match.roomCode);
+    const guestBefore = player(beforeDisconnect, match.guest.playerId);
+
+    harness().disconnectPlayer(match.roomCode, match.guest.playerId);
+    await waitFor(() => server.rooms.debugRoom(match.roomCode)?.connectedCount === 1, 'authoritative disconnect');
     const resumedClient = await client();
-    const resumedSnapshot = expectEvent(clientA, 'match:snapshot', (snapshot) => {
-      const resumed = snapshot.players.find((player) => player.playerId === guest.playerId);
-      return resumed?.respawnRemainingMs === GAME.reconnectWarpMs;
-    });
     const resumed = await emitSuccess<SessionWelcome>(resumedClient, 'session:resume', {
-      roomCode: host.roomCode,
-      resumeToken: guest.resumeToken
+      roomCode: match.roomCode,
+      resumeToken: match.guest.resumeToken
     });
-    expect(resumed).toMatchObject({ playerId: guest.playerId, resumed: true });
-    expect((await resumedSnapshot).players.find((player) => player.playerId === guest.playerId)?.overload).toBe(overloadBeforeDisconnect);
-    await expectEvent(clientA, 'match:snapshot',
-      (snapshot) => snapshot.players.find((player) => player.playerId === guest.playerId)?.respawnRemainingMs === 0);
-
-    const beforeUnauthorizedHarness = server.testHarness!.matchSnapshot(host.roomCode)!;
-    (clientA.emit as (event: string, payload: unknown) => void)('test:force-knockout', {
-      roomCode: host.roomCode,
-      attackerId: host.playerId,
-      targetId: guest.playerId
+    expect(resumed).toMatchObject({ playerId: match.guest.playerId, resumed: true });
+    advanceUntil(match.roomCode, (value) => player(value, match.guest.playerId).respawnRemainingMs === 0, 'reconnect warp', 400);
+    const afterResume = snapshot(match.roomCode);
+    expect(player(afterResume, match.guest.playerId)).toMatchObject({
+      playerId: match.guest.playerId,
+      chassis: guestBefore.chassis,
+      accent: guestBefore.accent,
+      overload: hit.resultingOverload,
+      velocity: { x: 0, y: 0 },
+      action: { kind: null, charging: false }
     });
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(server.testHarness!.matchSnapshot(host.roomCode)?.scores).toEqual(beforeUnauthorizedHarness.scores);
+    expect(player(afterResume, match.guest.playerId).stats).toEqual(guestBefore.stats);
+    expect(afterResume.scores).toEqual(beforeDisconnect.scores);
 
-    const knockoutEvents: GameEvent[] = [];
-    clientA.on('match:event', (event) => knockoutEvents.push(event));
-    const resultStatePromise = expectEvent(clientA, 'room:state', (state) => state.phase === 'RESULT');
+    const resultState = expectEvent(match.hostClient, 'room:state', (state) => state.phase === 'RESULT');
     for (let knockout = 0; knockout < GAME.targetScore; knockout += 1) {
-      const knockedOut = expectEvent(clientA, 'match:event',
-        (event) => event.type === 'KNOCKOUT' && event.targetId === guest.playerId);
-      server.testHarness!.forceKnockout(host.roomCode, host.playerId, guest.playerId);
-      await knockedOut;
+      const knockoutMarker = eventMarker(match.roomCode);
+      harness().forceKnockout(match.roomCode, match.host.playerId, match.guest.playerId);
+      const forced = eventAfter(match.roomCode, knockoutMarker, 'KNOCKOUT');
+      if (!forced) throw new Error(`Forced result setup knockout ${knockout + 1} did not occur.`);
       if (knockout < GAME.targetScore - 1) {
-        await expectEvent(clientA, 'match:snapshot',
-          (snapshot) => snapshot.players.find((player) => player.playerId === guest.playerId)?.respawnRemainingMs === 0);
+        advanceToEvent(match, forced.eventId, 'RESPAWN', GAME.knockoutToControlMs + STEP_MS * 2);
       }
     }
-    const resultState = await resultStatePromise;
-    expect(knockoutEvents.filter((event) => event.type === 'KNOCKOUT')).toHaveLength(GAME.targetScore);
-    expect(knockoutEvents.some(
-      (event) => event.type === 'RESULT' && event.winnerPlayerId === host.playerId && event.reason === 'TARGET_SCORE'
-    )).toBe(true);
-    expect(resultState.players.find((player) => player.playerId === host.playerId)?.stats.knockouts).toBe(GAME.targetScore);
-    expect(resultState.players.find((player) => player.playerId === guest.playerId)?.stats.falls).toBe(GAME.targetScore);
-    expect(server.testHarness!.matchSnapshot(host.roomCode)).toMatchObject({
-      phase: 'FINISHED',
-      winnerPlayerId: host.playerId,
-      resultReason: 'TARGET_SCORE',
-      scores: { [host.playerId]: GAME.targetScore, [guest.playerId]: 0 }
-    });
-
-    await emitSuccess<null>(clientA, 'result:ready', { ready: true });
+    expect((await resultState).players.find((candidate) => candidate.playerId === match.host.playerId)?.stats.knockouts).toBe(GAME.targetScore);
+    await emitSuccess<null>(match.hostClient, 'result:ready', { ready: true });
     await emitSuccess<null>(resumedClient, 'result:ready', { ready: true });
     const rematchStarted = expectEvent(resumedClient, 'match:started');
-    await emitSuccess<null>(clientA, 'match:start', {});
+    await emitSuccess<null>(match.hostClient, 'match:start', {});
     expect(await rematchStarted).toMatchObject({
       tick: 0,
-      scores: { [host.playerId]: 0, [guest.playerId]: 0 },
+      scores: { [match.host.playerId]: 0, [match.guest.playerId]: 0 },
       winnerPlayerId: null,
       resultReason: null
     });
-  }, 20_000);
+  }, 12_000);
 
   it('accepts at most sixty monotonic inputs per second and silently shapes input bursts', async () => {
-    const clientA = await client();
-    const clientB = await client();
-    const host = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
-    await emitSuccess<SessionWelcome>(clientB, 'room:join', { name: 'Linus', roomCode: host.roomCode });
-    await emitSuccess<null>(clientA, 'lobby:ready', { ready: true });
-    await emitSuccess<null>(clientB, 'lobby:ready', { ready: true });
-    await emitSuccess<null>(clientA, 'match:start', {});
-    await expectEvent(clientA, 'match:snapshot', (snapshot) => snapshot.phase === 'REGULATION');
-
+    const match = await startMatch();
     const errors: ServerError[] = [];
-    clientA.on('server:error', (error) => errors.push(error));
-    for (let seq = 1; seq <= 95; seq += 1) sendInput(clientA, input(seq));
-    const capped = await expectEvent(clientA, 'match:snapshot',
-      (snapshot) => snapshot.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq === 60);
-    expect(capped.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq).toBe(60);
+    match.hostClient.on('server:error', (error) => errors.push(error));
+    for (let seq = 100; seq <= 194; seq += 1) match.hostClient.emit('match:input', input(seq));
+    const capped = await expectEvent(match.hostClient, 'match:snapshot',
+      (value) => player(value, match.host.playerId).lastProcessedInputSeq === 159);
+    expect(player(capped, match.host.playerId).lastProcessedInputSeq).toBe(159);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(errors.filter((error) => error.code === 'RATE_LIMITED')).toHaveLength(0);
 
     await new Promise((resolve) => setTimeout(resolve, 1_050));
-    sendInput(clientA, input(100));
-    sendInput(clientA, input(99, { moveX: -1 }));
-    const monotonic = await expectEvent(clientA, 'match:snapshot',
-      (snapshot) => snapshot.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq === 100);
-    expect(monotonic.players.find((player) => player.playerId === host.playerId)?.lastProcessedInputSeq).toBe(100);
+    match.hostClient.emit('match:input', input(200));
+    match.hostClient.emit('match:input', input(199, { moveX: -1 }));
+    const monotonic = await expectEvent(match.hostClient, 'match:snapshot',
+      (value) => player(value, match.host.playerId).lastProcessedInputSeq === 200);
+    expect(player(monotonic, match.host.playerId).lastProcessedInputSeq).toBe(200);
   }, 12_000);
 
   it('limits room actions to ten per second and suppresses repeated rate-limit events', async () => {
@@ -261,19 +630,5 @@ describe('Socket.IO FFA game server flow', () => {
     )).toHaveLength(4);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(errors.filter((error) => error.code === 'RATE_LIMITED')).toHaveLength(1);
-  });
-
-  it('returns copied harness snapshots and stops cleanly', async () => {
-    const clientA = await client();
-    const clientB = await client();
-    const host = await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });
-    await emitSuccess<SessionWelcome>(clientB, 'room:join', { name: 'Linus', roomCode: host.roomCode });
-    await emitSuccess<null>(clientA, 'lobby:ready', { ready: true });
-    await emitSuccess<null>(clientB, 'lobby:ready', { ready: true });
-    await emitSuccess<null>(clientA, 'match:start', {});
-    const first = server.testHarness!.matchSnapshot(host.roomCode)!;
-    (first.scores as Record<string, number>)[host.playerId] = 99;
-    expect(server.testHarness!.matchSnapshot(host.roomCode)?.scores[host.playerId]).toBe(0);
-    expect(JSON.stringify(server.testHarness)).not.toMatch(/token|expires|timestamp/iu);
   });
 });

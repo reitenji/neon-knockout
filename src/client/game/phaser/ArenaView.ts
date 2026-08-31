@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
-import type { Vec2 } from '../../../shared/model.js';
-import { buildArenaVisualModel, type ArenaVisualState } from './arenaVisualPlan.js';
+import { GAME } from '../../../shared/constants.js';
+import type { MatchPhase, Vec2 } from '../../../shared/model.js';
+import { buildArenaVisualModel, type ArenaVisualModel, type ArenaVisualState } from './arenaVisualPlan.js';
 
 export interface ArenaView {
   apply(state: ArenaVisualState, nowMs?: number): void;
@@ -129,8 +130,38 @@ function drawChevron(
   overlay.strokePath();
 }
 
-function drawDynamicTelegraph(overlay: GraphicsLike, state: ArenaVisualState, nowMs: number, reducedMotion: boolean): void {
-  const model = buildArenaVisualModel(state, { nowMs, reducedMotion });
+function warningIsVisible(state: ArenaVisualState): boolean {
+  return state.platformProgress > 0 || state.phase === 'SUDDEN_DEATH' ||
+    (state.phase === 'REGULATION' && state.remainingMs <= GAME.contractionWarningRemainingMs);
+}
+
+type VisualSignature = Readonly<{
+  phase: MatchPhase;
+  remainingMs: number;
+  platformProgress: number;
+  nowMs: number;
+}>;
+
+function visualSignature(
+  state: ArenaVisualState,
+  nowMs: number,
+  reducedMotion: boolean
+): VisualSignature {
+  const visibleWarning = warningIsVisible(state);
+  return {
+    phase: state.phase,
+    remainingMs: visibleWarning ? state.remainingMs : 0,
+    platformProgress: state.platformProgress,
+    nowMs: visibleWarning && !reducedMotion ? nowMs : 0
+  };
+}
+
+function sameVisualSignature(left: VisualSignature | null, right: VisualSignature): boolean {
+  return left !== null && left.phase === right.phase && left.remainingMs === right.remainingMs &&
+    left.platformProgress === right.platformProgress && left.nowMs === right.nowMs;
+}
+
+function drawDynamicTelegraph(overlay: GraphicsLike, state: ArenaVisualState, model: ArenaVisualModel): void {
   const minimumPoints = toMutablePoints(model.minimumVertices);
   const currentPoints = toMutablePoints(model.currentVertices);
   overlay.clear();
@@ -165,13 +196,21 @@ export function createArenaView(
   const detail = scene.add.graphics() as GraphicsLike;
   const overlay = scene.add.graphics() as GraphicsLike;
   let destroyed = false;
+  let lastVisualSignature: VisualSignature | null = null;
 
   drawStaticShell(shell, detail);
 
   return {
     apply(state, nowMs = 0) {
       if (destroyed) return;
-      drawDynamicTelegraph(overlay, state, nowMs, reducedMotion);
+      const signature = visualSignature(state, nowMs, reducedMotion);
+      if (sameVisualSignature(lastVisualSignature, signature)) return;
+      lastVisualSignature = signature;
+      const model = buildArenaVisualModel(state, {
+        nowMs,
+        reducedMotion: reducedMotion || !warningIsVisible(state)
+      });
+      drawDynamicTelegraph(overlay, state, model);
     },
     destroy() {
       if (destroyed) return;

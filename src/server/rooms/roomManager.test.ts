@@ -188,6 +188,38 @@ describe('RoomManager FFA lifecycle', () => {
     expect(subject.roomState(roomCode).phase).toBe('MATCH');
   });
 
+  it('preserves unprocessed quick and dash pulses through newer neutral frames and consumes each once', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject);
+    advanceCountdown(subject);
+
+    subject.manager.applyInput('c-1', { ...idleInput(0), quick: true });
+    subject.manager.applyInput('c-1', idleInput(1));
+    subject.manager.applyInput('c-2', { ...idleInput(0), dash: true });
+    subject.manager.applyInput('c-2', idleInput(1));
+    subject.manager.advance(50);
+
+    const onset = subject.snapshot(roomCode);
+    expect(onset.players.find((player) => player.playerId === players[0].playerId)?.action.kind).toBe('QUICK_1');
+    expect(onset.players.find((player) => player.playerId === players[1].playerId)?.dashCooldownRemainingMs)
+      .toBeGreaterThan(0);
+
+    subject.manager.applyInput('c-1', idleInput(2));
+    subject.manager.applyInput('c-2', idleInput(2));
+    for (let index = 0; index < 40; index += 1) subject.manager.advance(50);
+    const settled = subject.snapshot(roomCode);
+    expect(settled.players.find((player) => player.playerId === players[0].playerId)?.stats.completedAttacks).toBe(1);
+    expect(settled.players.find((player) => player.playerId === players[1].playerId)).toMatchObject({
+      dashRemainingMs: 0,
+      dashCooldownRemainingMs: 0
+    });
+    subject.manager.advance(50);
+    expect(subject.snapshot(roomCode).players.find((player) => player.playerId === players[0].playerId)?.stats.completedAttacks)
+      .toBe(1);
+    expect(subject.snapshot(roomCode).players.find((player) => player.playerId === players[1].playerId)?.dashCooldownRemainingMs)
+      .toBe(0);
+  });
+
   it('continues with two connected players and disconnects without score or statistics penalties', () => {
     const subject = fixture();
     const { roomCode, players } = readyAndStart(subject, 3);

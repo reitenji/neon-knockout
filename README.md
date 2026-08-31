@@ -19,13 +19,18 @@ The local host may use `http://localhost:4173`; other machines must use the prin
 
 ## Controls
 
-- `WASD` or arrow keys: move
-- Mouse: aim
-- Left mouse button: quick combo
-- Hold and release right mouse button: charged heavy strike
+- `WASD`: move and aim, including normalized diagonals; releasing movement retains the last aim direction
+- `J`: quick attack on each new key press
+- Hold `K`: charge a heavy strike while steering with `WASD`; release `K` to attack
 - `Space`: dash
 
-The arena requires a desktop viewport of at least 900 × 600 CSS pixels. All chassis have the same gameplay values. The first player to five knockouts wins; a normal knockout returns control in 700 ms.
+Arrow keys, both `Shift` keys, mouse movement, and mouse buttons do not control the fighter. The arena requires a desktop viewport of at least 900 × 600 CSS pixels. All chassis have the same gameplay values. The first player to five knockouts wins; a normal knockout returns control in 600 ms, resets overload, and does not add any escalating penalty.
+
+## Combat and match pacing
+
+A heavy becomes available after 180 ms of charge. Releasing before the full 700 ms produces a melee-only heavy; reaching 700 ms also launches exactly one server-owned **Neon Pulse** in the locked direction. Pulses can hit a fighter or be broken by an active melee sweep. Equal quick attacks clash, equal heavies clash with stronger recoil, and a heavy defeats a quick without canceling the heavy. The first attack avoided during a dash is a **perfect dodge** and refunds part of that dash cooldown.
+
+A regulation match lasts two minutes. The HUD warns at 78 seconds remaining, the platform begins contracting at 75 seconds, and it reaches minimum size at 40 seconds. A tied regulation result enters minimum-arena sudden death; only the next credited knockout wins, while an uncredited self-fall does not end the match.
 
 ## Reconnect behavior
 
@@ -47,7 +52,7 @@ The host can confirm the server is listening with:
 curl --fail http://127.0.0.1:4173/health
 ```
 
-It returns JSON with `status: "ok"` and the current room count. If it fails, check that the host command is still running. If the host probe works but a guest cannot connect, verify both devices are on the same private network, use the printed LAN URL exactly, and check the firewall rule. If the game shows a viewport warning, enlarge the browser window rather than using a mobile browser.
+It returns JSON with `status: "ok"` and the current room count. Also run the same `/health` request against the exact private address printed by `npm run lan`, for example `curl --fail http://192.168.1.20:4173/health`; do not guess or hardcode that address. Both requests must return HTTP 200. If the host probe works but a guest cannot connect, verify both devices are on the same private network, use the printed LAN URL exactly, and check the firewall rule. If the game shows a viewport warning, enlarge the browser window rather than using a mobile browser.
 
 ## Verification
 
@@ -59,4 +64,7 @@ npm run test:load
 npm run build
 npm run test:e2e
 npm run verify
+npx vitest run tests/integration/socketFlow.test.ts --maxWorkers=1
 ```
+
+`npm run verify` runs lint, both TypeScript checks, all Vitest suites, the ten-second eight-client load gate, and a production build. `npm run test:e2e` builds production code and runs the keyboard-only two-context combat journey plus the eight-context frame-budget gate.

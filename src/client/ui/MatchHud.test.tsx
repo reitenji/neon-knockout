@@ -125,10 +125,10 @@ describe('MatchHud', () => {
 
     const controls = screen.getByLabelText('Kontroller');
     expect(controls).toHaveTextContent('WASD');
-    expect(controls).toHaveTextContent('Oklar');
-    expect(controls).toHaveTextContent('Shift + oklar');
+    expect(controls).toHaveTextContent('J');
+    expect(controls).toHaveTextContent('K');
     expect(controls).toHaveTextContent('Space');
-    expect(controls).not.toHaveTextContent(/tık|fare|mouse/i);
+    expect(controls).not.toHaveTextContent(/oklar|shift|tık|fare|mouse/i);
   });
 
   it('shows exact charge readiness and the authoritative 78-second contraction warning', () => {

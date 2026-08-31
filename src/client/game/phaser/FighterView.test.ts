@@ -22,7 +22,8 @@ type DrawCommand =
   | Readonly<{ kind: 'clear' }>
   | Readonly<{ kind: 'line'; from: Readonly<{ x: number; y: number }>; to: Readonly<{ x: number; y: number }>; style: LineStyle }>
   | Readonly<{ kind: 'circle'; x: number; y: number; radius: number; style: FillStyle }>
-  | Readonly<{ kind: 'arc'; x: number; y: number; radius: number; start: number; end: number; style: LineStyle }>;
+  | Readonly<{ kind: 'arc'; x: number; y: number; radius: number; start: number; end: number; style: LineStyle }>
+  | Readonly<{ kind: 'fill-points'; points: readonly Readonly<{ x: number; y: number }>[]; closeShape: boolean; style: FillStyle }>;
 
 class FakeDisplayObject {
   x = 0;
@@ -87,7 +88,10 @@ class FakeGraphics extends FakeDisplayObject {
   }
   strokePath(): this { return this; }
   setVisible(visible: boolean): this { this.visible = visible; return this; }
-  fillPoints(): this { return this; }
+  fillPoints(points: readonly Readonly<{ x: number; y: number }>[], closeShape: boolean): this {
+    this.commands.push({ kind: 'fill-points', points, closeShape, style: this.fill });
+    return this;
+  }
   strokePoints(): this { return this; }
 }
 
@@ -145,6 +149,15 @@ function frameCommands(graphics: FakeGraphics): DrawCommand[] {
 describe('FighterView real graphics presentation', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('creates no decorative ground-footprint polygons beneath the fighter', () => {
+    const harness = sceneHarness();
+
+    createFighterView(harness.scene as never, player(), true, { reducedMotion: true });
+
+    expect(harness.graphics.flatMap((graphics) => graphics.commands)
+      .filter((command) => command.kind === 'fill-points')).toEqual([]);
+  });
+
   it('draws the exact shared swept capsule locally without transform scaling drift', () => {
     const harness = sceneHarness();
     const currentPlayer = player();
@@ -159,7 +172,7 @@ describe('FighterView real graphics presentation', () => {
     const expected = buildAttackCapsule(
       { x: 0, y: 0 }, { x: 1, y: 0 }, profileForAttack('QUICK_1'), 0, 1 / 3
     );
-    const trail = harness.graphics[4]!;
+    const trail = harness.graphics[1]!;
     const commands = frameCommands(trail);
     expect(commands).toContainEqual({
       kind: 'line', from: expected.from, to: expected.to,
@@ -188,8 +201,8 @@ describe('FighterView real graphics presentation', () => {
     localView.apply(localPlayer, localPlayer.position, localPlayer.facing, canonicalCharge, null, state);
     remoteView.apply(remotePlayer, remotePlayer.position, remotePlayer.facing, null, null, state);
 
-    const localCommands = frameCommands(localHarness.graphics[5]!);
-    const remoteCommands = frameCommands(remoteHarness.graphics[5]!);
+    const localCommands = frameCommands(localHarness.graphics[2]!);
+    const remoteCommands = frameCommands(remoteHarness.graphics[2]!);
     const localTicks = localCommands.filter((command) => command.kind === 'line');
     const remoteTicks = remoteCommands.filter((command) => command.kind === 'line');
     const localArc = localCommands.find((command) => command.kind === 'arc');
@@ -241,8 +254,8 @@ describe('FighterView real graphics presentation', () => {
       { facing: { x: -1, y: 0 }, progress: 1, pulseReady: true }
     );
 
-    const localCommands = frameCommands(localHarness.graphics[5]!);
-    const remoteCommands = frameCommands(remoteHarness.graphics[5]!);
+    const localCommands = frameCommands(localHarness.graphics[2]!);
+    const remoteCommands = frameCommands(remoteHarness.graphics[2]!);
     const localSelected = localCommands.find(
       (command) => command.kind === 'line' && command.style.width === 3.4
     );
@@ -285,12 +298,49 @@ describe('FighterView real graphics presentation', () => {
       { facing: { x: -1, y: 0 }, progress: 1, pulseReady: true }
     );
 
-    const indicator = frameCommands(harness.graphics[5]!);
+    const indicator = frameCommands(harness.graphics[2]!);
     const selected = indicator.find((command) => command.kind === 'line' && command.style.width === 3.4);
     expect(view.content.rotation).toBeCloseTo(-Math.PI / 2);
     expect(selected).toEqual(expect.objectContaining({
       from: { x: -42, y: expect.closeTo(0) },
       to: { x: -56, y: expect.closeTo(0) }
     }));
+  });
+
+  it('skips unchanged vector redraws and redraws immediately when attack or charge state changes', () => {
+    const harness = sceneHarness();
+    const currentPlayer = player();
+    const view = createFighterView(harness.scene as never, currentPlayer, true, { reducedMotion: true });
+    const firstTelegraph = {
+      profileId: 'quick-1', facing: { x: 1, y: 0 },
+      previousProgress: 0, currentProgress: 0.5, active: true
+    } as const;
+    const firstCharge = {
+      facing: { x: 0, y: -1 }, progress: 0.5, pulseReady: false
+    } as const;
+
+    view.apply(currentPlayer, currentPlayer.position, currentPlayer.facing, null, firstTelegraph, firstCharge);
+    view.apply(currentPlayer, currentPlayer.position, currentPlayer.facing, null, firstTelegraph, firstCharge);
+
+    const trail = harness.graphics[1]!;
+    const indicator = harness.graphics[2]!;
+    expect(trail.commands.filter((command) => command.kind === 'clear')).toHaveLength(1);
+    expect(indicator.commands.filter((command) => command.kind === 'clear')).toHaveLength(1);
+
+    view.apply(
+      currentPlayer,
+      currentPlayer.position,
+      currentPlayer.facing,
+      null,
+      {
+        profileId: 'heavy-melee', facing: { x: 0, y: 1 },
+        previousProgress: 0.25, currentProgress: 0.75, active: true
+      },
+      { facing: { x: 1, y: 0 }, progress: 1, pulseReady: true }
+    );
+
+    expect(trail.commands.filter((command) => command.kind === 'clear')).toHaveLength(2);
+    expect(indicator.commands.filter((command) => command.kind === 'clear')).toHaveLength(2);
+    expect(frameCommands(indicator).some((command) => command.kind === 'circle')).toBe(true);
   });
 });

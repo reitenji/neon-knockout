@@ -10,16 +10,28 @@ export type E2eGame = Readonly<{
   origin: string;
   server: GameServer;
   harness: NonNullable<GameServer['testHarness']>;
+  serverErrors: readonly string[];
 }>;
 
 export const test = base.extend<{ game: E2eGame }>({
-  game: [async ({ browser }, provideGame) => {
-    void browser;
-    const server = createGameServer({ host: '127.0.0.1', port: 0, enableTestHarness: true });
+  // Playwright requires an object pattern even when a worker fixture has no dependencies.
+  // eslint-disable-next-line no-empty-pattern
+  game: [async ({}, provideGame) => {
+    const serverErrors: string[] = [];
+    const server = createGameServer({
+      host: '127.0.0.1',
+      port: 0,
+      enableTestHarness: true,
+      logger: {
+        error: (...values: unknown[]): void => {
+          serverErrors.push(values.map((value) => value instanceof Error ? value.stack ?? value.message : String(value)).join(' '));
+        }
+      }
+    });
     const { origin } = await server.start();
     if (!server.testHarness) throw new Error('E2E server requires its in-process test harness.');
     try {
-      await provideGame({ origin, server, harness: server.testHarness });
+      await provideGame({ origin, server, harness: server.testHarness, serverErrors });
     } finally {
       await server.stop();
     }
@@ -109,9 +121,10 @@ export async function createTwoPlayerMatch(browser: Browser, game: E2eGame): Pro
   }
 }
 
-export async function assertNoBrowserErrors(...players: readonly PlayerPage[]): Promise<void> {
+export async function assertNoUnexpectedErrors(game: E2eGame, ...players: readonly PlayerPage[]): Promise<void> {
   for (const player of players) {
     expect(player.issues.pageErrors, `page errors for ${await player.page.title()}`).toEqual([]);
     expect(player.issues.consoleErrors, `console errors for ${await player.page.title()}`).toEqual([]);
   }
+  expect(game.serverErrors, 'unexpected server logger errors').toEqual([]);
 }

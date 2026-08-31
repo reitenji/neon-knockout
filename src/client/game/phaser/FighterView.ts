@@ -43,56 +43,6 @@ function vectorPoints(points: readonly Vec2[]): Phaser.Math.Vector2[] {
   return points.map((point) => new Phaser.Math.Vector2(point.x, point.y));
 }
 
-function createContactFootprint(scene: Phaser.Scene, accent: number): Phaser.GameObjects.Container {
-  const footprint = scene.add.container(-4, 15);
-  const underglow = scene.add.graphics();
-  underglow.fillStyle(accent, 0.14);
-  underglow.fillPoints(vectorPoints([
-    { x: -46, y: 0 },
-    { x: -31, y: -12 },
-    { x: 3, y: -15 },
-    { x: 44, y: -7 },
-    { x: 49, y: 2 },
-    { x: 31, y: 12 },
-    { x: -6, y: 15 },
-    { x: -42, y: 8 }
-  ]), true);
-  underglow.setBlendMode(Phaser.BlendModes.ADD);
-
-  const trace = scene.add.graphics();
-  trace.lineStyle(2, accent, 0.72);
-  trace.strokePoints(vectorPoints([
-    { x: -43, y: 1 }, { x: -30, y: -9 }, { x: -12, y: -12 }
-  ]), false);
-  trace.strokePoints(vectorPoints([
-    { x: 13, y: -11 }, { x: 37, y: -6 }, { x: 45, y: 1 }
-  ]), false);
-  trace.strokePoints(vectorPoints([
-    { x: 40, y: 5 }, { x: 27, y: 10 }, { x: 9, y: 12 }
-  ]), false);
-  trace.strokePoints(vectorPoints([
-    { x: -12, y: 12 }, { x: -33, y: 8 }, { x: -40, y: 4 }
-  ]), false);
-  trace.lineStyle(1.25, 0xffffff, 0.44);
-  trace.strokePoints(vectorPoints([
-    { x: -7, y: -13 }, { x: 4, y: -14 }, { x: 11, y: -12 }
-  ]), false);
-  trace.setBlendMode(Phaser.BlendModes.ADD);
-
-  const contacts = scene.add.graphics();
-  contacts.fillStyle(accent, 0.74);
-  contacts.fillPoints(vectorPoints([
-    { x: -31, y: 5 }, { x: -18, y: 2 }, { x: -12, y: 6 }, { x: -24, y: 10 }
-  ]), true);
-  contacts.fillPoints(vectorPoints([
-    { x: 15, y: 3 }, { x: 29, y: 5 }, { x: 24, y: 9 }, { x: 11, y: 7 }
-  ]), true);
-  contacts.setBlendMode(Phaser.BlendModes.ADD);
-
-  footprint.add([underglow, trace, contacts]);
-  return footprint;
-}
-
 function createLocalMarker(scene: Phaser.Scene, accent: number, visible: boolean): Phaser.GameObjects.Graphics {
   const marker = scene.add.graphics();
   marker.lineStyle(2.25, accent, visible ? 0.9 : 0);
@@ -155,7 +105,29 @@ function drawAttackTrail(
 }
 
 function createChargeIndicator(scene: Phaser.Scene): Phaser.GameObjects.Graphics {
-  return scene.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(18);
+  return scene.add.graphics().setBlendMode(Phaser.BlendModes.ADD).setDepth(18).setVisible(false);
+}
+
+function sameAttackTelegraph(left: AttackTelegraph | null, right: AttackTelegraph | null): boolean {
+  if (!left || !right) return left === right;
+  return left.profileId === right.profileId &&
+    left.facing.x === right.facing.x && left.facing.y === right.facing.y &&
+    left.previousProgress === right.previousProgress && left.currentProgress === right.currentProgress &&
+    left.active === right.active;
+}
+
+function copyAttackTelegraph(telegraph: AttackTelegraph | null): AttackTelegraph | null {
+  return telegraph ? { ...telegraph, facing: { ...telegraph.facing } } : null;
+}
+
+function sameChargeIndicator(left: ChargeIndicatorState | null, right: ChargeIndicatorState | null): boolean {
+  if (!left || !right) return left === right;
+  return left.facing.x === right.facing.x && left.facing.y === right.facing.y &&
+    left.progress === right.progress && left.pulseReady === right.pulseReady;
+}
+
+function copyChargeIndicator(state: ChargeIndicatorState | null): ChargeIndicatorState | null {
+  return state ? { ...state, facing: { ...state.facing } } : null;
 }
 
 function drawChargeIndicator(
@@ -215,7 +187,6 @@ export function createFighterView(
 ): FighterView {
   const outer = scene.add.container(player.position.x, player.position.y);
   const accent = colorNumber(ACCENTS[player.accent]);
-  const footprint = createContactFootprint(scene, accent);
   const localMarker = createLocalMarker(scene, accent, isLocal);
   const content = scene.add.container(0, 0);
   const poseRoot = scene.add.container(0, 0);
@@ -252,11 +223,13 @@ export function createFighterView(
   artRoot.add([leftArm, rightArm, body, core]);
   poseRoot.add(artRoot);
   content.add(poseRoot);
-  outer.add([footprint, trail, localMarker, content, chargeIndicator, nameLabel, overloadLabel]);
+  outer.add([trail, localMarker, content, chargeIndicator, nameLabel, overloadLabel]);
 
   const animationDirector = new AnimationDirector(options.reducedMotion ?? prefersReducedMotion());
   let lastPosition: Vec2 | null = null;
   let lastRenderAtMs: number | null = null;
+  let lastAttackTelegraph: AttackTelegraph | null = null;
+  let lastChargeState: ChargeIndicatorState | null = null;
   let trailVisible = false;
   let destroyed = false;
 
@@ -273,8 +246,6 @@ export function createFighterView(
       core.setAlpha(pose.coreAlpha);
       artRoot.setAlpha(pose.artAlpha);
       trail.setAlpha(trailVisible ? 0.34 + pose.trailIntensity * 0.5 : 0);
-      footprint.setAlpha(0.15 + pose.artAlpha * 0.85);
-      footprint.setScale(0.96 + pose.coreScale * 0.035, 0.94 + pose.coreScale * 0.025);
       localMarker.setScale(0.98 + pose.coreScale * 0.025);
     },
     apply(nextPlayer, position, facing, predictedAction, attackTelegraph = null, chargeState = null): void {
@@ -284,8 +255,14 @@ export function createFighterView(
       content.setRotation(Math.atan2(facing.y, facing.x));
       nameLabel.setText(nextPlayer.name);
       overloadLabel.setText(`${Math.round(nextPlayer.overload)}%`);
-      trailVisible = drawAttackTrail(trail, accent, attackTelegraph);
-      drawChargeIndicator(chargeIndicator, chargeState, accent, isLocal);
+      if (!sameAttackTelegraph(lastAttackTelegraph, attackTelegraph)) {
+        trailVisible = drawAttackTrail(trail, accent, attackTelegraph);
+        lastAttackTelegraph = copyAttackTelegraph(attackTelegraph);
+      }
+      if (!sameChargeIndicator(lastChargeState, chargeState)) {
+        drawChargeIndicator(chargeIndicator, chargeState, accent, isLocal);
+        lastChargeState = copyChargeIndicator(chargeState);
+      }
 
       const elapsedMs = lastRenderAtMs === null ? 0 : Math.max(1, nowMs - lastRenderAtMs);
       const measuredVelocity = isLocal && lastPosition && elapsedMs > 0

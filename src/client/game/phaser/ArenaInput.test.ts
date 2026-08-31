@@ -5,11 +5,11 @@ type Directions = 'up' | 'down' | 'left' | 'right';
 
 function source(): ArenaInputSource & {
   movementHeld: Record<Directions | 'dash', boolean>;
-  attackHeld: Record<Directions | 'shift', boolean>;
+  attackHeld: Record<'quick' | 'heavy', boolean>;
   suspend(): void;
 } {
   const movementHeld = { up: false, down: false, left: false, right: false, dash: false };
-  const attackHeld = { up: false, down: false, left: false, right: false, shift: false };
+  const attackHeld = { quick: false, heavy: false };
   const suspendListeners = new Set<() => void>();
   return {
     movementHeld, attackHeld,
@@ -29,92 +29,66 @@ function eventTarget(): Pick<Window, 'addEventListener' | 'removeEventListener'>
 describe('ArenaInput', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('emits a cardinal quick from an arrow and leaves WASD movement separate', () => {
-    const controls = source();
-    controls.movementHeld.right = true;
-    controls.attackHeld.up = true;
-    const frame = new ArenaInput(controls).sample(4, 0)!;
-    expect(frame).toMatchObject({ seq: 4, moveX: 1, moveY: 0, aimX: 0, aimY: -1, quick: true, heavy: false, dash: false });
-  });
-
-  it('normalizes diagonal quick aim and cancels opposing attack keys', () => {
+  it('uses normalized WASD for movement and aim, retains released aim, and starts facing right', () => {
     const controls = source();
     const input = new ArenaInput(controls);
-    controls.attackHeld.up = true;
-    controls.attackHeld.right = true;
-    const diagonal = input.sample(0, 0)!;
+    expect(input.sample(0, 0)).toMatchObject({ aimX: 1, aimY: 0, moveX: 0, moveY: 0 });
+    controls.movementHeld.up = true;
+    controls.movementHeld.right = true;
+    const diagonal = input.sample(1, 17)!;
+    expect(diagonal.moveX).toBeCloseTo(Math.SQRT1_2);
+    expect(diagonal.moveY).toBeCloseTo(-Math.SQRT1_2);
     expect(diagonal.aimX).toBeCloseTo(Math.SQRT1_2);
     expect(diagonal.aimY).toBeCloseTo(-Math.SQRT1_2);
-    expect(diagonal.quick).toBe(true);
-    controls.attackHeld.up = false;
-    controls.attackHeld.right = false;
-    input.sample(1, 17);
-    controls.attackHeld.left = true;
-    controls.attackHeld.right = true;
-    expect(input.sample(2, 34)).toMatchObject({ aimX: diagonal.aimX, aimY: diagonal.aimY, quick: false, heavy: false });
+    controls.movementHeld.up = false;
+    controls.movementHeld.right = false;
+    expect(input.sample(2, 34)).toMatchObject({ moveX: 0, moveY: 0, aimX: diagonal.aimX, aimY: diagonal.aimY });
   });
 
-  it('does not repeat quick while an attack direction remains held', () => {
+  it('emits one quick on each J rising edge and never repeats while WASD changes', () => {
     const controls = source();
     const input = new ArenaInput(controls);
-    controls.attackHeld.left = true;
-    expect(input.sample(0, 0)?.quick).toBe(true);
-    expect(input.sample(1, 17)?.quick).toBe(false);
+    controls.movementHeld.left = true;
+    controls.attackHeld.quick = true;
+    expect(input.sample(0, 0)).toMatchObject({ quick: true, aimX: -1, aimY: 0 });
+    controls.movementHeld.left = false;
+    controls.movementHeld.down = true;
+    expect(input.sample(1, 17)).toMatchObject({ quick: false, aimX: 0, aimY: 1 });
+    controls.attackHeld.quick = false;
+    input.sample(2, 34);
+    controls.attackHeld.quick = true;
+    expect(input.sample(3, 51)?.quick).toBe(true);
   });
 
-  it('latches heavy with Shift, supports steering, and retains the last attack direction', () => {
+  it('holds K to charge, steers through WASD, retains aim, and emits the existing heavy fall on release', () => {
     const controls = source();
     const input = new ArenaInput(controls);
-    controls.attackHeld.shift = true;
-    controls.attackHeld.up = true;
+    controls.attackHeld.heavy = true;
+    controls.movementHeld.up = true;
     expect(input.sample(0, 0)).toMatchObject({ aimX: 0, aimY: -1, quick: false, heavy: true });
-    controls.attackHeld.up = false;
-    controls.attackHeld.right = true;
+    controls.movementHeld.up = false;
+    controls.movementHeld.right = true;
     expect(input.sample(1, 17)).toMatchObject({ aimX: 1, aimY: 0, quick: false, heavy: true });
-    controls.attackHeld.right = false;
+    controls.movementHeld.right = false;
     expect(input.sample(2, 34)).toMatchObject({ aimX: 1, aimY: 0, quick: false, heavy: true });
+    controls.attackHeld.heavy = false;
+    expect(input.sample(3, 51)).toMatchObject({ aimX: 1, aimY: 0, quick: false, heavy: false });
   });
 
-  it('locks attack direction when Shift releases and does not emit an accidental quick until neutral', () => {
+  it('never synthesizes a quick when J is pressed during K or carried through K release', () => {
     const controls = source();
     const input = new ArenaInput(controls);
-    controls.attackHeld.shift = true;
-    controls.attackHeld.left = true;
-    input.sample(0, 0);
-    controls.attackHeld.shift = false;
-    expect(input.sample(1, 17)).toMatchObject({ aimX: -1, aimY: 0, quick: false, heavy: false });
-    controls.attackHeld.left = false;
-    expect(input.sample(2, 34)?.quick).toBe(false);
-    controls.attackHeld.down = true;
-    expect(input.sample(3, 51)).toMatchObject({ aimX: 0, aimY: 1, quick: true, heavy: false });
-  });
-
-  it('suppresses quick when a latched heavy falls while a new arrow is pressed', () => {
-    const controls = source();
-    const input = new ArenaInput(controls);
-    controls.attackHeld.shift = true;
-    controls.attackHeld.left = true;
+    controls.movementHeld.left = true;
+    controls.attackHeld.heavy = true;
     expect(input.sample(0, 0)).toMatchObject({ heavy: true, quick: false, aimX: -1 });
-    controls.attackHeld.left = false;
+    controls.attackHeld.quick = true;
     expect(input.sample(1, 17)).toMatchObject({ heavy: true, quick: false });
-    controls.attackHeld.shift = false;
-    controls.attackHeld.right = true;
-    expect(input.sample(2, 34)).toMatchObject({ heavy: false, quick: false, aimX: 1 });
-    controls.attackHeld.right = false;
+    controls.attackHeld.heavy = false;
+    expect(input.sample(2, 34)).toMatchObject({ heavy: false, quick: false, aimX: -1 });
+    controls.attackHeld.quick = false;
     input.sample(3, 51);
-    controls.attackHeld.right = true;
-    expect(input.sample(4, 68)).toMatchObject({ quick: true, heavy: false, aimX: 1 });
-  });
-
-  it('does not repeat quick when an opposite arrow temporarily cancels a still-held direction', () => {
-    const controls = source();
-    const input = new ArenaInput(controls);
-    controls.attackHeld.left = true;
-    expect(input.sample(0, 0)?.quick).toBe(true);
-    controls.attackHeld.right = true;
-    expect(input.sample(1, 17)?.quick).toBe(false);
-    controls.attackHeld.right = false;
-    expect(input.sample(2, 34)).toMatchObject({ quick: false, aimX: -1 });
+    controls.attackHeld.quick = true;
+    expect(input.sample(4, 68)).toMatchObject({ quick: true, heavy: false, aimX: -1 });
   });
 
   it('emits dash only on its rising edge and caps samples at sixty hertz', () => {
@@ -141,20 +115,21 @@ describe('ArenaInput', () => {
       onShutdown(listener) { shutdownListeners.add(listener); return () => shutdownListeners.delete(listener); }
     });
     controls.movementHeld.right = true;
-    controls.attackHeld.up = true;
+    controls.attackHeld.quick = true;
     windowTarget.dispatchEvent(new Event('blur'));
     expect(input.sample(0, 0)).toMatchObject({ moveX: 0, moveY: 0, quick: false, heavy: false, dash: false });
-    controls.attackHeld.right = true;
+    controls.attackHeld.heavy = true;
     expect(input.sample(1, 17)).toMatchObject({ moveX: 0, moveY: 0, quick: false, heavy: false, dash: false });
-    controls.attackHeld.up = false;
+    controls.attackHeld.quick = false;
     expect(input.sample(2, 34)).toMatchObject({ moveX: 0, moveY: 0, quick: false, heavy: false, dash: false });
     documentTarget.dispatchEvent(new Event('visibilitychange'));
     for (const listener of shutdownListeners) listener();
     controls.movementHeld.right = false;
-    controls.attackHeld.right = false;
+    controls.attackHeld.heavy = false;
     input.sample(3, 51);
-    controls.attackHeld.up = true;
-    expect(input.sample(4, 68)).toMatchObject({ moveX: 0, moveY: 0, aimX: 0, aimY: -1, quick: true, heavy: false });
+    controls.movementHeld.up = true;
+    controls.attackHeld.quick = true;
+    expect(input.sample(4, 68)).toMatchObject({ moveX: 0, moveY: -1, aimX: 0, aimY: -1, quick: true, heavy: false });
     input.dispose();
     expect(controls.dispose).toHaveBeenCalledOnce();
     expect(shutdownListeners).toHaveLength(0);
@@ -168,26 +143,27 @@ describe('ArenaInput', () => {
     const input = new ArenaInput(controls, {
       windowTarget, documentTarget, onShutdown: () => () => undefined
     });
-    controls.attackHeld.left = true;
-    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft' }));
+    controls.attackHeld.quick = true;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyJ' }));
     windowTarget.dispatchEvent(new Event('blur'));
     expect(controls.reset).toHaveBeenCalledOnce();
-    controls.attackHeld.left = false;
-    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight' }));
+    controls.attackHeld.quick = false;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyK' }));
     expect(input.sample(0, 0)).toMatchObject({ quick: false, heavy: false });
-    controls.attackHeld.right = true;
+    controls.attackHeld.heavy = true;
     expect(input.sample(1, 17)).toMatchObject({ quick: false, heavy: false });
-    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'ArrowLeft' }));
+    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyJ' }));
     expect(input.sample(2, 34)).toMatchObject({ quick: false, heavy: false });
-    controls.attackHeld.right = false;
-    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'ArrowRight' }));
+    controls.attackHeld.heavy = false;
+    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyK' }));
     input.sample(3, 51);
-    controls.attackHeld.right = true;
-    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight' }));
+    controls.movementHeld.right = true;
+    controls.attackHeld.quick = true;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyJ' }));
     expect(input.sample(4, 68)).toMatchObject({ quick: true, aimX: 1 });
     input.dispose();
     input.dispose();
-    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft' }));
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyJ' }));
     expect(controls.dispose).toHaveBeenCalledOnce();
   });
 
@@ -197,14 +173,14 @@ describe('ArenaInput', () => {
     const documentTarget = eventTarget() as EventTarget & { visibilityState: DocumentVisibilityState };
     Object.defineProperty(documentTarget, 'visibilityState', { configurable: true, value: 'visible' });
     const input = new ArenaInput(controls, { windowTarget, documentTarget, onShutdown: () => () => undefined });
-    controls.attackHeld.left = true;
-    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft' }));
+    controls.attackHeld.heavy = true;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyK' }));
     controls.suspend();
-    controls.attackHeld.left = false;
+    controls.attackHeld.heavy = false;
     controls.movementHeld.up = true;
     windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
     expect(input.sample(0, 0)).toMatchObject({ moveX: 0, moveY: 0, quick: false, heavy: false });
-    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'ArrowLeft' }));
+    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyK' }));
     expect(input.sample(1, 17)).toMatchObject({ moveX: 0, moveY: 0, quick: false, heavy: false });
     controls.movementHeld.up = false;
     windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }));
@@ -215,8 +191,24 @@ describe('ArenaInput', () => {
     expect(controls.reset).toHaveBeenCalledTimes(2);
   });
 
-  it('captures gameplay keys, samples WASD separately from arrow attacks, and releases only acquired captures', () => {
-    const keys = Object.fromEntries(['w', 'a', 's', 'd', 'up', 'down', 'left', 'right', 'shift', 'dash'].map((key) => [key, { isDown: false }]));
+  it('ignores raw arrow and Shift keydown events across lifecycle resets', () => {
+    const controls = source();
+    const windowTarget = eventTarget();
+    const documentTarget = eventTarget() as EventTarget & { visibilityState: DocumentVisibilityState };
+    Object.defineProperty(documentTarget, 'visibilityState', { configurable: true, value: 'visible' });
+    const input = new ArenaInput(controls, { windowTarget, documentTarget, onShutdown: () => () => undefined });
+    for (const code of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ShiftLeft', 'ShiftRight']) {
+      windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code }));
+    }
+    windowTarget.dispatchEvent(new Event('blur'));
+    controls.movementHeld.left = true;
+    controls.attackHeld.quick = true;
+    expect(input.sample(0, 0)).toMatchObject({ moveX: -1, aimX: -1, quick: true, heavy: false });
+    input.dispose();
+  });
+
+  it('captures only WASD, J, K, and Space while arrows and both Shift keys remain inert and uncaptured', () => {
+    const keys = Object.fromEntries(['w', 'a', 's', 'd', 'quick', 'heavy', 'dash'].map((key) => [key, { isDown: false }]));
     const captures = [65];
     const keyboard = {
       manager: {}, addKeys: vi.fn(() => keys), resetKeys: vi.fn(), getCaptures: vi.fn(() => [...captures]),
@@ -226,16 +218,17 @@ describe('ArenaInput', () => {
     const events = { on: vi.fn(), off: vi.fn() };
     const controls = createPhaserInputSource({ input: { keyboard }, events } as never);
     keys.w.isDown = true;
-    keys.right.isDown = true;
+    keys.quick.isDown = true;
     expect(controls.movement()).toMatchObject({ up: true, right: false });
-    expect(controls.attack()).toMatchObject({ right: true, up: false });
-    expect(keyboard.addCapture).toHaveBeenCalledWith([87, 83, 68, 38, 40, 37, 39, 16, 32]);
+    expect(controls.attack()).toEqual({ quick: true, heavy: false });
+    expect(keyboard.addKeys).toHaveBeenCalledWith({ w: 'W', a: 'A', s: 'S', d: 'D', quick: 'J', heavy: 'K', dash: 'SPACE' });
+    expect(keyboard.addCapture).toHaveBeenCalledWith([87, 83, 68, 74, 75, 32]);
     const input = new ArenaInput(controls);
     expect(events.on).toHaveBeenCalledTimes(2);
     expect(events.on).toHaveBeenCalledWith('pause', expect.any(Function));
     expect(events.on).toHaveBeenCalledWith('sleep', expect.any(Function));
     input.dispose();
-    expect(keyboard.removeCapture).toHaveBeenCalledWith([87, 83, 68, 38, 40, 37, 39, 16, 32]);
+    expect(keyboard.removeCapture).toHaveBeenCalledWith([87, 83, 68, 74, 75, 32]);
     expect(events.off).toHaveBeenCalledTimes(2);
     expect(events.off).toHaveBeenCalledWith('pause', expect.any(Function));
     expect(events.off).toHaveBeenCalledWith('sleep', expect.any(Function));
@@ -243,13 +236,13 @@ describe('ArenaInput', () => {
   });
 
   it('keeps shared captures leased until the last source disposes', () => {
-    const keys = Object.fromEntries(['w', 'a', 's', 'd', 'up', 'down', 'left', 'right', 'shift', 'dash'].map((key) => [key, { isDown: false }]));
+    const keys = Object.fromEntries(['w', 'a', 's', 'd', 'quick', 'heavy', 'dash'].map((key) => [key, { isDown: false }]));
     const captures: number[] = [];
     const keyboard = { manager: {}, addKeys: vi.fn(() => keys), getCaptures: () => [...captures], addCapture: vi.fn((codes: number[]) => captures.push(...codes)), removeCapture: vi.fn((codes: number[]) => { for (const code of codes) captures.splice(captures.indexOf(code), 1); }) };
     const first = createPhaserInputSource({ input: { keyboard }, events: { on: vi.fn(), off: vi.fn() } } as never);
     const second = createPhaserInputSource({ input: { keyboard }, events: { on: vi.fn(), off: vi.fn() } } as never);
     first.dispose?.();
-    expect(captures).toHaveLength(10);
+    expect(captures).toHaveLength(7);
     expect(keyboard.removeCapture).not.toHaveBeenCalled();
     second.dispose?.();
     expect(captures).toEqual([]);
