@@ -37,6 +37,7 @@ function controls(): ArenaInputSource & { movementHeld: Record<'up' | 'down' | '
   const attackHeld = { up: false, down: false, left: false, right: false, shift: false };
   return {
     movementHeld, attackHeld, movement: () => ({ ...movementHeld }), attack: () => ({ ...attackHeld }),
+    reset() {},
     dispose() {}
   };
 }

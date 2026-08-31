@@ -13,6 +13,7 @@ function source(): ArenaInputSource & {
     movementHeld, attackHeld,
     movement: () => ({ ...movementHeld }),
     attack: () => ({ ...attackHeld }),
+    reset: vi.fn(),
     dispose: vi.fn()
   };
 }
@@ -155,16 +156,67 @@ describe('ArenaInput', () => {
     expect(shutdownListeners).toHaveLength(0);
   });
 
-  it('captures gameplay keys, samples WASD separately from arrow attacks, and releases only its captures', () => {
+  it('waits for raw keyup when Phaser resets an isDown flag during blur', () => {
+    const controls = source();
+    const windowTarget = eventTarget();
+    const documentTarget = eventTarget() as EventTarget & { visibilityState: DocumentVisibilityState };
+    Object.defineProperty(documentTarget, 'visibilityState', { configurable: true, value: 'visible' });
+    const input = new ArenaInput(controls, {
+      windowTarget, documentTarget, onShutdown: () => () => undefined
+    });
+    controls.attackHeld.left = true;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft' }));
+    windowTarget.dispatchEvent(new Event('blur'));
+    expect(controls.reset).toHaveBeenCalledOnce();
+    controls.attackHeld.left = false;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight' }));
+    expect(input.sample(0, 0)).toMatchObject({ quick: false, heavy: false });
+    controls.attackHeld.right = true;
+    expect(input.sample(1, 17)).toMatchObject({ quick: false, heavy: false });
+    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'ArrowLeft' }));
+    expect(input.sample(2, 34)).toMatchObject({ quick: false, heavy: false });
+    controls.attackHeld.right = false;
+    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'ArrowRight' }));
+    input.sample(3, 51);
+    controls.attackHeld.right = true;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowRight' }));
+    expect(input.sample(4, 68)).toMatchObject({ quick: true, aimX: 1 });
+    input.dispose();
+    input.dispose();
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft' }));
+    expect(controls.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('captures gameplay keys, samples WASD separately from arrow attacks, and releases only acquired captures', () => {
     const keys = Object.fromEntries(['w', 'a', 's', 'd', 'up', 'down', 'left', 'right', 'shift', 'dash'].map((key) => [key, { isDown: false }]));
-    const keyboard = { addKeys: vi.fn(() => keys), addCapture: vi.fn(), removeCapture: vi.fn() };
+    const captures = [65];
+    const keyboard = {
+      manager: {}, addKeys: vi.fn(() => keys), getCaptures: vi.fn(() => [...captures]),
+      addCapture: vi.fn((codes: number[]) => captures.push(...codes.filter((code) => !captures.includes(code)))),
+      removeCapture: vi.fn((codes: number[]) => { for (const code of codes) captures.splice(captures.indexOf(code), 1); })
+    };
     const controls = createPhaserInputSource({ input: { keyboard } } as never);
     keys.w.isDown = true;
     keys.right.isDown = true;
     expect(controls.movement()).toMatchObject({ up: true, right: false });
     expect(controls.attack()).toMatchObject({ right: true, up: false });
-    expect(keyboard.addCapture).toHaveBeenCalledWith(['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SHIFT', 'SPACE']);
-    controls.dispose();
-    expect(keyboard.removeCapture).toHaveBeenCalledWith(['W', 'A', 'S', 'D', 'UP', 'DOWN', 'LEFT', 'RIGHT', 'SHIFT', 'SPACE']);
+    expect(keyboard.addCapture).toHaveBeenCalledWith([87, 83, 68, 38, 40, 37, 39, 16, 32]);
+    controls.dispose?.();
+    expect(keyboard.removeCapture).toHaveBeenCalledWith([87, 83, 68, 38, 40, 37, 39, 16, 32]);
+    expect(captures).toEqual([65]);
+  });
+
+  it('keeps shared captures leased until the last source disposes', () => {
+    const keys = Object.fromEntries(['w', 'a', 's', 'd', 'up', 'down', 'left', 'right', 'shift', 'dash'].map((key) => [key, { isDown: false }]));
+    const captures: number[] = [];
+    const keyboard = { manager: {}, addKeys: vi.fn(() => keys), getCaptures: () => [...captures], addCapture: vi.fn((codes: number[]) => captures.push(...codes)), removeCapture: vi.fn((codes: number[]) => { for (const code of codes) captures.splice(captures.indexOf(code), 1); }) };
+    const first = createPhaserInputSource({ input: { keyboard } } as never);
+    const second = createPhaserInputSource({ input: { keyboard } } as never);
+    first.dispose?.();
+    expect(captures).toHaveLength(10);
+    expect(keyboard.removeCapture).not.toHaveBeenCalled();
+    second.dispose?.();
+    expect(captures).toEqual([]);
+    expect(keyboard.removeCapture).toHaveBeenCalledOnce();
   });
 });
