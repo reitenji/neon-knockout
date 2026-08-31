@@ -1,4 +1,5 @@
 import { GAME } from '../../shared/constants.js';
+import { profileForAttack } from '../../shared/combat/profiles.js';
 import { normalizeAim, normalizeAxes } from '../../shared/kinematics.js';
 import type { GameEvent, InputFrame, MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import { advanceCombatTimers, resolveAttackHits, startActions } from './combat.js';
@@ -68,6 +69,7 @@ function respawnPlayer(state: MatchState, player: MutableMatchPlayer, events: Ga
   player.comboStep = 0;
   player.chargeMs = 0;
   player.charging = false;
+  player.perfectDodgeConsumed = false;
   player.bufferedQuick = false;
   player.lastAttackerId = null;
   player.lastAttackerAtMs = null;
@@ -257,6 +259,7 @@ function snapshotPlayer(player: MutableMatchPlayer): MatchPlayer {
         : player.attack
           ? { kind: player.attack.kind, phase: player.attack.phase }
           : { kind: null, phase: 'IDLE' as const };
+  const serializedAttack = player.attack && action.kind === player.attack.kind ? player.attack : null;
   return {
     playerId: player.playerId,
     name: player.name,
@@ -270,7 +273,15 @@ function snapshotPlayer(player: MutableMatchPlayer): MatchPlayer {
     action: {
       ...action,
       comboStep: player.comboStep,
-      chargeMs: player.attack?.kind === 'HEAVY' ? player.attack.chargeMs : player.chargeMs
+      chargeMs: serializedAttack?.kind === 'HEAVY' ? serializedAttack.chargeMs : player.chargeMs,
+      charging: action.kind === null && player.charging,
+      attackId: serializedAttack?.attackId ?? null,
+      profileId: serializedAttack?.profileId ?? null,
+      lockedFacing: serializedAttack ? { ...serializedAttack.lockedFacing } : null,
+      activeProgress: serializedAttack?.phase === 'ACTIVE'
+        ? clamp(serializedAttack.phaseElapsedMs / profileForAttack(serializedAttack.kind).activeMs, 0, 1)
+        : serializedAttack?.phase === 'RECOVERY' ? 1 : 0,
+      hitTargetIds: serializedAttack ? [...serializedAttack.hitPlayerIds].sort(compareStableIds) : []
     },
     dashRemainingMs: player.dashRemainingMs,
     dashCooldownRemainingMs: player.dashCooldownRemainingMs,
@@ -292,6 +303,22 @@ export function snapshotMatch(state: MatchState): MatchSnapshot {
       .filter((playerId) => state.players[playerId].connected)
       .sort(compareStableIds)
       .map((playerId) => snapshotPlayer(state.players[playerId])),
+    pulses: Object.keys(state.pulses)
+      .map(Number)
+      .sort((left, right) => left - right)
+      .map((projectileId) => {
+        const pulse = state.pulses[projectileId];
+        return {
+          projectileId: pulse.projectileId,
+          ownerPlayerId: pulse.ownerPlayerId,
+          originatingAttackId: pulse.originatingAttackId,
+          position: { ...pulse.position },
+          velocity: { ...pulse.velocity },
+          radius: pulse.radius,
+          remainingMs: pulse.remainingMs,
+          hitTargetIds: [...pulse.hitPlayerIds].sort(compareStableIds)
+        };
+      }),
     winnerPlayerId: state.winnerPlayerId,
     resultReason: state.resultReason
   };
@@ -309,6 +336,7 @@ export function setPlayerConnected(state: MatchState, playerId: string, connecte
   player.comboStep = 0;
   player.chargeMs = 0;
   player.charging = false;
+  player.perfectDodgeConsumed = false;
   player.bufferedQuick = false;
   player.velocity = { x: 0, y: 0 };
   player.hitstunRemainingMs = 0;

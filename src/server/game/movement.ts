@@ -51,6 +51,7 @@ function startDash(player: MutableMatchPlayer): void {
   player.dashRemainingMs = GAME.dashDurationMs;
   player.dashInvulnerabilityRemainingMs = GAME.dashInvulnerabilityMs;
   player.dashCooldownRemainingMs = GAME.dashCooldownMs;
+  player.perfectDodgeConsumed = false;
 }
 
 function advanceDashTimers(player: MutableMatchPlayer, stepMs: number): void {

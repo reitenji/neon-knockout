@@ -114,7 +114,10 @@ import Phaser from 'phaser';
 import { scopeBridgeToPlayer } from '../GamePresentationBridge.js';
 import { ArenaScene } from './ArenaScene.js';
 
-const idleAction = { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 } as const;
+const idleAction = {
+  kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
+  attackId: null, profileId: null, lockedFacing: null, activeProgress: 0, hitTargetIds: []
+} as const;
 
 function player(): MatchPlayer {
   return {
@@ -129,7 +132,7 @@ function player(): MatchPlayer {
 function snapshot(): MatchSnapshot {
   return {
     tick: 10, phase: 'REGULATION', remainingMs: 82_000, platformProgress: 0.35,
-    scores: { p1: 0 }, players: [player()], winnerPlayerId: null, resultReason: null
+    scores: { p1: 0 }, players: [player()], pulses: [], winnerPlayerId: null, resultReason: null
   };
 }
 
@@ -174,7 +177,7 @@ describe('ArenaScene live presentation integration', () => {
 
     probes.sessionPresentation.mockReturnValue({
       position: { x: 300, y: 360 }, velocity: { x: 0, y: 0 }, facing: { x: 1, y: 0 },
-      actionStart: { kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1, chargeMs: 0 }
+      actionStart: { ...idleAction, kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1 }
     });
     scene.update();
     scene.update();

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { GameEvent, MatchPlayer, MatchSnapshot, Vec2 } from '../../../shared/model.js';
 import { ImpactFx, type ImpactFxAdapter } from './ImpactFx.js';
 
-const idleAction = { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 } as const;
+const idleAction = {
+  kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
+  attackId: null, profileId: null, lockedFacing: null, activeProgress: 0, hitTargetIds: []
+} as const;
 
 function player(playerId: string, name: string, position: Vec2): MatchPlayer {
   return {
@@ -18,6 +21,7 @@ function snapshot(): MatchSnapshot {
     tick: 30, phase: 'REGULATION', remainingMs: 90_000, platformProgress: 0,
     scores: { attacker: 2, target: 0 },
     players: [player('attacker', 'Ada', { x: 200, y: 360 }), player('target', 'Bora', { x: 300, y: 360 })],
+    pulses: [],
     winnerPlayerId: null, resultReason: null
   };
 }

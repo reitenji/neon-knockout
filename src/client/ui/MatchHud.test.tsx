@@ -6,7 +6,10 @@ import type { GamePresentationBridge } from '../game/GamePresentationBridge.js';
 import { PhaserArena } from '../game/PhaserArena.js';
 import { MatchHud } from './MatchHud.js';
 
-const idleAction = { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 } as const;
+const idleAction = {
+  kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
+  attackId: null, profileId: null, lockedFacing: null, activeProgress: 0, hitTargetIds: []
+} as const;
 
 function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
   return {
@@ -19,7 +22,7 @@ function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
     facing: { x: 1, y: 0 },
     overload: 84,
     lastProcessedInputSeq: 0,
-    action: { kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: 350 },
+    action: { ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 350 },
     dashRemainingMs: 0,
     dashCooldownRemainingMs: 550,
     hitstunRemainingMs: 0,
@@ -48,6 +51,7 @@ function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
     platformProgress: 0,
     scores: { 'p-local': 2, 'p-rival': 4 },
     players: [local, rival],
+    pulses: [],
     winnerPlayerId: null,
     resultReason: null,
     ...overrides
@@ -159,7 +163,7 @@ describe('MatchHud', () => {
       phase: 'REGULATION',
       remainingMs: 90_000,
       players: [player({
-        action: { kind: 'RESPAWNING', phase: 'IDLE', comboStep: 0, chargeMs: 0 },
+        action: { ...idleAction, kind: 'RESPAWNING' },
         respawnRemainingMs: 650
       })]
     });

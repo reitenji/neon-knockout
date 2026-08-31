@@ -105,6 +105,25 @@ describe('authoritative movement', () => {
     expect(player.dashInvulnerabilityRemainingMs).toBe(GAME.dashInvulnerabilityMs);
   });
 
+  it('resets perfect-dodge consumption only when a new legal dash begins', () => {
+    const state = createState();
+    const player = state.players.p1;
+    player.perfectDodgeConsumed = true;
+    player.latestInput = { ...player.latestInput, dash: true };
+
+    advancePlayers(state, 16);
+    expect(player.perfectDodgeConsumed).toBe(false);
+
+    player.perfectDodgeConsumed = true;
+    player.latestInput = { ...player.latestInput, dash: false };
+    advancePlayers(state, GAME.dashCooldownMs);
+    expect(player.perfectDodgeConsumed).toBe(true);
+
+    player.latestInput = { ...player.latestInput, dash: true };
+    advancePlayers(state, 16);
+    expect(player.perfectDodgeConsumed).toBe(false);
+  });
+
   it('separates active overlapping players in stable player-id order', () => {
     const state = createState();
     state.players.p1.position = { x: 640, y: 360 };

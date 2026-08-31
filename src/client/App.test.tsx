@@ -53,7 +53,10 @@ function matchPlayer(): MatchPlayer {
     playerId: 'p-local', name: 'Ada', chassis: 'RIFT', accent: 0,
     position: { x: 640, y: 360 }, velocity: { x: 0, y: 0 }, facing: { x: 1, y: 0 },
     overload: 0, lastProcessedInputSeq: 0,
-    action: { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 },
+    action: {
+      kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
+      attackId: null, profileId: null, lockedFacing: null, activeProgress: 0, hitTargetIds: []
+    },
     dashRemainingMs: 0, dashCooldownRemainingMs: 0, hitstunRemainingMs: 0,
     respawnRemainingMs: 0, protectionRemainingMs: 0,
     stats: { knockouts: 0, falls: 0, landedHits: 0, completedAttacks: 0 }
@@ -63,7 +66,7 @@ function matchPlayer(): MatchPlayer {
 function matchSnapshot(): MatchSnapshot {
   return {
     tick: 180, phase: 'REGULATION', remainingMs: 120_000, platformProgress: 0,
-    scores: { 'p-local': 0 }, players: [matchPlayer()], winnerPlayerId: null, resultReason: null
+    scores: { 'p-local': 0 }, players: [matchPlayer()], pulses: [], winnerPlayerId: null, resultReason: null
   };
 }
 

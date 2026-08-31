@@ -4,14 +4,17 @@ import type { GamePresentationBridge } from '../GamePresentationBridge.js';
 import { ArenaInput, type ArenaInputSource } from './ArenaInput.js';
 import { ArenaSession } from './ArenaSession.js';
 
-const idleAction = { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 } as const;
+const idleAction = {
+  kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
+  attackId: null, profileId: null, lockedFacing: null, activeProgress: 0, hitTargetIds: []
+} as const;
 
 function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
   return { playerId: 'p-local', name: 'Ada', chassis: 'RIFT', accent: 0, position: { x: 100, y: 100 }, velocity: { x: 0, y: 0 }, facing: { x: 0, y: -1 }, overload: 0, lastProcessedInputSeq: -1, action: idleAction, dashRemainingMs: 0, dashCooldownRemainingMs: 0, hitstunRemainingMs: 0, respawnRemainingMs: 0, protectionRemainingMs: 0, stats: { knockouts: 0, falls: 0, landedHits: 0, completedAttacks: 0 }, ...overrides };
 }
 
 function snapshot(local = player()): MatchSnapshot {
-  return { tick: 1, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0, scores: { 'p-local': 0 }, players: [local], winnerPlayerId: null, resultReason: null };
+  return { tick: 1, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0, scores: { 'p-local': 0 }, players: [local], pulses: [], winnerPlayerId: null, resultReason: null };
 }
 
 class Bridge implements GamePresentationBridge {

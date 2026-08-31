@@ -1,4 +1,5 @@
 import { GAME } from '../../shared/constants.js';
+import { profileForAttack } from '../../shared/combat/profiles.js';
 import type { AttackKind, GameEvent } from '../../shared/model.js';
 import { clamp, dot, normalize, subtract } from './geometry.js';
 import type { AttackRuntime, MatchState, MutableMatchPlayer } from './state.js';
@@ -49,14 +50,19 @@ function tuningFor(attack: AttackRuntime): AttackTuning {
 
 function beginAttack(state: MatchState, player: MutableMatchPlayer, kind: AttackKind, chargeMs = 0): void {
   const quick = quickTuning(kind);
+  const profile = profileForAttack(kind);
   player.attack = {
     attackId: state.nextAttackId++,
     kind,
+    profileId: profile.id,
     phase: 'WINDUP',
     phaseRemainingMs: quick?.windupMs ?? GAME.heavyWindupMs,
-    facing: { x: player.latestInput.aimX, y: player.latestInput.aimY },
+    phaseElapsedMs: 0,
+    previousActiveProgress: 0,
+    lockedFacing: { x: player.latestInput.aimX, y: player.latestInput.aimY },
     chargeMs,
-    hitPlayerIds: new Set()
+    hitPlayerIds: new Set(),
+    resolvedPlayerIds: new Set()
   };
   player.comboStep = kind === 'HEAVY' ? 0 : Number(kind.at(-1)) as 1 | 2 | 3;
   player.chargeMs = 0;
@@ -174,7 +180,7 @@ function inAttackArc(attacker: MutableMatchPlayer, target: MutableMatchPlayer, t
   const distanceSquared = dot(delta, delta);
   if (distanceSquared > tuning.range * tuning.range || distanceSquared <= 1e-9) return false;
   const direction = normalize(delta);
-  return dot(attacker.attack!.facing, direction) >= Math.cos((tuning.arcDeg * Math.PI) / 360);
+  return dot(attacker.attack!.lockedFacing, direction) >= Math.cos((tuning.arcDeg * Math.PI) / 360);
 }
 
 export function resolveAttackHits(state: MatchState): readonly GameEvent[] {
@@ -204,7 +210,7 @@ export function resolveAttackHits(state: MatchState): readonly GameEvent[] {
       if (firstLandedTarget) attacker.stats.landedHits += 1;
       target.overload = Math.min(GAME.maxOverload, target.overload + tuning.overloadGain);
       const impulse = tuning.baseImpulse * (1 + (target.overload / GAME.maxOverload) * 0.9);
-      const direction = normalize(attack.facing, { x: 1, y: 0 });
+      const direction = normalize(attack.lockedFacing, { x: 1, y: 0 });
       target.velocity = {
         x: target.velocity.x + direction.x * impulse,
         y: target.velocity.y + direction.y * impulse

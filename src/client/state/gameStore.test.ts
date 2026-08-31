@@ -70,7 +70,7 @@ function roomState(overrides: Partial<RoomState> = {}): RoomState {
 function matchSnapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
   return {
     tick: 12, phase: 'REGULATION', remainingMs: 115_000, platformProgress: 0,
-    scores: { 'player-1': 0 }, players: [], winnerPlayerId: null, resultReason: null, ...overrides
+    scores: { 'player-1': 0 }, players: [], pulses: [], winnerPlayerId: null, resultReason: null, ...overrides
   };
 }
 function phaseEvent(overrides: Partial<Extract<GameEvent, { type: 'PHASE' }>> = {}): Extract<GameEvent, { type: 'PHASE' }> {

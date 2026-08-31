@@ -2,25 +2,32 @@ import { describe, expect, it } from 'vitest';
 import type { MatchAction } from '../../../shared/model.js';
 import { LocalActionAudioTracker } from './LocalActionAudioTracker.js';
 
+const neutralMetadata = {
+  charging: false, attackId: null, profileId: null, lockedFacing: null, activeProgress: 0, hitTargetIds: []
+} as const;
+
 const quick = (kind: 'QUICK_1' | 'QUICK_2' | 'QUICK_3' = 'QUICK_1'): MatchAction => ({
   kind,
   phase: 'WINDUP',
   comboStep: kind === 'QUICK_1' ? 1 : kind === 'QUICK_2' ? 2 : 3,
-  chargeMs: 0
+  chargeMs: 0,
+  ...neutralMetadata
 });
 
 const heavy = (chargeMs: number): MatchAction => ({
   kind: 'HEAVY',
   phase: 'WINDUP',
   comboStep: 0,
-  chargeMs
+  chargeMs,
+  ...neutralMetadata
 });
 
 const dash: MatchAction = {
   kind: 'DASH',
   phase: 'ACTIVE',
   comboStep: 0,
-  chargeMs: 0
+  chargeMs: 0,
+  ...neutralMetadata
 };
 
 describe('LocalActionAudioTracker', () => {

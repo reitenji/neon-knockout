@@ -28,6 +28,15 @@ type PredictionRuntime = KinematicState & {
   heavyHeld: boolean;
 };
 
+const NEUTRAL_ACTION_METADATA = {
+  charging: false,
+  attackId: null,
+  profileId: null,
+  lockedFacing: null,
+  activeProgress: 0,
+  hitTargetIds: []
+} as const;
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
@@ -130,7 +139,7 @@ function dashDirection(frame: InputFrame, facing: Vec2): Vec2 {
 function quickActionStart(player: MatchPlayer): MatchAction {
   const comboStep: 1 | 2 | 3 = player.action.comboStep === 1 ? 2 : player.action.comboStep === 2 ? 3 : 1;
   const kind = comboStep === 1 ? 'QUICK_1' : comboStep === 2 ? 'QUICK_2' : 'QUICK_3';
-  return { kind, phase: 'WINDUP', comboStep, chargeMs: 0 };
+  return { kind, phase: 'WINDUP', comboStep, chargeMs: 0, ...NEUTRAL_ACTION_METADATA };
 }
 
 function advanceRuntime(
@@ -166,14 +175,18 @@ function advanceRuntime(
       dashDirectionValue = dashDirection(frame, runtime.facing);
       dashRemainingMs = GAME.dashDurationMs;
       dashCooldownRemainingMs = GAME.dashCooldownMs;
-      actionStart = { kind: 'DASH', phase: 'ACTIVE', comboStep: 0, chargeMs: 0 };
+      actionStart = { kind: 'DASH', phase: 'ACTIVE', comboStep: 0, chargeMs: 0, ...NEUTRAL_ACTION_METADATA };
       commitsAction = true;
     }
   } else if (canStartAction && frame.heavy) {
     heavyChargeMs = Math.min(GAME.heavyMaxChargeMs, heavyChargeMs + elapsed);
-    actionStart = { kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs };
+    actionStart = {
+      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs, ...NEUTRAL_ACTION_METADATA
+    };
   } else if (canStartAction && heavyRelease && heavyChargeMs >= GAME.heavyEnterChargeMs) {
-    actionStart = { kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs };
+    actionStart = {
+      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs, ...NEUTRAL_ACTION_METADATA
+    };
     commitsAction = true;
   } else if (canStartAction && frame.quick && heavyChargeMs === 0) {
     actionStart = quickActionStart(canonicalPlayer);

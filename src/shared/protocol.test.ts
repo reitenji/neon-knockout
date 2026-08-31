@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { Ack, MatchSnapshot, RoomState } from './model.js';
+import type { Ack, GameEvent, MatchSnapshot, RoomState } from './model.js';
 import * as protocol from './protocol.js';
 import type { ClientToServerEvents } from './protocol.js';
 import { ACCENTS, ARENA, CHASSIS, GAME } from './constants.js';
+import { snapshotMatch } from '../server/game/simulation.js';
+import { createMatchState } from '../server/game/state.js';
 
 const acknowledgedReadyHandler: ClientToServerEvents['lobby:ready'] = (_payload, acknowledge) => {
   acknowledge({ ok: true, data: null });
@@ -140,18 +142,146 @@ describe('shared input boundary protocol', () => {
           playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0,
           position: { x: 640, y: 360 }, velocity: { x: 0, y: 0 }, facing: { x: 1, y: 0 }, overload: 8,
           lastProcessedInputSeq: 7,
-          action: { kind: 'QUICK_1', phase: 'ACTIVE', comboStep: 1, chargeMs: 0 },
+          action: {
+            kind: 'QUICK_1', phase: 'ACTIVE', comboStep: 1, chargeMs: 0, charging: false,
+            attackId: 7, profileId: 'quick-1', lockedFacing: { x: 1, y: 0 }, activeProgress: 0.5,
+            hitTargetIds: ['p2']
+          },
           dashRemainingMs: 0, dashCooldownRemainingMs: 0, hitstunRemainingMs: 0, respawnRemainingMs: 0,
           protectionRemainingMs: 0,
           stats: { knockouts: 1, falls: 0, landedHits: 2, completedAttacks: 3 }
         }
       ],
+      pulses: [],
       winnerPlayerId: null,
       resultReason: null
     };
 
     expect(JSON.parse(JSON.stringify(room))).toEqual(room);
     expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot);
+  });
+
+  it('serializes authoritative action and pulse metadata in deterministic order', () => {
+    const state = createMatchState([
+      { playerId: 'p1', name: 'Ada', accent: 0, chassis: 'RIFT' },
+      { playerId: 'p2', name: 'Linus', accent: 1, chassis: 'BASTION' }
+    ], 0);
+    state.players.p1.attack = {
+      attackId: 17,
+      kind: 'HEAVY',
+      profileId: 'heavy-melee',
+      phase: 'ACTIVE',
+      phaseRemainingMs: 10,
+      phaseElapsedMs: 999,
+      previousActiveProgress: 0.25,
+      lockedFacing: { x: 0, y: -1 },
+      chargeMs: 640,
+      hitPlayerIds: new Set(['z-target', 'a-target']),
+      resolvedPlayerIds: new Set(['z-target'])
+    };
+    state.players.p2.chargeMs = 420;
+    state.players.p2.charging = true;
+    state.pulses[10] = {
+      projectileId: 10,
+      ownerPlayerId: 'p1',
+      originatingAttackId: 17,
+      position: { x: 30, y: 40 },
+      previousPosition: { x: 25, y: 40 },
+      velocity: { x: 5, y: 0 },
+      radius: 12,
+      remainingMs: 500,
+      hitPlayerIds: new Set(['z-target', 'a-target'])
+    };
+    state.pulses[2] = {
+      projectileId: 2,
+      ownerPlayerId: 'p2',
+      originatingAttackId: 9,
+      position: { x: 10, y: 20 },
+      previousPosition: { x: 8, y: 20 },
+      velocity: { x: 2, y: 0 },
+      radius: 8,
+      remainingMs: 300,
+      hitPlayerIds: new Set(['p1'])
+    };
+
+    const snapshot = snapshotMatch(state);
+
+    expect(snapshot.players[0]?.action).toEqual({
+      kind: 'HEAVY',
+      phase: 'ACTIVE',
+      comboStep: 0,
+      chargeMs: 640,
+      charging: false,
+      attackId: 17,
+      profileId: 'heavy-melee',
+      lockedFacing: { x: 0, y: -1 },
+      activeProgress: 1,
+      hitTargetIds: ['a-target', 'z-target']
+    });
+    expect(snapshot.players[1]?.action).toEqual({
+      kind: null,
+      phase: 'IDLE',
+      comboStep: 0,
+      chargeMs: 420,
+      charging: true,
+      attackId: null,
+      profileId: null,
+      lockedFacing: null,
+      activeProgress: 0,
+      hitTargetIds: []
+    });
+    expect(snapshot.pulses).toEqual([
+      {
+        projectileId: 2,
+        ownerPlayerId: 'p2',
+        originatingAttackId: 9,
+        position: { x: 10, y: 20 },
+        velocity: { x: 2, y: 0 },
+        radius: 8,
+        remainingMs: 300,
+        hitTargetIds: ['p1']
+      },
+      {
+        projectileId: 10,
+        ownerPlayerId: 'p1',
+        originatingAttackId: 17,
+        position: { x: 30, y: 40 },
+        velocity: { x: 5, y: 0 },
+        radius: 12,
+        remainingMs: 500,
+        hitTargetIds: ['a-target', 'z-target']
+      }
+    ]);
+
+    state.players.p1.attack.phaseElapsedMs = -10;
+    expect(snapshotMatch(state).players[0]?.action.activeProgress).toBe(0);
+  });
+
+  it('round-trips every authoritative combat event shape', () => {
+    const events: readonly GameEvent[] = [
+      {
+        type: 'CLASH', eventId: 11, tick: 21, playerIds: ['p1', 'p2'], attackIds: [7, 8],
+        impactPosition: { x: 100, y: 200 }, strength: 'HEAVY'
+      },
+      {
+        type: 'PERFECT_DODGE', eventId: 12, tick: 21, playerId: 'p2', attackerId: 'p1', attackId: 7,
+        source: 'NEON_PULSE', projectileId: 3, impactPosition: { x: 110, y: 205 }, refundedMs: 250
+      },
+      {
+        type: 'PULSE_SPAWN', eventId: 13, tick: 21, projectileId: 3, ownerPlayerId: 'p1',
+        originatingAttackId: 7, position: { x: 120, y: 210 }
+      },
+      {
+        type: 'PULSE_BREAK', eventId: 14, tick: 22, projectileId: 3, breakerPlayerId: 'p2',
+        breakerAttackId: 8, impactPosition: { x: 130, y: 215 }
+      },
+      {
+        type: 'HIT', eventId: 15, tick: 22, attackerId: 'p1', targetId: 'p2', attack: 'NEON_PULSE',
+        impactPosition: { x: 140, y: 220 }, impulse: 400, resultingOverload: 35
+      }
+    ];
+
+    expect(JSON.parse(JSON.stringify(events))).toEqual(events);
   });
 
   it('exports the approved cadence, protection, palette, and arena geometry', () => {

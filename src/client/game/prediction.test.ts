@@ -8,7 +8,10 @@ import {
   interpolateRemotePlayer
 } from './prediction.js';
 
-const idleAction = { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 } as const;
+const idleAction = {
+  kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
+  attackId: null, profileId: null, lockedFacing: null, activeProgress: 0, hitTargetIds: []
+} as const;
 
 function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
   return {
@@ -28,7 +31,7 @@ function frame(seq: number, overrides: Partial<InputFrame> = {}): InputFrame {
 function snapshot(tick: number, players: readonly MatchPlayer[]): MatchSnapshot {
   return {
     tick, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0,
-    scores: Object.fromEntries(players.map((value) => [value.playerId, 0])), players,
+    scores: Object.fromEntries(players.map((value) => [value.playerId, 0])), players, pulses: [],
     winnerPlayerId: null, resultReason: null
   };
 }
@@ -53,7 +56,9 @@ describe('PredictionBuffer', () => {
   it('predicts only local action starts and never invents hit, knockout, overload, or score state', () => {
     const prediction = new PredictionBuffer('p-1');
     const presentation = prediction.predict(frame(0, { quick: true }), player(), 16);
-    expect(presentation.actionStart).toEqual({ kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1, chargeMs: 0 });
+    expect(presentation.actionStart).toEqual({
+      ...idleAction, kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1
+    });
     expect(presentation).not.toHaveProperty('scores');
     expect(presentation).not.toHaveProperty('overload');
     expect(presentation).not.toHaveProperty('hit');
@@ -63,7 +68,9 @@ describe('PredictionBuffer', () => {
   it('starts local heavy-charge presentation while the right button is held without predicting an outcome', () => {
     const prediction = new PredictionBuffer('p-1');
     const presentation = prediction.predict(frame(0, { heavy: true }), player(), 100);
-    expect(presentation.actionStart).toEqual({ kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: 100 });
+    expect(presentation.actionStart).toEqual({
+      ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 100
+    });
     expect(presentation).not.toHaveProperty('scores');
     expect(presentation).not.toHaveProperty('hit');
   });
@@ -101,7 +108,7 @@ describe('PredictionBuffer', () => {
 
     expect(dash.actionStart?.kind).toBe('DASH');
     expect(restartedCharge.actionStart).toEqual({
-      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: 140
+      ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 140
     });
   });
 
@@ -115,7 +122,7 @@ describe('PredictionBuffer', () => {
     const afterRelease = prediction.predict(frame(3, { dash: true }), canonical, 16);
 
     expect(release.actionStart).toEqual({
-      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: 180
+      ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 180
     });
     expect(afterRelease.actionStart).toBeNull();
     expect(afterRelease.velocity.x).not.toBe(760);
@@ -127,7 +134,7 @@ describe('PredictionBuffer', () => {
       player({ dashRemainingMs: 100, velocity: { x: 760, y: 0 } }),
       player({ hitstunRemainingMs: 100, action: { ...idleAction, kind: 'HITSTUN' } }),
       player({ respawnRemainingMs: 100, action: { ...idleAction, kind: 'RESPAWNING' } }),
-      player({ action: { kind: 'QUICK_1', phase: 'ACTIVE', comboStep: 1, chargeMs: 0 } })
+      player({ action: { ...idleAction, kind: 'QUICK_1', phase: 'ACTIVE', comboStep: 1 } })
     ];
 
     for (const blocked of blockedPlayers) {
@@ -149,7 +156,7 @@ describe('PredictionBuffer', () => {
     expect(prediction.predict(frame(1), coolingDown, 16).actionStart).toBeNull();
     const started = prediction.predict(frame(2, { dash: true }), coolingDown, 16);
 
-    expect(started.actionStart).toEqual({ kind: 'DASH', phase: 'ACTIVE', comboStep: 0, chargeMs: 0 });
+    expect(started.actionStart).toEqual({ ...idleAction, kind: 'DASH', phase: 'ACTIVE' });
     expect(started.velocity.x).toBe(760);
   });
 

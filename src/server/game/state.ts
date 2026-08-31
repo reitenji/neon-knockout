@@ -9,6 +9,7 @@ import type {
   PlayerAccent,
   Vec2
 } from '../../shared/model.js';
+import type { AttackProfileId } from '../../shared/combat/profiles.js';
 
 const compareStableIds = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
 
@@ -30,10 +31,26 @@ export type MutablePlayerStats = {
 export type AttackRuntime = {
   attackId: number;
   kind: AttackKind;
+  profileId: AttackProfileId;
   phase: AttackPhase;
   phaseRemainingMs: number;
-  facing: Vec2;
+  phaseElapsedMs: number;
+  previousActiveProgress: number;
+  lockedFacing: Vec2;
   chargeMs: number;
+  hitPlayerIds: Set<string>;
+  resolvedPlayerIds: Set<string>;
+};
+
+export type PulseRuntime = {
+  projectileId: number;
+  ownerPlayerId: string;
+  originatingAttackId: number;
+  position: Vec2;
+  previousPosition: Vec2;
+  velocity: Vec2;
+  radius: number;
+  remainingMs: number;
   hitPlayerIds: Set<string>;
 };
 
@@ -50,6 +67,7 @@ export type MutableMatchPlayer = {
   attack: AttackRuntime | null;
   chargeMs: number;
   charging: boolean;
+  perfectDodgeConsumed: boolean;
   dashRemainingMs: number;
   dashInvulnerabilityRemainingMs: number;
   dashCooldownRemainingMs: number;
@@ -74,6 +92,7 @@ export type MatchState = {
   tick: number;
   nextEventId: number;
   nextAttackId: number;
+  nextProjectileId: number;
   seed: number;
   nowMs: number;
   phase: MatchPhase;
@@ -86,6 +105,7 @@ export type MatchState = {
   winnerPlayerId: string | null;
   resultReason: MatchResultReason | null;
   players: Record<string, MutableMatchPlayer>;
+  pulses: Record<number, PulseRuntime>;
 };
 
 export function createEmptyInput(): InputFrame {
@@ -130,6 +150,7 @@ export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: 
       attack: null,
       chargeMs: 0,
       charging: false,
+      perfectDodgeConsumed: false,
       dashRemainingMs: 0,
       dashInvulnerabilityRemainingMs: 0,
       dashCooldownRemainingMs: 0,
@@ -156,6 +177,7 @@ export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: 
     tick: 0,
     nextEventId: 1,
     nextAttackId: 1,
+    nextProjectileId: 1,
     seed,
     nowMs: seed,
     phase: 'COUNTDOWN',
@@ -167,6 +189,7 @@ export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: 
     scores,
     winnerPlayerId: null,
     resultReason: null,
-    players
+    players,
+    pulses: {}
   };
 }

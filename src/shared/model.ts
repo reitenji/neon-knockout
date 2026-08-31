@@ -1,3 +1,5 @@
+import type { AttackProfileId } from './combat/profiles.js';
+
 export const CHASSIS = ['RIFT', 'BASTION', 'PULSE', 'WRAITH'] as const;
 
 export type Chassis = (typeof CHASSIS)[number];
@@ -11,6 +13,8 @@ export type MatchPhase = 'COUNTDOWN' | 'REGULATION' | 'PAUSED' | 'SUDDEN_DEATH' 
 export type MatchResultReason = 'TARGET_SCORE' | 'TIME' | 'SUDDEN_DEATH' | 'NO_CONTEST';
 
 export type AttackKind = 'QUICK_1' | 'QUICK_2' | 'QUICK_3' | 'HEAVY';
+
+export type HitSource = AttackKind | 'NEON_PULSE';
 
 export type AttackPhase = 'IDLE' | 'WINDUP' | 'ACTIVE' | 'RECOVERY';
 
@@ -61,6 +65,23 @@ export type MatchAction = Readonly<{
   phase: AttackPhase;
   comboStep: 0 | 1 | 2 | 3;
   chargeMs: number;
+  charging: boolean;
+  attackId: number | null;
+  profileId: AttackProfileId | null;
+  lockedFacing: Vec2 | null;
+  activeProgress: number;
+  hitTargetIds: readonly string[];
+}>;
+
+export type MatchPulse = Readonly<{
+  projectileId: number;
+  ownerPlayerId: string;
+  originatingAttackId: number;
+  position: Vec2;
+  velocity: Vec2;
+  radius: number;
+  remainingMs: number;
+  hitTargetIds: readonly string[];
 }>;
 
 export type MatchPlayer = Readonly<{
@@ -89,6 +110,7 @@ export type MatchSnapshot = Readonly<{
   platformProgress: number;
   scores: Readonly<Record<string, number>>;
   players: readonly MatchPlayer[];
+  pulses: readonly MatchPulse[];
   winnerPlayerId: string | null;
   resultReason: MatchResultReason | null;
 }>;
@@ -101,10 +123,41 @@ export type GameEvent = EventMetadata &
         type: 'HIT';
         attackerId: string;
         targetId: string;
-        attack: AttackKind;
+        attack: HitSource;
         impactPosition: Vec2;
         impulse: number;
         resultingOverload: number;
+      }>
+    | Readonly<{
+        type: 'CLASH';
+        playerIds: readonly [string, string];
+        attackIds: readonly [number, number];
+        impactPosition: Vec2;
+        strength: 'QUICK' | 'HEAVY';
+      }>
+    | Readonly<{
+        type: 'PERFECT_DODGE';
+        playerId: string;
+        attackerId: string;
+        attackId: number;
+        source: HitSource;
+        projectileId: number | null;
+        impactPosition: Vec2;
+        refundedMs: number;
+      }>
+    | Readonly<{
+        type: 'PULSE_SPAWN';
+        projectileId: number;
+        ownerPlayerId: string;
+        originatingAttackId: number;
+        position: Vec2;
+      }>
+    | Readonly<{
+        type: 'PULSE_BREAK';
+        projectileId: number;
+        breakerPlayerId: string;
+        breakerAttackId: number;
+        impactPosition: Vec2;
       }>
     | Readonly<{
         type: 'KNOCKOUT';

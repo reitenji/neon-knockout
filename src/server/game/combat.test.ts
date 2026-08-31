@@ -125,7 +125,7 @@ describe('authoritative combat', () => {
     player.facing = { x: 1, y: 0 };
     player.latestInput = input(0, { aimX: 0, aimY: -1, quick: true });
     startActions(state);
-    expect(player.attack?.facing).toEqual({ x: 0, y: -1 });
+    expect(player.attack?.lockedFacing).toEqual({ x: 0, y: -1 });
   });
 
   it('requires 180 ms heavy charge, caps power at 700 ms, and captures release power', () => {

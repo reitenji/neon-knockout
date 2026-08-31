@@ -4,7 +4,10 @@ import type { MatchAction, MatchPlayer } from '../../../shared/model.js';
 import { AnimationDirector, type FighterAnimationTarget } from './AnimationDirector.js';
 import type { FighterAnimationName, FighterPose } from './animationPlan.js';
 
-const idleAction: MatchAction = { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 };
+const idleAction: MatchAction = {
+  kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
+  attackId: null, profileId: null, lockedFacing: null, activeProgress: 0, hitTargetIds: []
+};
 
 function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
   return {
