@@ -25,6 +25,19 @@ describe('shared input boundary protocol', () => {
     ).toBe(true);
     expect(
       protocol.matchInputSchema.safeParse({
+        seq: 7,
+        moveX: 1,
+        moveY: 0,
+        aimX: 0.6,
+        aimY: -0.8,
+        quick: true,
+        heavy: false,
+        dash: false,
+        mouseX: 200
+      }).success
+    ).toBe(false);
+    expect(
+      protocol.matchInputSchema.safeParse({
         seq: 8,
         moveX: 1.01,
         moveY: 0,

@@ -50,8 +50,7 @@ export class ArenaSession {
       this.releaseHeldInput();
       return this.localPresentation;
     }
-    const visibleOrigin = this.localPresentation?.position ?? localPlayer.position;
-    const frame = this.input.sample(this.inputSequence, visibleOrigin, this.now());
+    const frame = this.input.sample(this.inputSequence, this.now());
     if (!frame) return this.localPresentation;
     this.inputSequence += 1;
     this.localPresentation = this.prediction.predict(
