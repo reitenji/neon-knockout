@@ -232,6 +232,47 @@ describe('createGameStore', () => {
     expect(client.resumeSession).not.toHaveBeenCalled();
   });
 
+  it('isolates a rejoined session from delayed room and match publications for the former membership', async () => {
+    const client = new FakeGameClient();
+    client.connectionState = 'connected';
+    const { storage, store } = createFixture(client);
+    const formerWelcome = successWelcome();
+    const formerRoom = roomState({ phase: 'MATCH' });
+    client.emit('session:welcome', formerWelcome);
+    client.emit('room:state', formerRoom);
+    client.emit('match:started', matchSnapshot({ tick: 10 }));
+    await store.actions.leaveRoom();
+
+    const rejoinedWelcome = successWelcome({
+      playerId: 'player-2',
+      resumeToken: 'b'.repeat(64)
+    });
+    client.joinRoom.mockResolvedValue({ ok: true, data: rejoinedWelcome });
+    await store.actions.joinRoom('Ece', 'AB2Z');
+    client.emit('session:welcome', rejoinedWelcome);
+
+    client.emit('room:state', formerRoom);
+    client.emit('match:started', matchSnapshot({ tick: 11 }));
+    client.emit('match:snapshot', matchSnapshot({ tick: 12 }));
+    client.emit('match:event', phaseEvent({ tick: 12 }));
+
+    expect(store.getSnapshot()).toMatchObject({
+      screen: 'LANDING', room: null, match: null,
+      session: { playerId: 'player-2', roomCode: 'AB2Z', resumeToken: 'b'.repeat(64) }
+    });
+    expect(storage.getItem('neon-relay:last-room')).toBe('AB2Z');
+    expect(storage.getItem('neon-relay:AB2Z:resume')).toBe('b'.repeat(64));
+
+    const rejoinedRoom = roomState({
+      players: [player(), player({ playerId: 'player-2', name: 'Ece', accent: 1 })]
+    });
+    const rejoinedMatch = matchSnapshot({ tick: 20, scores: { 'player-1': 0, 'player-2': 0 } });
+    client.emit('room:state', rejoinedRoom);
+    client.emit('match:started', rejoinedMatch);
+
+    expect(store.getSnapshot()).toMatchObject({ screen: 'MATCH', room: rejoinedRoom, match: rejoinedMatch });
+  });
+
   it.each([
     ['server rejection', { code: 'INVALID_PHASE', message: 'Bu işlem şu anda kullanılamaz.', recoverable: true }],
     ['acknowledgement timeout', { code: 'ACK_TIMEOUT', message: 'Sunucu yanıt vermedi.', recoverable: true }]
@@ -313,6 +354,7 @@ describe('createGameStore', () => {
     vi.setSystemTime(new Date('2026-08-28T12:00:00Z'));
     const { client, store } = createFixture();
     const canonical = roomState({ phase: 'MATCH', pauseRemainingMs: 12_400 });
+    client.emit('session:welcome', successWelcome());
     client.emit('room:state', canonical);
     expect(store.getSnapshot().reconnectRemainingMs).toBe(12_400);
     vi.advanceTimersByTime(1_400);
@@ -323,6 +365,7 @@ describe('createGameStore', () => {
 
   it('maps NO_CONTEST to a Turkish toast and then accepts the lobby room state', () => {
     const { client, store } = createFixture();
+    client.emit('session:welcome', successWelcome());
     client.emit('room:state', roomState({ phase: 'MATCH' }));
     client.emit('match:event', {
       eventId: 9, tick: 600, type: 'RESULT', winnerPlayerId: null, reason: 'NO_CONTEST', scores: { 'player-1': 2 }
@@ -339,6 +382,7 @@ describe('createGameStore', () => {
     const rateLimited: ServerError = {
       code: 'RATE_LIMITED', message: 'Çok hızlı istek gönderiyorsunuz.', recoverable: true
     };
+    client.emit('session:welcome', successWelcome());
     client.emit('room:state', roomState({ phase: 'MATCH' }));
 
     client.emit('server:error', rateLimited);
@@ -360,6 +404,8 @@ describe('createGameStore', () => {
     bridge.subscribeEvent(eventListener);
     const snapshot = matchSnapshot();
     const event = phaseEvent();
+    client.emit('session:welcome', successWelcome());
+    client.emit('room:state', roomState({ phase: 'MATCH' }));
     client.emit('match:started', snapshot);
     client.emit('match:event', event);
     bridge.sendInput({ seq: 1, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false });

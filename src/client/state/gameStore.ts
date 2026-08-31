@@ -119,6 +119,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
   let resumeAttemptedForConnection = false;
   let resumeQueued = false;
   let departedSessionEventsSuppressed = false;
+  let awaitingAuthoritativeRoom = false;
   let acknowledgementsInFlight = 0;
   let toastId = 0;
   let pausePublishedAt = 0;
@@ -166,10 +167,19 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
     if (disposed) return;
     for (const listener of gameEventListeners) listener(event);
   };
+  const roomBelongsToCurrentSession = (room: RoomState): boolean => {
+    const session = state.session;
+    return Boolean(session && room.roomCode === session.roomCode &&
+      room.players.some((player) => player.playerId === session.playerId));
+  };
+  const acceptsMatchPublications = (): boolean =>
+    !departedSessionEventsSuppressed && !awaitingAuthoritativeRoom && state.room !== null &&
+    roomBelongsToCurrentSession(state.room);
   const persistWelcome = (welcome: SessionWelcome): void => {
     departedSessionEventsSuppressed = false;
     const session = { playerId: welcome.playerId, roomCode: welcome.roomCode, resumeToken: welcome.resumeToken };
     if (sameSession(state.session, session)) return;
+    awaitingAuthoritativeRoom = true;
     storage.setItem(resumeKey(welcome.roomCode), welcome.resumeToken);
     storage.setItem(LAST_ROOM_KEY, welcome.roomCode);
     resumeQueued = false;
@@ -252,7 +262,8 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       if (!departedSessionEventsSuppressed) persistWelcome(welcome);
     }),
     client.subscribe('room:state', (room) => {
-      if (departedSessionEventsSuppressed) return;
+      if (departedSessionEventsSuppressed || !roomBelongsToCurrentSession(room)) return;
+      awaitingAuthoritativeRoom = false;
       acceptReconnectDuration(room.pauseRemainingMs);
       const screen = screenForRoom(room);
       patch((current) => ({
@@ -261,20 +272,20 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
       }));
     }),
     client.subscribe('match:started', (match) => {
-      if (departedSessionEventsSuppressed) return;
+      if (!acceptsMatchPublications()) return;
       publishMatch(match);
       patch((current) => ({
         ...current, match, screen: 'MATCH', lastError: null, errorAction: null
       }));
     }),
     client.subscribe('match:snapshot', (match) => {
-      if (departedSessionEventsSuppressed) return;
+      if (!acceptsMatchPublications()) return;
       const shouldNotify = coarseMatchChanged(state.match, match);
       publishMatch(match);
       patch((current) => ({ ...current, match }), shouldNotify);
     }),
     client.subscribe('match:event', (event) => {
-      if (departedSessionEventsSuppressed) return;
+      if (!acceptsMatchPublications()) return;
       publishGameEvent(event);
       if (event.type === 'RESULT' && event.reason === 'NO_CONTEST') {
         patch((current) => ({
@@ -351,6 +362,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
         forgetRoom(roomCode);
         clearReconnectTimer();
         departedSessionEventsSuppressed = true;
+        awaitingAuthoritativeRoom = true;
         resumeAttemptedForConnection = true;
         resumeQueued = false;
         replace({
