@@ -32,6 +32,7 @@ export const GAME = Object.freeze({
   maxPlayers: 8,
   maxInputFramesPerSecond: 60,
   inputRateLimitPerSecond: 90,
+  maxPingMs: 2_000,
   collisionRadius: 24,
   maxGroundSpeed: 330,
   groundAcceleration: 2_400,

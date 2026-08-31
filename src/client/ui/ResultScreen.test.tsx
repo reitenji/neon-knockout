@@ -1,7 +1,7 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { RoomPlayer } from '../../shared/model.js';
+import type { ResultPlayer, ResultPlayerStatus, RoomPlayer } from '../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import type { ClientState } from '../state/gameStore.js';
 import { ResultScreen } from './ResultScreen.js';
@@ -14,17 +14,34 @@ function player(overrides: Partial<RoomPlayer> = {}): RoomPlayer {
     ...overrides
   };
 }
+
+function resultPlayer(status: ResultPlayerStatus, overrides: Partial<ResultPlayer> = {}): ResultPlayer {
+  return {
+    ...player(),
+    resultStatus: status,
+    ...overrides
+  };
+}
+
 function resultState(overrides: Partial<ClientState> = {}): ClientState {
   return {
     screen: 'RESULT', connectionState: 'connected',
     room: {
       roomCode: 'AB2Z', phase: 'RESULT', hostPlayerId: 'p-1', pauseRemainingMs: null,
-      result: { winnerPlayerId: 'p-2', reason: 'TIME' },
+      result: {
+        winnerPlayerId: 'p-2',
+        reason: 'TIME',
+        players: [
+          resultPlayer('WAITING'),
+          resultPlayer('READY', { playerId: 'p-2', name: 'Zeynep', chassis: 'BASTION', accent: 1, ready: true, stats: { knockouts: 4, falls: 2, landedHits: 9, completedAttacks: 12 } }),
+          resultPlayer('LEFT', { playerId: 'p-3', name: 'Linus', chassis: 'PULSE', accent: 2, connected: false, stats: { knockouts: 3, falls: 1, landedHits: 7, completedAttacks: 20 } }),
+          resultPlayer('WAITING', { playerId: 'p-4', name: 'Grace', chassis: 'WRAITH', accent: 3, stats: { knockouts: 3, falls: 1, landedHits: 7, completedAttacks: 14 } })
+        ]
+      },
       settings: DEFAULT_ROOM_SETTINGS,
       players: [
         player(),
-        player({ playerId: 'p-2', name: 'Zeynep', chassis: 'BASTION', accent: 1, stats: { knockouts: 4, falls: 2, landedHits: 9, completedAttacks: 12 } }),
-        player({ playerId: 'p-3', name: 'Linus', chassis: 'PULSE', accent: 2, stats: { knockouts: 3, falls: 1, landedHits: 7, completedAttacks: 20 } }),
+        player({ playerId: 'p-2', name: 'Zeynep', chassis: 'BASTION', accent: 1, ready: true, stats: { knockouts: 4, falls: 2, landedHits: 9, completedAttacks: 12 } }),
         player({ playerId: 'p-4', name: 'Grace', chassis: 'WRAITH', accent: 3, stats: { knockouts: 3, falls: 1, landedHits: 7, completedAttacks: 14 } })
       ]
     },
@@ -59,6 +76,9 @@ describe('ResultScreen', () => {
     expect(rows[4]).toHaveTextContent('Grace');
     expect(rows[1]).toHaveTextContent('75%');
     expect(rows[3]).toHaveTextContent('35%');
+    expect(rows[1]).toHaveTextContent('Hazır');
+    expect(rows[2]).toHaveTextContent('Bekliyor');
+    expect(rows[3]).toHaveTextContent('Ayrıldı');
   });
 
   it('lets a connected non-host ready again without exposing host controls', () => {
@@ -87,7 +107,8 @@ describe('ResultScreen', () => {
     view.unmount();
     confirmReturn.mockClear();
     onReturnToLobby.mockClear();
-    renderResult(resultState(), { confirmReturn, onReturnToLobby });
+    const noReadyPlayers = resultState().room!.players.map((candidate) => ({ ...candidate, ready: false }));
+    renderResult(resultState({ room: { ...resultState().room!, players: noReadyPlayers } }), { confirmReturn, onReturnToLobby });
     fireEvent.click(screen.getByRole('button', { name: 'Lobiye Dön' }));
     expect(confirmReturn).not.toHaveBeenCalled();
     expect(onReturnToLobby).toHaveBeenCalledOnce();

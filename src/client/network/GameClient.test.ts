@@ -135,4 +135,14 @@ describe('createSocketGameClient', () => {
     expect(socketHarness.socket.emit).toHaveBeenCalledWith('match:input', input);
     expect(socketHarness.socket.emit.mock.calls.at(-1)).toHaveLength(2);
   });
+
+  it('acknowledges server-issued RTT probes without publishing a client-authored latency value', () => {
+    createSocketGameClient();
+    const acknowledge = vi.fn();
+
+    socketHarness.trigger('network:probe', acknowledge);
+
+    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(socketHarness.socket.emit).not.toHaveBeenCalled();
+  });
 });

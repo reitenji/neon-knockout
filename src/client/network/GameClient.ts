@@ -111,6 +111,7 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
   socket.on('match:started', (snapshot) => publish('match:started', snapshot));
   socket.on('match:snapshot', (snapshot) => publish('match:snapshot', snapshot));
   socket.on('match:event', (event) => publish('match:event', event));
+  socket.on('network:probe', (acknowledge) => acknowledge());
   socket.on('server:error', (error) => publish('server:error', error));
 
   return {

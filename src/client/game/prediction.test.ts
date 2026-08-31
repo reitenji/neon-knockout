@@ -33,7 +33,8 @@ function snapshot(tick: number, players: readonly MatchPlayer[]): MatchSnapshot 
   return {
     tick, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
-    scores: Object.fromEntries(players.map((value) => [value.playerId, 0])), players, pulses: [],
+    scores: Object.fromEntries(players.map((value) => [value.playerId, 0])),
+    pingMs: Object.fromEntries(players.map((value) => [value.playerId, null])), players, pulses: [],
     winnerPlayerId: null, resultReason: null
   };
 }

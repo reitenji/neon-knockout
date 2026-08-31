@@ -52,6 +52,7 @@ function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
     platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
     scores: { 'p-local': 2, 'p-rival': 4 },
+    pingMs: { 'p-local': null, 'p-rival': 48 },
     players: [local, rival],
     pulses: [],
     winnerPlayerId: null,
@@ -115,10 +116,10 @@ describe('MatchHud', () => {
     expect(screen.getByRole('status', { name: 'Geri sayım' })).toHaveTextContent('3');
     expect(screen.getByLabelText('Kazanma hedefi')).toHaveTextContent('İlk 5 knockout');
 
-    const ranking = screen.getByRole('list', { name: 'Skor sıralaması' });
+    const ranking = screen.getByRole('list', { name: 'Oyuncu sıralaması' });
     const rows = within(ranking).getAllByRole('listitem');
-    expect(rows[0]).toHaveTextContent('Linus4');
-    expect(rows[1]).toHaveTextContent('AdaSen2');
+    expect(rows[0]).toHaveTextContent('Linus448 ms');
+    expect(rows[1]).toHaveTextContent('AdaSen2—');
 
     expect(screen.getByRole('meter', { name: 'Overload' })).toHaveAttribute('aria-valuenow', '84');
     expect(screen.getByText('84%')).toBeVisible();
@@ -132,6 +133,32 @@ describe('MatchHud', () => {
     expect(controls).toHaveTextContent('K');
     expect(controls).toHaveTextContent('Space');
     expect(controls).not.toHaveTextContent(/oklar|shift|tık|fare|mouse/i);
+  });
+
+  it('shows every match player with rank, knockout score, and accessible latency tiers', () => {
+    const bridge = new PresentationBridge();
+    bridge.current = snapshot({
+      players: [
+        player(),
+        player({ playerId: 'p-rival', name: 'Linus', accent: 1 }),
+        player({ playerId: 'p-medium', name: 'Mina', accent: 2 }),
+        player({ playerId: 'p-high', name: 'Kerem', accent: 3 })
+      ],
+      scores: { 'p-local': 2, 'p-rival': 4, 'p-medium': 3, 'p-high': 1 },
+      pingMs: { 'p-local': null, 'p-rival': 42, 'p-medium': 96, 'p-high': 184 }
+    });
+
+    render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
+
+    const roster = screen.getByRole('region', { name: 'Oyuncu listesi' });
+    expect(within(roster).getAllByRole('listitem')).toHaveLength(4);
+    expect(within(roster).getByText('KO')).toBeVisible();
+    expect(within(roster).getByText('PING')).toBeVisible();
+    expect(screen.getByLabelText('Ada pingi: ölçülüyor')).toHaveTextContent('—');
+    expect(screen.getByLabelText('Linus pingi: 42 ms')).toHaveClass('is-good');
+    expect(screen.getByLabelText('Mina pingi: 96 ms')).toHaveClass('is-medium');
+    expect(screen.getByLabelText('Kerem pingi: 184 ms')).toHaveClass('is-high');
+    expect(screen.getByLabelText('Linus skoru: 4 knockout')).toBeVisible();
   });
 
   it('shows exact charge readiness and the authoritative 78-second contraction warning', () => {
@@ -187,21 +214,25 @@ describe('MatchHud', () => {
 
   it('tracks live phase, combat, and transport changes without remounting the arena', () => {
     const bridge = new PresentationBridge();
+    const createGame = vi.fn(() => ({ destroy() {} }));
     const view = render(
-      <PhaserArena bridge={bridge} localPlayerId="p-local" createGame={() => ({ destroy() {} })} reducedMotion />
+      <PhaserArena bridge={bridge} localPlayerId="p-local" createGame={createGame} reducedMotion />
     );
 
     act(() => bridge.publish(snapshot({
       phase: 'REGULATION',
       remainingMs: 119_650,
       players: [player({ action: idleAction, overload: 120, dashCooldownRemainingMs: 0 })],
-      scores: { 'p-local': 3 }
+      scores: { 'p-local': 3 },
+      pingMs: { 'p-local': 109 }
     })));
 
     expect(screen.getByRole('status', { name: 'Raunt başlangıcı' })).toHaveTextContent('FIGHT');
     expect(screen.getByRole('timer', { name: 'Kalan süre' })).toHaveTextContent('02:00');
     expect(screen.getByText('Hazır')).toBeVisible();
     expect(screen.getByText('Beklemede')).toBeVisible();
+    expect(screen.getByLabelText('Ada pingi: 109 ms')).toHaveClass('is-medium');
+    expect(createGame).toHaveBeenCalledOnce();
 
     act(() => bridge.setConnected(false));
     expect(screen.getByRole('status', { name: 'Bağlantı durumu' })).toHaveTextContent('Bağlantı kesildi');

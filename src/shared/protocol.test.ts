@@ -176,6 +176,7 @@ describe('shared input boundary protocol', () => {
       platformProgress: 0,
       settings: DEFAULT_ROOM_SETTINGS,
       scores: { p1: 1 },
+      pingMs: { p1: null },
       players: [
         {
           playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0,

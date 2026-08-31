@@ -216,7 +216,7 @@ describe('authoritative combat', () => {
       state,
       GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs
     );
-    const expectedImpulse = 280 * (1 + (8 / 150) * 0.9);
+    const expectedImpulse = 280 * 1.08;
     expect(events).toContainEqual(expect.objectContaining({
       type: 'HIT', attackerId: 'p1', targetId: 'p2', attack: 'QUICK_1',
       resultingOverload: 8, impulse: expectedImpulse
@@ -224,6 +224,32 @@ describe('authoritative combat', () => {
     expect(state.players.p2.velocity.x).toBeCloseTo(expectedImpulse, 8);
     expect(state.players.p2.hitstunRemainingMs).toBe(90);
   });
+
+  it.each([
+    { startingOverload: 42, resultingOverload: 50, multiplier: 1.5 },
+    { startingOverload: 92, resultingOverload: 100, multiplier: 2 }
+  ])(
+    'adds $resultingOverload percent knockback at $resultingOverload percent overload',
+    ({ startingOverload, resultingOverload, multiplier }) => {
+      const state = createState();
+      state.players.p3.connected = false;
+      state.players.p2.position = { x: 642, y: 360 };
+      state.players.p2.overload = startingOverload;
+      beginQuick(state);
+
+      const events = advanceAndResolve(
+        state,
+        GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs
+      );
+
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'HIT',
+        resultingOverload,
+        impulse: 280 * multiplier
+      }));
+      expect(state.players.p2.velocity.x).toBeCloseTo(280 * multiplier, 8);
+    }
+  );
 
   it('caps overload and applies the exact 230 ms maximum hitstun for a full heavy', () => {
     const state = createState();
@@ -237,7 +263,7 @@ describe('authoritative combat', () => {
     startActions(state);
     const events = advanceAndResolve(state, GAME.heavyWindupMs + GAME.heavyActiveMs);
     expect(events).toContainEqual(expect.objectContaining({
-      type: 'HIT', attack: 'HEAVY', impulse: 760 * 1.9, resultingOverload: 150
+      type: 'HIT', attack: 'HEAVY', impulse: 760 * 2.5, resultingOverload: 150
     }));
     expect(state.players.p2.hitstunRemainingMs).toBe(230);
   });

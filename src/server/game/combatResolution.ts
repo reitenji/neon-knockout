@@ -59,8 +59,9 @@ const QUICK_ONE_PROFILE = profileForAttack('QUICK_1');
 const HEAVY_PROFILE = profileForAttack('HEAVY');
 const QUICK_ONE_OVERLOAD = chargedValue(QUICK_ONE_PROFILE.overloadGain, 0);
 const MIN_EFFECTIVE_IMPULSE = chargedValue(QUICK_ONE_PROFILE.baseImpulse, 0) *
-  (1 + (QUICK_ONE_OVERLOAD / GAME.maxOverload) * 0.9);
-const MAX_EFFECTIVE_IMPULSE = chargedValue(HEAVY_PROFILE.baseImpulse, GAME.heavyMaxChargeMs) * 1.9;
+  overloadMultiplier(QUICK_ONE_OVERLOAD);
+const MAX_EFFECTIVE_IMPULSE = chargedValue(HEAVY_PROFILE.baseImpulse, GAME.heavyMaxChargeMs) *
+  overloadMultiplier(GAME.maxOverload);
 
 function activePlayer(player: MutableMatchPlayer): boolean {
   return player.connected && player.respawnRemainingMs <= 0;
@@ -135,6 +136,10 @@ function chargedValue(
     1
   );
   return value.minimum + (value.maximum - value.minimum) * progress;
+}
+
+function overloadMultiplier(overload: number): number {
+  return 1 + clamp(overload, 0, GAME.maxOverload) / 100;
 }
 
 function attackEffects(profile: AttackProfile, attack: AttackRuntime): Readonly<{
@@ -283,7 +288,7 @@ function applyHit(
   if (hitPlayerIds) hitPlayerIds.add(target.playerId);
   if (firstLandedTarget) attacker.stats.landedHits += 1;
   target.overload = Math.min(GAME.maxOverload, target.overload + overloadGain);
-  const impulse = baseImpulse * (1 + (target.overload / GAME.maxOverload) * 0.9);
+  const impulse = baseImpulse * overloadMultiplier(target.overload);
   const direction = pulseDirection ?? normalize(attack?.lockedFacing ?? { x: 1, y: 0 }, { x: 1, y: 0 });
   target.velocity = {
     x: target.velocity.x + direction.x * impulse,

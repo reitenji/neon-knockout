@@ -149,7 +149,7 @@ function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
   return {
     tick: 10, phase: 'REGULATION', remainingMs: 82_000, platformProgress: 0.35,
     settings: DEFAULT_ROOM_SETTINGS,
-    scores: { p1: 0 }, players: [player()], pulses: [], winnerPlayerId: null, resultReason: null,
+    scores: { p1: 0 }, pingMs: { p1: null }, players: [player()], pulses: [], winnerPlayerId: null, resultReason: null,
     ...overrides
   };
 }

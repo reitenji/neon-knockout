@@ -92,5 +92,6 @@ export interface ServerToClientEvents {
   'match:started': (snapshot: MatchSnapshot) => void;
   'match:snapshot': (snapshot: MatchSnapshot) => void;
   'match:event': (event: GameEvent) => void;
+  'network:probe': (acknowledge: () => void) => void;
   'server:error': (error: ServerError) => void;
 }

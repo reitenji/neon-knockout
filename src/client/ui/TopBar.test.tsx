@@ -30,7 +30,7 @@ function room(phase: RoomPhase): RoomState {
     phase,
     hostPlayerId: 'p-1',
     pauseRemainingMs: null,
-    result: phase === 'RESULT' ? { winnerPlayerId: 'p-1', reason: 'TIME' } : null,
+    result: phase === 'RESULT' ? { winnerPlayerId: 'p-1', reason: 'TIME', players: [] } : null,
     settings: DEFAULT_ROOM_SETTINGS,
     players: []
   };

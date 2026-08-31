@@ -104,6 +104,7 @@ export type MatchState = {
   contraction: number;
   readonly settings: RoomSettings;
   scores: Record<string, number>;
+  pingMs: Record<string, number | null>;
   winnerPlayerId: string | null;
   resultReason: MatchResultReason | null;
   players: Record<string, MutableMatchPlayer>;
@@ -140,6 +141,7 @@ export function createMatchState(
   const sortedSeeds = [...playerSeeds].sort((left, right) => compareStableIds(left.playerId, right.playerId));
   const players: Record<string, MutableMatchPlayer> = {};
   const scores: Record<string, number> = {};
+  const pingMs: Record<string, number | null> = {};
 
   sortedSeeds.forEach((playerSeed, index) => {
     const anchor = ARENA.spawnAnchors[index % ARENA.spawnAnchors.length];
@@ -177,6 +179,7 @@ export function createMatchState(
       stats: { ...createPlayerStats() }
     };
     scores[playerSeed.playerId] = 0;
+    pingMs[playerSeed.playerId] = null;
   });
 
   return {
@@ -194,6 +197,7 @@ export function createMatchState(
     contraction: 0,
     settings: Object.freeze({ ...settings }),
     scores,
+    pingMs,
     winnerPlayerId: null,
     resultReason: null,
     players,

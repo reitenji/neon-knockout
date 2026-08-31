@@ -173,6 +173,11 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
   const match = await createTwoPlayerMatch(browser, game);
   const journeyMarker = marker(game, match.code);
   try {
+    const hostRoster = match.host.page.getByRole('region', { name: 'Oyuncu listesi' });
+    await expect(hostRoster).toBeVisible();
+    await expect(match.host.page.getByLabel(/^Ada pingi:/)).not.toHaveText('—');
+    await expect(match.host.page.getByLabel(/^Linus pingi:/)).not.toHaveText('—');
+
     await placePlayers(game, match, { x: 500, y: 300 }, { x: 900, y: 500 });
     const beforeMouseTick = snapshot(game, match.code).tick;
     const beforeMouse = player(game, match.code, match.hostPlayerId);
@@ -292,15 +297,15 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
       game,
       match,
       { x: 580, y: 360 },
-      { x: 670, y: 414 },
+      { x: 715, y: 360 },
       { x: 1, y: 0 },
-      { x: 0, y: -1 }
+      { x: -1, y: 0 }
     );
     eventMarker = marker(game, match.code);
     await Promise.all([
       match.host.page.keyboard.down('d'),
       match.host.page.keyboard.down('k'),
-      match.guest.page.keyboard.down('w'),
+      match.guest.page.keyboard.down('a'),
       match.guest.page.keyboard.down('k')
     ]);
     await expect.poll(() => [match.hostPlayerId, match.guestPlayerId].every((playerId) =>
@@ -308,15 +313,15 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
     )).toBe(true);
     await Promise.all([
       match.host.page.keyboard.up('d'),
-      match.guest.page.keyboard.up('w')
+      match.guest.page.keyboard.up('a')
     ]);
     await placePlayers(
       game,
       match,
       { x: 580, y: 360 },
-      { x: 670, y: 414 },
+      { x: 715, y: 360 },
       { x: 1, y: 0 },
-      { x: 0, y: -1 }
+      { x: -1, y: 0 }
     );
     const heldKSequences = [match.hostPlayerId, match.guestPlayerId].map((playerId) =>
       player(game, match.code, playerId).lastProcessedInputSeq
@@ -431,6 +436,8 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
     await expect(match.guest.page.getByRole('heading', { name: 'Ada Kazandı' })).toBeVisible();
     await match.host.page.getByRole('button', { name: 'Tekrar Hazır' }).click();
     await match.guest.page.getByRole('button', { name: 'Tekrar Hazır' }).click();
+    await expect(match.host.page.getByRole('row', { name: /Ada/ })).toContainText('Hazır');
+    await expect(match.host.page.getByRole('row', { name: /Linus/ })).toContainText('Hazır');
     await expect(match.host.page.getByRole('button', { name: 'Rövanşı Başlat' })).toBeEnabled();
     await match.host.page.getByRole('button', { name: 'Rövanşı Başlat' }).click();
     await expect(match.host.page.getByRole('img', { name: 'Neon Knockout oyun alanı' })).toBeVisible();
@@ -440,3 +447,30 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
     await match.close();
   }
 }, 55_000);
+
+test('result screen preserves ready and departed player statuses', async ({ browser, game }) => {
+  const match = await createTwoPlayerMatch(browser, game);
+  try {
+    for (let knockout = 0; knockout < 5; knockout += 1) {
+      const knockoutMarker = marker(game, match.code);
+      game.harness.forceKnockout(match.code, match.hostPlayerId, match.guestPlayerId);
+      const forced = await waitForEvent(game, match.code, knockoutMarker, 'KNOCKOUT');
+      if (knockout < 4) await waitForEvent(game, match.code, forced.eventId, 'RESPAWN');
+    }
+
+    await expect(match.host.page.getByRole('heading', { name: 'Ada Kazandı' })).toBeVisible();
+    await match.host.page.getByRole('button', { name: 'Tekrar Hazır' }).click();
+    await expect(match.host.page.getByRole('row', { name: /Ada/ })).toContainText('Hazır');
+    await expect(match.host.page.getByRole('row', { name: /Linus/ })).toContainText('Bekliyor');
+
+    await match.guest.page.getByRole('button', { name: 'Odadan Çık' }).click();
+    await expect(match.guest.page.getByRole('heading', { name: 'NEON KNOCKOUT' })).toBeVisible();
+    await expect(match.host.page.getByRole('heading', { name: 'Ada Kazandı' })).toBeVisible();
+    await expect(match.host.page.getByRole('row', { name: /Ada/ })).toContainText('Hazır');
+    await expect(match.host.page.getByRole('row', { name: /Linus/ })).toContainText('Ayrıldı');
+    await expect.poll(() => game.server.rooms.debugRoom(match.code)?.playerIds).toEqual([match.hostPlayerId]);
+    await assertNoUnexpectedErrors(game, match.host, match.guest);
+  } finally {
+    await match.close();
+  }
+});

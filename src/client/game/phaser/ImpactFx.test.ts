@@ -22,6 +22,7 @@ function snapshot(): MatchSnapshot {
     tick: 30, phase: 'REGULATION', remainingMs: 90_000, platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
     scores: { attacker: 2, target: 0 },
+    pingMs: { attacker: null, target: null },
     players: [player('attacker', 'Ada', { x: 200, y: 360 }), player('target', 'Bora', { x: 300, y: 360 })],
     pulses: [],
     winnerPlayerId: null, resultReason: null

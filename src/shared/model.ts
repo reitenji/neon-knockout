@@ -52,12 +52,22 @@ export type RoomPlayer = Readonly<{
   stats: PlayerStats;
 }>;
 
+export type ResultPlayerStatus = 'WAITING' | 'READY' | 'LEFT';
+
+export type ResultPlayer = Readonly<RoomPlayer & {
+  resultStatus: ResultPlayerStatus;
+}>;
+
 export type RoomState = Readonly<{
   roomCode: string;
   phase: RoomPhase;
   hostPlayerId: string;
   pauseRemainingMs: number | null;
-  result: Readonly<{ winnerPlayerId: string | null; reason: MatchResultReason }> | null;
+  result: Readonly<{
+    winnerPlayerId: string | null;
+    reason: MatchResultReason;
+    players: readonly ResultPlayer[];
+  }> | null;
   settings: RoomSettings;
   players: readonly RoomPlayer[];
 }>;
@@ -112,6 +122,7 @@ export type MatchSnapshot = Readonly<{
   platformProgress: number;
   settings: RoomSettings;
   scores: Readonly<Record<string, number>>;
+  pingMs: Readonly<Record<string, number | null>>;
   players: readonly MatchPlayer[];
   pulses: readonly MatchPulse[];
   winnerPlayerId: string | null;

@@ -59,6 +59,8 @@ const INTERNAL_ERROR: ServerError = {
   recoverable: true
 };
 
+const LATENCY_SAMPLE_INTERVAL_MS = 2_000;
+
 function domainError(error: DomainError): ServerError {
   return {
     code: error.code,
@@ -116,6 +118,57 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
   io.on('connection', (socket) => {
     const limiter = new SocketRateLimiter(now);
     let lastAcceptedInputSeq = -1;
+    let latencySampling = false;
+    let latencyTimer: ReturnType<typeof setTimeout> | null = null;
+    let latencyProbeTimeout: ReturnType<typeof setTimeout> | null = null;
+    let activeLatencyProbe: number | null = null;
+    let nextLatencyProbe = 0;
+
+    const stopLatencySampling = (): void => {
+      latencySampling = false;
+      activeLatencyProbe = null;
+      if (latencyTimer) clearTimeout(latencyTimer);
+      if (latencyProbeTimeout) clearTimeout(latencyProbeTimeout);
+      latencyTimer = null;
+      latencyProbeTimeout = null;
+    };
+
+    const scheduleLatencySample = (): void => {
+      if (!latencySampling) return;
+      latencyTimer = setTimeout(sampleLatency, LATENCY_SAMPLE_INTERVAL_MS);
+    };
+
+    const sampleLatency = (): void => {
+      latencyTimer = null;
+      if (!latencySampling || activeLatencyProbe !== null) return;
+      if (!rooms.isInActiveMatch(socket.id)) {
+        scheduleLatencySample();
+        return;
+      }
+      const probeId = ++nextLatencyProbe;
+      const startedAt = now();
+      activeLatencyProbe = probeId;
+      latencyProbeTimeout = setTimeout(() => {
+        if (activeLatencyProbe !== probeId) return;
+        activeLatencyProbe = null;
+        latencyProbeTimeout = null;
+        scheduleLatencySample();
+      }, GAME.maxPingMs);
+      socket.emit('network:probe', () => {
+        if (!latencySampling || activeLatencyProbe !== probeId) return;
+        if (latencyProbeTimeout) clearTimeout(latencyProbeTimeout);
+        latencyProbeTimeout = null;
+        activeLatencyProbe = null;
+        rooms.setPing(socket.id, now() - startedAt);
+        scheduleLatencySample();
+      });
+    };
+
+    const startLatencySampling = (): void => {
+      stopLatencySampling();
+      latencySampling = true;
+      sampleLatency();
+    };
 
     const emitRateLimit = (): void => {
       if (limiter.shouldEmitError()) socket.emit('server:error', RATE_LIMITED);
@@ -160,6 +213,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     const establishSession = (welcome: SessionWelcome): void => {
       void socket.join(welcome.roomCode);
       onSession(socket, welcome);
+      startLatencySampling();
       queueMicrotask(() => socket.emit('session:welcome', welcome));
     };
 
@@ -205,6 +259,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     socket.on('room:leave', (payload, callback) => {
       acknowledge(roomLeaveSchema, payload, callback, () => {
         const roomCode = rooms.leaveRoom(socket.id);
+        stopLatencySampling();
         void socket.leave(roomCode);
         onLeave(socket, roomCode);
         return null;
@@ -253,6 +308,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       }
     });
     socket.on('disconnect', () => {
+      stopLatencySampling();
       rooms.disconnect(socket.id);
       onDisconnect(socket);
     });

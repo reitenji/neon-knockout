@@ -15,7 +15,7 @@ function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
 }
 
 function snapshot(local = player()): MatchSnapshot {
-  return { tick: 1, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0, settings: DEFAULT_ROOM_SETTINGS, scores: { 'p-local': 0 }, players: [local], pulses: [], winnerPlayerId: null, resultReason: null };
+  return { tick: 1, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0, settings: DEFAULT_ROOM_SETTINGS, scores: { 'p-local': 0 }, pingMs: { 'p-local': null }, players: [local], pulses: [], winnerPlayerId: null, resultReason: null };
 }
 
 class Bridge implements GamePresentationBridge {

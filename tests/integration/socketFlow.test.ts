@@ -70,6 +70,7 @@ function expectEvent<E extends keyof ServerToClientEvents>(
 
 async function connectClient(origin: string): Promise<GameClient> {
   const client: GameClient = io(origin, { transports: ['websocket'], forceNew: true, reconnection: false });
+  client.on('network:probe', (acknowledge) => acknowledge());
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timed out connecting Socket.IO client')), ACK_TIMEOUT_MS);
     client.once('connect', () => {
@@ -305,6 +306,23 @@ describe('Socket.IO FFA game server flow', () => {
       .toMatchObject({ ok: false, error: { code: 'INVALID_PAYLOAD' } });
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(observed.some((state) => state.settings.durationMs !== 90_000 || state.settings.knockoutTarget !== 3)).toBe(false);
+  });
+
+  it('measures RTT from a server-issued challenge and ignores forged client latency events', async () => {
+    const match = await startMatch();
+    const measuredSnapshot = expectEvent(
+      match.hostClient,
+      'match:snapshot',
+      (value) => value.pingMs[match.host.playerId] !== null
+    );
+    const measured = await measuredSnapshot;
+    expect(measured.pingMs[match.host.playerId]).toEqual(expect.any(Number));
+    expect(measured.pingMs[match.host.playerId]).toBeLessThan(GAME.maxPingMs);
+
+    const emit = match.hostClient.emit.bind(match.hostClient) as (event: string, payload: unknown) => void;
+    emit('network:latency', { pingMs: GAME.maxPingMs });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(snapshot(match.roomCode).pingMs[match.host.playerId]).not.toBe(GAME.maxPingMs);
   });
 
   it('leaves the Socket.IO room, clears the connection mapping, invalidates resume, and reuses the same socket', async () => {

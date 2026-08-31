@@ -202,7 +202,7 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     const companionIds = match.welcomes.map((welcome) => welcome.playerId);
     await placePlayers(game, match.code, measuredId, companionIds);
     await retainMeasuredAim(game, match.code, match.measured, measuredId);
-    await expect(match.measured.page.getByRole('list', { name: 'Skor sıralaması' }).getByRole('listitem')).toHaveCount(8);
+    await expect(match.measured.page.getByRole('list', { name: 'Oyuncu sıralaması' }).getByRole('listitem')).toHaveCount(8);
 
     const before = authoritativePlayer(game, match.code, measuredId);
     const eventMarker = game.harness.recentEvents(match.code).at(-1)?.eventId ?? 0;
@@ -232,7 +232,7 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
       .toEqual(new Set([measuredId, ...companionIds]));
     expect(game.server.rooms.debugRoom(match.code)).toMatchObject({ connectedCount: 8, reservedCount: 0 });
     expect(game.harness.matchSnapshot(match.code)?.players).toHaveLength(8);
-    await expect(match.measured.page.getByRole('list', { name: 'Skor sıralaması' }).getByRole('listitem')).toHaveCount(8);
+    await expect(match.measured.page.getByRole('list', { name: 'Oyuncu sıralaması' }).getByRole('listitem')).toHaveCount(8);
 
     const { medianFps, p95FrameMs } = frameMetrics(durations);
     const metrics = {

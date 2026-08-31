@@ -117,7 +117,21 @@ function SuddenDeathAnnouncement() {
   ) : null;
 }
 
-function Ranking({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot; localPlayerId: string }>) {
+function pingPresentation(pingMs: number | null | undefined): Readonly<{
+  label: string;
+  accessibleValue: string;
+  tier: 'pending' | 'good' | 'medium' | 'high';
+}> {
+  if (pingMs === null || pingMs === undefined) {
+    return { label: '—', accessibleValue: 'ölçülüyor', tier: 'pending' };
+  }
+
+  const roundedPing = Math.max(0, Math.round(pingMs));
+  const tier = roundedPing <= 60 ? 'good' : roundedPing <= 120 ? 'medium' : 'high';
+  return { label: `${roundedPing} ms`, accessibleValue: `${roundedPing} ms`, tier };
+}
+
+function PlayerRoster({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot; localPlayerId: string }>) {
   const ranking = [...snapshot.players].sort((left, right) => {
     const scoreDifference = (snapshot.scores[right.playerId] ?? 0) - (snapshot.scores[left.playerId] ?? 0);
     if (scoreDifference !== 0) return scoreDifference;
@@ -125,22 +139,36 @@ function Ranking({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot
   });
 
   return (
-    <ol className="match-hud__ranking" aria-label="Skor sıralaması">
-      {ranking.map((player, index) => {
-        const local = player.playerId === localPlayerId;
-        const accentStyle = { '--player-accent': ACCENTS[player.accent] } as CSSProperties;
-        return (
-          <li key={player.playerId} className={local ? 'is-local' : undefined} style={accentStyle}>
-            <span className="match-hud__rank" aria-hidden="true">{index + 1}</span>
-            <span className="match-hud__swatch" aria-hidden="true" />
-            <span className="match-hud__name">{player.name}{local ? <small>Sen</small> : null}</span>
-            <strong aria-label={`${snapshot.scores[player.playerId] ?? 0} nakavt`}>
-              {snapshot.scores[player.playerId] ?? 0}
-            </strong>
-          </li>
-        );
-      })}
-    </ol>
+    <section className="match-hud__roster" aria-label="Oyuncu listesi">
+      <div className="match-hud__roster-heading">
+        <span>OYUNCULAR</span>
+        <span>KO</span>
+        <span>PING</span>
+      </div>
+      <ol className="match-hud__ranking" aria-label="Oyuncu sıralaması">
+        {ranking.map((player) => {
+          const local = player.playerId === localPlayerId;
+          const score = snapshot.scores[player.playerId] ?? 0;
+          const ping = pingPresentation(snapshot.pingMs[player.playerId]);
+          const accentStyle = { '--player-accent': ACCENTS[player.accent] } as CSSProperties;
+          return (
+            <li key={player.playerId} className={local ? 'is-local' : undefined} style={accentStyle}>
+              <span className="match-hud__swatch" aria-hidden="true" />
+              <span className="match-hud__name">{player.name}{local ? <small>Sen</small> : null}</span>
+              <strong className="match-hud__score" aria-label={`${player.name} skoru: ${score} knockout`}>
+                {score}
+              </strong>
+              <span
+                className={`match-hud__ping is-${ping.tier}`}
+                aria-label={`${player.name} pingi: ${ping.accessibleValue}`}
+              >
+                {ping.label}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </section>
   );
 }
 
@@ -189,7 +217,7 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
             ) : null}
           </header>
 
-          <Ranking snapshot={snapshot} localPlayerId={localPlayerId} />
+          <PlayerRoster snapshot={snapshot} localPlayerId={localPlayerId} />
 
           {localPlayer ? (
             <section className="match-hud__combat" aria-label="Yerel dövüş durumu">

@@ -1,4 +1,4 @@
-import type { RoomPlayer } from '../../shared/model.js';
+import type { ResultPlayer } from '../../shared/model.js';
 import { selectCanStart, selectSelfPlayer, type ClientState } from '../state/gameStore.js';
 
 type ResultScreenProps = Readonly<{
@@ -9,9 +9,9 @@ type ResultScreenProps = Readonly<{
   confirmReturn?: () => boolean;
 }>;
 
-type RankedPlayer = Readonly<{ player: RoomPlayer; joinOrder: number }>;
+type RankedPlayer = Readonly<{ player: ResultPlayer; joinOrder: number }>;
 
-function rankPlayers(players: readonly RoomPlayer[]): readonly RoomPlayer[] {
+function rankPlayers(players: readonly ResultPlayer[]): readonly ResultPlayer[] {
   return players
     .map((player, joinOrder): RankedPlayer => ({ player, joinOrder }))
     .sort((left, right) =>
@@ -23,7 +23,7 @@ function rankPlayers(players: readonly RoomPlayer[]): readonly RoomPlayer[] {
     .map(({ player }) => player);
 }
 
-function accuracy(player: RoomPlayer): number {
+function accuracy(player: ResultPlayer): number {
   if (player.stats.completedAttacks === 0) return 0;
   return Math.min(100, Math.round(player.stats.landedHits / player.stats.completedAttacks * 100));
 }
@@ -33,7 +33,8 @@ export function ResultScreen({ state, onToggleReady, onStart, onReturnToLobby, c
   const { room } = state;
   const self = selectSelfPlayer(state);
   const isHost = self?.playerId === room.hostPlayerId;
-  const winner = room.players.find((player) => player.playerId === room.result?.winnerPlayerId) ?? null;
+  const resultPlayers = room.result?.players ?? [];
+  const winner = resultPlayers.find((player) => player.playerId === room.result?.winnerPlayerId) ?? null;
   const anyReady = room.players.some((player) => player.connected && player.ready);
   const anyPending = state.pendingAction !== null;
   const resultError = ['result-ready', 'start', 'return-lobby'].includes(state.errorAction ?? '') ? state.lastError : null;
@@ -52,12 +53,20 @@ export function ResultScreen({ state, onToggleReady, onStart, onReturnToLobby, c
         </header>
 
         <table className="result-table" aria-label="Maç sonuçları">
-          <thead><tr><th>Sıra</th><th>Oyuncu</th><th>KO</th><th>Düşüş</th><th>İsabet</th><th>Başarı</th></tr></thead>
+          <thead><tr><th>Sıra</th><th>Oyuncu</th><th>KO</th><th>Düşüş</th><th>İsabet</th><th>Başarı</th><th>Lobi</th></tr></thead>
           <tbody>
-            {rankPlayers(room.players).map((player, index) => (
-              <tr key={player.playerId} className={player.playerId === room.result?.winnerPlayerId ? 'is-winner' : undefined}>
+            {rankPlayers(resultPlayers).map((player, index) => (
+              <tr
+                key={player.playerId}
+                className={`${player.playerId === room.result?.winnerPlayerId ? 'is-winner ' : ''}${player.resultStatus === 'LEFT' ? 'has-left' : ''}`.trim() || undefined}
+              >
                 <td>{index + 1}</td><th scope="row">{player.name}</th><td>{player.stats.knockouts}</td>
                 <td>{player.stats.falls}</td><td>{player.stats.landedHits}</td><td>{accuracy(player)}%</td>
+                <td>
+                  <span className={`result-status result-status--${player.resultStatus.toLowerCase()}`}>
+                    {player.resultStatus === 'READY' ? 'Hazır' : player.resultStatus === 'LEFT' ? 'Ayrıldı' : 'Bekliyor'}
+                  </span>
+                </td>
               </tr>
             ))}
           </tbody>

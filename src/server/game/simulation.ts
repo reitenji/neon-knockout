@@ -333,6 +333,7 @@ export function snapshotMatch(state: MatchState): MatchSnapshot {
     platformProgress: state.contraction,
     settings: { ...state.settings },
     scores: { ...state.scores },
+    pingMs: { ...state.pingMs },
     players: Object.keys(state.players)
       .filter((playerId) => state.players[playerId].connected)
       .sort(compareStableIds)

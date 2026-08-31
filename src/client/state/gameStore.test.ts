@@ -76,7 +76,7 @@ function matchSnapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
   return {
     tick: 12, phase: 'REGULATION', remainingMs: 115_000, platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
-    scores: { 'player-1': 0 }, players: [], pulses: [], winnerPlayerId: null, resultReason: null, ...overrides
+    scores: { 'player-1': 0 }, pingMs: { 'player-1': null }, players: [], pulses: [], winnerPlayerId: null, resultReason: null, ...overrides
   };
 }
 function phaseEvent(overrides: Partial<Extract<GameEvent, { type: 'PHASE' }>> = {}): Extract<GameEvent, { type: 'PHASE' }> {
@@ -477,7 +477,10 @@ describe('createGameStore', () => {
 
   it('sends result-ready, rematch, and host lobby-return actions without optimistic state', async () => {
     const { client, store } = createFixture();
-    const canonical = roomState({ phase: 'RESULT', result: { winnerPlayerId: 'player-1', reason: 'TARGET_SCORE' } });
+    const canonical = roomState({
+      phase: 'RESULT',
+      result: { winnerPlayerId: 'player-1', reason: 'TARGET_SCORE', players: [] }
+    });
     client.emit('session:welcome', successWelcome());
     client.emit('room:state', canonical);
     await store.actions.setResultReady(true);

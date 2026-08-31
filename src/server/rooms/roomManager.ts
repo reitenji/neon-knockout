@@ -8,6 +8,7 @@ import type {
   MatchSnapshot,
   PlayerAccent,
   PlayerStats,
+  ResultPlayer,
   RoomPhase,
   RoomState,
   SessionWelcome,
@@ -54,6 +55,16 @@ type RoomPlayer = {
   reconnectAnchor: Vec2 | null;
 };
 
+type ResultPlayerRecord = {
+  playerId: string;
+  name: string;
+  chassis: Chassis;
+  accent: PlayerAccent;
+  stats: PlayerStats;
+  order: number;
+  left: boolean;
+};
+
 type Room = {
   roomCode: string;
   phase: RoomPhase;
@@ -62,6 +73,7 @@ type Room = {
   players: Map<string, RoomPlayer>;
   nextPlayerOrder: number;
   match: MatchState | null;
+  resultPlayers: Map<string, ResultPlayerRecord> | null;
   inputs: Map<string, InputFrame>;
   accumulatorMs: number;
   snapshotAccumulatorMs: number;
@@ -143,6 +155,7 @@ export class RoomManager {
       players: new Map([[playerId, player]]),
       nextPlayerOrder: 1,
       match: null,
+      resultPlayers: null,
       inputs: new Map(),
       accumulatorMs: 0,
       snapshotAccumulatorMs: 0
@@ -241,6 +254,7 @@ export class RoomManager {
   leaveRoom(connectionId: string): string {
     const { room, player } = this.requireConnectedPlayer(connectionId);
     const leavingHost = room.hostPlayerId === player.playerId;
+    if (room.phase === 'RESULT') this.markResultPlayerLeft(room, player);
     this.connections.delete(connectionId);
     room.inputs.delete(player.playerId);
     room.players.delete(player.playerId);
@@ -248,6 +262,7 @@ export class RoomManager {
       removePulsesOwnedBy(room.match, player.playerId);
       delete room.match.players[player.playerId];
       delete room.match.scores[player.playerId];
+      delete room.match.pingMs[player.playerId];
     }
     if (leavingHost) this.reassignHost(room);
     if (room.players.size === 0) {
@@ -260,7 +275,6 @@ export class RoomManager {
       if (!this.reconcilePopulation(room)) return room.roomCode;
       this.publishSnapshot(room);
     }
-    if (room.phase === 'RESULT') this.resetMatchToLobby(room);
     this.publishRoom(room);
     return room.roomCode;
   }
@@ -293,6 +307,7 @@ export class RoomManager {
       accent: candidate.accent,
       connected: candidate.connected
     })), this.deps.now(), room.settings);
+    room.resultPlayers = null;
     room.phase = 'COUNTDOWN';
     room.inputs.clear();
     room.accumulatorMs = 0;
@@ -313,6 +328,22 @@ export class RoomManager {
     room.inputs.set(player.playerId, unprocessed
       ? { ...input, quick: unprocessed.quick || input.quick, dash: unprocessed.dash || input.dash }
       : input);
+  }
+
+  setPing(connectionId: string, pingMs: number): void {
+    const { room, player } = this.requireConnectedPlayer(connectionId);
+    if (!room.match || (room.phase !== 'COUNTDOWN' && room.phase !== 'MATCH')) return;
+    const normalized = Math.round(Math.max(0, Math.min(GAME.maxPingMs, pingMs)));
+    if (room.match.pingMs[player.playerId] === normalized) return;
+    room.match.pingMs[player.playerId] = normalized;
+  }
+
+  isInActiveMatch(connectionId: string): boolean {
+    const session = this.connections.get(connectionId);
+    const room = session ? this.rooms.get(session.roomCode) : null;
+    const player = session ? room?.players.get(session.playerId) : null;
+    return Boolean(room && player?.connected && room.match &&
+      (room.phase === 'COUNTDOWN' || room.phase === 'MATCH'));
   }
 
   forceKnockout(roomCode: string, attackerId: string, targetId: string): void {
@@ -387,11 +418,13 @@ export class RoomManager {
       for (const player of [...room.players.values()]) {
         if (!player.connected && player.expiresAt !== null && player.expiresAt <= now) {
           const expiredHost = room.hostPlayerId === player.playerId;
+          if (room.phase === 'RESULT') this.markResultPlayerLeft(room, player);
           if (room.match) removePulsesOwnedBy(room.match, player.playerId);
           room.players.delete(player.playerId);
           if (room.match) {
             delete room.match.players[player.playerId];
             delete room.match.scores[player.playerId];
+            delete room.match.pingMs[player.playerId];
           }
           if (expiredHost) this.reassignHost(room);
           membershipChanged = true;
@@ -545,11 +578,13 @@ export class RoomManager {
     room.phase = 'RESULT';
     room.accumulatorMs = 0;
     room.snapshotAccumulatorMs = 0;
+    room.resultPlayers = new Map();
     for (const player of room.players.values()) {
       const matchPlayer = room.match.players[player.playerId];
       if (matchPlayer) player.stats = { ...matchPlayer.stats };
       player.ready = false;
       player.reconnectAnchor = null;
+      this.rememberResultPlayer(room, player);
     }
     this.publishRoom(room);
   }
@@ -557,6 +592,7 @@ export class RoomManager {
   private resetMatchToLobby(room: Room): void {
     if (room.match) clearPulses(room.match);
     room.match = null;
+    room.resultPlayers = null;
     room.phase = 'LOBBY';
     room.inputs.clear();
     room.accumulatorMs = 0;
@@ -650,9 +686,65 @@ export class RoomManager {
     return { room, player };
   }
 
+  private rememberResultPlayer(room: Room, player: RoomPlayer): void {
+    if (!room.resultPlayers || room.resultPlayers.has(player.playerId)) return;
+    room.resultPlayers.set(player.playerId, {
+      playerId: player.playerId,
+      name: player.name,
+      chassis: player.chassis,
+      accent: player.accent,
+      stats: { ...(room.match?.players[player.playerId]?.stats ?? player.stats) },
+      order: player.order,
+      left: false
+    });
+  }
+
+  private markResultPlayerLeft(room: Room, player: RoomPlayer): void {
+    const resultPlayer = room.resultPlayers?.get(player.playerId);
+    if (resultPlayer) resultPlayer.left = true;
+  }
+
+  private publishedResultPlayers(room: Room): readonly ResultPlayer[] {
+    return [...(room.resultPlayers?.values() ?? [])]
+      .sort((left, right) => left.order - right.order)
+      .map((resultPlayer) => {
+        const livePlayer = room.players.get(resultPlayer.playerId);
+        if (resultPlayer.left || !livePlayer) {
+          return {
+            playerId: resultPlayer.playerId,
+            name: resultPlayer.name,
+            chassis: resultPlayer.chassis,
+            accent: resultPlayer.accent,
+            ready: false,
+            connected: false,
+            reconnectRemainingMs: null,
+            stats: { ...resultPlayer.stats },
+            resultStatus: 'LEFT' as const
+          };
+        }
+        return {
+          playerId: resultPlayer.playerId,
+          name: resultPlayer.name,
+          chassis: resultPlayer.chassis,
+          accent: resultPlayer.accent,
+          ready: livePlayer.ready,
+          connected: livePlayer.connected,
+          reconnectRemainingMs: livePlayer.connected || livePlayer.expiresAt === null
+            ? null
+            : Math.max(0, livePlayer.expiresAt - this.deps.now()),
+          stats: { ...resultPlayer.stats },
+          resultStatus: livePlayer.ready ? 'READY' as const : 'WAITING' as const
+        };
+      });
+  }
+
   private publishRoom(room: Room): void {
     const result = room.phase === 'RESULT' && room.match?.resultReason
-      ? { winnerPlayerId: room.match.winnerPlayerId, reason: room.match.resultReason }
+      ? {
+          winnerPlayerId: room.match.winnerPlayerId,
+          reason: room.match.resultReason,
+          players: this.publishedResultPlayers(room)
+        }
       : null;
     this.deps.publish({
       type: 'ROOM_STATE',

@@ -70,7 +70,7 @@ function matchSnapshot(): MatchSnapshot {
   return {
     tick: 180, phase: 'REGULATION', remainingMs: 120_000, platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
-    scores: { 'p-local': 0 }, players: [matchPlayer()], pulses: [], winnerPlayerId: null, resultReason: null
+    scores: { 'p-local': 0 }, pingMs: { 'p-local': null }, players: [matchPlayer()], pulses: [], winnerPlayerId: null, resultReason: null
   };
 }
 
@@ -178,7 +178,15 @@ describe('App', () => {
       screen: 'RESULT',
       room: {
         roomCode: 'AB2Z', phase: 'RESULT', hostPlayerId: 'p-1', pauseRemainingMs: null,
-        result: { winnerPlayerId: 'p-1', reason: 'TARGET_SCORE' },
+        result: {
+          winnerPlayerId: 'p-1',
+          reason: 'TARGET_SCORE',
+          players: [{
+            playerId: 'p-1', name: 'Ada', chassis: 'RIFT', accent: 0, ready: false, connected: true,
+            reconnectRemainingMs: null, resultStatus: 'WAITING',
+            stats: { knockouts: 5, falls: 1, landedHits: 8, completedAttacks: 10 }
+          }]
+        },
         settings: DEFAULT_ROOM_SETTINGS,
         players: [{
           playerId: 'p-1', name: 'Ada', chassis: 'RIFT', accent: 0, ready: false, connected: true,
