@@ -23,7 +23,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 08:23Z) Task 4: replaced sector hits with shared swept capsules, deterministic clash priorities, and one-per-dash perfect dodge; 63 focused and 239 full tests pass (`4fdb113`, `746655d`, `355cb62`).
 - [x] (2026-08-31 08:50Z) Task 5: added authoritative Neon Pulse, continuous final-segment collision, deterministic cleanup, and final match pacing; 68 focused and 257 full tests pass (`67a2c21`, `3587a91`).
 - [x] (2026-08-31 09:18Z) Task 6: made charge steering, partial release, reconciliation, and local audio continuous without predicting server outcomes; 46 focused and 278 full tests pass (`80fbe07`, `f3d417f`).
-- [ ] Task 7: render shared sweeps, pulses, charge direction, FX, audio, and HUD feedback.
+- [x] (2026-08-31 10:17Z) Task 7: rendered shared sweep capsules, eight-way charge direction, authoritative Pulses, distinct bounded FX/audio, and compact keyboard HUD; 43 focused and 298 full tests pass (`6ec66c0`, `537eda6`, `c82ae6c`).
 - [ ] Task 8: complete integration, E2E, load, performance, live LAN, review, merge, and public GitHub proof.
 
 ## Surprises & Discoveries
@@ -62,6 +62,8 @@ The result is visible by running `npm run lan`, opening the printed local addres
   Evidence: Task 5 review reproduced a 10 ms Pulse moving from x=600 to x=609 into a target without emitting a hit. Fix `3587a91` retains the zero-lifetime capsule through clash/contact resolution, then purges it; final-segment hit and unconsumed-expiry regressions pass and the scoped re-review is clean.
 - Observation: animation continuity also requires a distinct provisional action identity; matching only action kind cannot distinguish two same-kind attacks before acknowledgement.
   Evidence: Task 6 review reproduced sub-threshold charge commitment, quick→idle→quick replay through one stale snapshot, and suppression of the second unacknowledged QUICK_1 cue. Fix `f3d417f` derives the charge latch from the 180 ms threshold, preserves provisional attacks through stale ambient states, and assigns monotonic prediction tokens that bind ordered acknowledgements without replay; scoped re-review passed all three findings.
+- Observation: visual effects need explicit lifecycle proof even when every effect appears short-lived, and consumed projectile views need match-lifetime retirement rather than one-snapshot suppression.
+  Evidence: Task 7 review found completed tweens retained indefinitely, absence→stale-snapshot Pulse resurrection, a centered sudden-death overlay obscuring play, and a mocked geometry test boundary. Fixes `537eda6` and `c82ae6c` clean completed/stopped tweens, retain Pulse tombstones until scene reset, move sudden death to a compact top-edge badge, and compose real FighterView rendering with local-predicted versus remote-authoritative source tests; both scoped re-reviews are clean.
 
 ## Decision Log
 
@@ -98,7 +100,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 
 ## Outcomes & Retrospective
 
-Tasks 0–6 and Prerequisite L are accepted. Runner and lint boundaries are clean; keyboard-only input is lifecycle-safe; the authoritative state/event contract is deterministic. Melee now uses the shared swept weapon path instead of center sectors, resolves attack clashes before hurtboxes, applies exact heavy/quick priorities and recoil, preserves terminal active slices, rejects stale shapes, and grants one 550 ms perfect-dodge refund per dash. Full-charge heavies emit one short Neon Pulse with continuous final-segment collision and deterministic end-of-tick cleanup. Match pacing is 120 seconds or five knockouts, with 78/75/40-second contraction milestones, 600 ms control return, and next-KO sudden death after a regulation tie. Charge steering is immediate, 180/350/699 ms releases begin from their exact visible charge poses, release facing locks, and repeated reconciliation snapshots cannot restart one animation or local cue. Task 6 finishes with 46 focused tests, 278 full tests, typecheck, lint, and clean scoped re-review.
+Tasks 0–7 and Prerequisite L are accepted. Runner and lint boundaries are clean; keyboard-only input is lifecycle-safe; the authoritative state/event contract is deterministic. Melee uses the shared swept weapon path, resolves clash priorities before hurtboxes, preserves terminal active slices, and grants one 550 ms perfect-dodge refund per dash. Full-charge heavies emit one authoritative Neon Pulse with continuous final-segment collision and deterministic cleanup. Match pacing is 120 seconds or five knockouts, with 78/75/40-second contraction milestones, 600 ms control return, and next-KO sudden death after a tie. Charge steering is immediate, partial releases begin from their exact visible poses, release facing locks, and reconciliation cannot restart one action or cue. Phaser now draws the exact shared capsule, every charging fighter communicates direction/readiness, Pulse views reconcile by projectile ID, and clash/dodge/Pulse outcomes have distinct bounded FX/audio. The HUD is keyboard-only and keeps sudden-death feedback at the arena edge. Task 7 finishes with 43 focused tests, 298 full tests, typecheck, lint, build, deterministic audio, an empty Impeccable detector result, and clean scoped re-review.
 
 ## Context and Orientation
 
@@ -790,6 +792,8 @@ This task makes every approved outcome readable. At its end, Phaser draws the au
 **Files:**
 
 - Modify: `src/client/game/phaser/FighterView.ts`
+- Create: `src/client/game/phaser/FighterView.test.ts` for real graphics/container geometry and charge-indicator coverage
+- Modify: `src/client/game/phaser/BootScene.test.ts` only for the four required new audio preloads
 - Create: `src/client/game/phaser/PulseView.ts`
 - Create: `src/client/game/phaser/PulseView.test.ts`
 - Modify: `src/client/game/phaser/ArenaScene.ts`
@@ -804,6 +808,7 @@ This task makes every approved outcome readable. At its end, Phaser draws the au
 - Modify: `src/client/game/phaser/PhaserAudioAdapter.test.ts`
 - Modify: `src/client/ui/MatchHud.tsx`
 - Modify: `src/client/ui/MatchHud.test.tsx`
+- Modify: `src/client/App.test.tsx` only to replace the superseded mouse-control expectation
 - Modify: `src/client/styles/game.css`
 - Modify: `scripts/generate-audio.mjs`
 - Generate: `public/assets/audio/clash.wav`
@@ -852,7 +857,7 @@ Expected: pulse view/module and new adapter methods/cues do not exist, the trail
 1. Run focused tests, `npm run typecheck`, `npm run lint`, and `npm run build`.
 1. Commit Task 7:
 
-    git add src/client/game/phaser/FighterView.ts src/client/game/phaser/PulseView.ts src/client/game/phaser/PulseView.test.ts src/client/game/phaser/ArenaScene.ts src/client/game/phaser/ArenaScene.integration.test.ts src/client/game/phaser/ImpactFx.ts src/client/game/phaser/ImpactFx.test.ts src/client/game/phaser/PhaserImpactAdapter.ts src/client/game/phaser/PhaserImpactAdapter.test.ts src/client/game/phaser/GameAudio.ts src/client/game/phaser/GameAudio.test.ts src/client/game/phaser/PhaserAudioAdapter.ts src/client/game/phaser/PhaserAudioAdapter.test.ts src/client/ui/MatchHud.tsx src/client/ui/MatchHud.test.tsx src/client/styles/game.css scripts/generate-audio.mjs public/assets/audio/clash.wav public/assets/audio/perfect-dodge.wav public/assets/audio/pulse-spawn.wav public/assets/audio/pulse-break.wav
+    git add src/client/game/phaser/FighterView.ts src/client/game/phaser/FighterView.test.ts src/client/game/phaser/BootScene.test.ts src/client/game/phaser/PulseView.ts src/client/game/phaser/PulseView.test.ts src/client/game/phaser/ArenaScene.ts src/client/game/phaser/ArenaScene.integration.test.ts src/client/game/phaser/ImpactFx.ts src/client/game/phaser/ImpactFx.test.ts src/client/game/phaser/PhaserImpactAdapter.ts src/client/game/phaser/PhaserImpactAdapter.test.ts src/client/game/phaser/GameAudio.ts src/client/game/phaser/GameAudio.test.ts src/client/game/phaser/PhaserAudioAdapter.ts src/client/game/phaser/PhaserAudioAdapter.test.ts src/client/ui/MatchHud.tsx src/client/ui/MatchHud.test.tsx src/client/App.test.tsx src/client/styles/game.css scripts/generate-audio.mjs public/assets/audio/clash.wav public/assets/audio/perfect-dodge.wav public/assets/audio/pulse-spawn.wav public/assets/audio/pulse-break.wav
     git commit -m "feat: present redesigned combat"
 
 
