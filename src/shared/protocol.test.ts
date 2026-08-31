@@ -10,6 +10,10 @@ const acknowledgedReadyHandler: ClientToServerEvents['lobby:ready'] = (_payload,
   acknowledge({ ok: true, data: null });
 };
 
+const acknowledgedLeaveHandler: ClientToServerEvents['room:leave'] = (_payload, acknowledge) => {
+  acknowledge({ ok: true, data: null });
+};
+
 describe('shared input boundary protocol', () => {
   it('accepts normalized combat input and rejects invalid axes or legacy directional buttons', () => {
     expect(protocol.roomCreateSchema.parse({ name: 'Ada' })).toEqual({ name: 'Ada' });
@@ -104,6 +108,38 @@ describe('shared input boundary protocol', () => {
     expect(protocol.lobbyChassisSchema.parse({ chassis: 'RIFT' })).toEqual({ chassis: 'RIFT' });
     expect(protocol.lobbyChassisSchema.safeParse({ chassis: 'RIFT', ignored: true }).success).toBe(false);
     expect(protocol.lobbyChassisSchema.safeParse({ chassis: 'MAGE' }).success).toBe(false);
+  });
+
+  it('accepts every approved room settings pair and rejects unsupported payloads', () => {
+    for (const durationMs of [90_000, 120_000, 180_000] as const) {
+      for (const knockoutTarget of [3, 5, 7, 10] as const) {
+        expect(protocol.lobbySettingsSchema.parse({ durationMs, knockoutTarget })).toEqual({
+          durationMs,
+          knockoutTarget
+        });
+      }
+    }
+
+    expect(protocol.lobbySettingsSchema.safeParse({ durationMs: 100_000, knockoutTarget: 5 }).success).toBe(false);
+    expect(protocol.lobbySettingsSchema.safeParse({ durationMs: 120_000, knockoutTarget: 8 }).success).toBe(false);
+    expect(protocol.lobbySettingsSchema.safeParse({ durationMs: 120_000 }).success).toBe(false);
+    expect(protocol.lobbySettingsSchema.safeParse({
+      durationMs: 120_000,
+      knockoutTarget: 5,
+      map: 'void'
+    }).success).toBe(false);
+  });
+
+  it('accepts only an empty acknowledged room leave payload', () => {
+    expect(protocol.roomLeaveSchema.parse({})).toEqual({});
+    expect(protocol.roomLeaveSchema.safeParse({ reason: 'rage-quit' }).success).toBe(false);
+
+    let acknowledgement: Ack<null> | undefined;
+    acknowledgedLeaveHandler({}, (value) => {
+      acknowledgement = value;
+    });
+
+    expect(acknowledgement).toEqual({ ok: true, data: null });
   });
 
   it('acknowledges state-changing lobby actions', () => {

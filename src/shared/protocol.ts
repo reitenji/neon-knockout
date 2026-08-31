@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CHASSIS } from './model.js';
+import { KNOCKOUT_TARGET_OPTIONS, MATCH_DURATION_OPTIONS } from './roomSettings.js';
 import type {
   Ack,
   Chassis,
@@ -15,6 +16,17 @@ import { normalizeRoomCode } from './names.js';
 const chassisSchema = z.enum(CHASSIS);
 const emptyPayloadSchema = z.object({}).strict();
 const finiteAxisSchema = z.number().finite().min(-1).max(1);
+const durationSchema = z.union(MATCH_DURATION_OPTIONS.map((value) => z.literal(value)) as [
+  z.ZodLiteral<(typeof MATCH_DURATION_OPTIONS)[0]>,
+  z.ZodLiteral<(typeof MATCH_DURATION_OPTIONS)[1]>,
+  z.ZodLiteral<(typeof MATCH_DURATION_OPTIONS)[2]>
+]);
+const knockoutTargetSchema = z.union(KNOCKOUT_TARGET_OPTIONS.map((value) => z.literal(value)) as [
+  z.ZodLiteral<(typeof KNOCKOUT_TARGET_OPTIONS)[0]>,
+  z.ZodLiteral<(typeof KNOCKOUT_TARGET_OPTIONS)[1]>,
+  z.ZodLiteral<(typeof KNOCKOUT_TARGET_OPTIONS)[2]>,
+  z.ZodLiteral<(typeof KNOCKOUT_TARGET_OPTIONS)[3]>
+]);
 const roomCodeSchema = z.string().transform((value, context) => {
   try {
     return normalizeRoomCode(value);
@@ -26,9 +38,14 @@ const roomCodeSchema = z.string().transform((value, context) => {
 
 export const roomCreateSchema = z.object({ name: z.string() }).strict();
 export const roomJoinSchema = z.object({ name: z.string(), roomCode: roomCodeSchema }).strict();
+export const roomLeaveSchema = emptyPayloadSchema;
 export const sessionResumeSchema = z.object({ roomCode: roomCodeSchema, resumeToken: z.string() }).strict();
 export const lobbyChassisSchema = z.object({ chassis: chassisSchema }).strict();
 export const lobbyReadySchema = z.object({ ready: z.boolean() }).strict();
+export const lobbySettingsSchema = z.object({
+  durationMs: durationSchema,
+  knockoutTarget: knockoutTargetSchema
+}).strict();
 export const matchStartSchema = emptyPayloadSchema;
 export const matchInputSchema = z
   .object({
@@ -47,18 +64,22 @@ export const resultLobbySchema = emptyPayloadSchema;
 
 export type RoomCreatePayload = z.infer<typeof roomCreateSchema>;
 export type RoomJoinPayload = z.infer<typeof roomJoinSchema>;
+export type RoomLeavePayload = z.infer<typeof roomLeaveSchema>;
 export type SessionResumePayload = z.infer<typeof sessionResumeSchema>;
 export type LobbyChassisPayload = Readonly<{ chassis: Chassis }>;
 export type LobbyReadyPayload = z.infer<typeof lobbyReadySchema>;
+export type LobbySettingsPayload = z.infer<typeof lobbySettingsSchema>;
 export type MatchInputPayload = InputFrame;
 export type ResultReadyPayload = z.infer<typeof resultReadySchema>;
 
 export interface ClientToServerEvents {
   'room:create': (payload: RoomCreatePayload, acknowledge: (ack: Ack<SessionWelcome>) => void) => void;
   'room:join': (payload: RoomJoinPayload, acknowledge: (ack: Ack<SessionWelcome>) => void) => void;
+  'room:leave': (payload: RoomLeavePayload, acknowledge: (ack: Ack<null>) => void) => void;
   'session:resume': (payload: SessionResumePayload, acknowledge: (ack: Ack<SessionWelcome>) => void) => void;
   'lobby:chassis': (payload: LobbyChassisPayload, acknowledge: (ack: Ack<null>) => void) => void;
   'lobby:ready': (payload: LobbyReadyPayload, acknowledge: (ack: Ack<null>) => void) => void;
+  'lobby:settings': (payload: LobbySettingsPayload, acknowledge: (ack: Ack<null>) => void) => void;
   'match:start': (payload: z.infer<typeof matchStartSchema>, acknowledge: (ack: Ack<null>) => void) => void;
   'match:input': (payload: MatchInputPayload) => void;
   'result:ready': (payload: ResultReadyPayload, acknowledge: (ack: Ack<null>) => void) => void;
