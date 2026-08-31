@@ -11,6 +11,10 @@ export interface ImpactFxAdapter {
   emitDirectionalParticles(position: Vec2, direction: Vec2, strength: number): void;
   pulseOverload(playerId: string, overload: number, strength: number): void;
   emitKnockbackTrail(playerId: string, direction: Vec2, strength: number): void;
+  emitClash(position: Vec2, strength: 'QUICK' | 'HEAVY'): void;
+  emitPerfectDodge(position: Vec2): void;
+  emitPulseSpawn(position: Vec2): void;
+  emitPulseBreak(position: Vec2): void;
   nudgeCamera(direction: Vec2, strength: number): void;
   emitKnockoutBurst(position: Vec2, strength: number): void;
   emitEdgeStreak(position: Vec2, direction: Vec2): void;
@@ -37,6 +41,16 @@ export class ImpactFx {
     this.consumedEventIds.add(event.eventId);
 
     if (event.type === 'HIT') this.presentHit(event, snapshot);
+    if (event.type === 'CLASH') this.presentClash(event, snapshot);
+    if (event.type === 'PERFECT_DODGE') {
+      this.adapter.flashTarget(event.playerId, 0.58);
+      this.adapter.emitPerfectDodge(event.impactPosition);
+    }
+    if (event.type === 'PULSE_SPAWN') this.adapter.emitPulseSpawn(event.position);
+    if (event.type === 'PULSE_BREAK') {
+      this.adapter.flashTarget(event.breakerPlayerId, 0.72);
+      this.adapter.emitPulseBreak(event.impactPosition);
+    }
     if (event.type === 'KNOCKOUT') this.presentKnockout(event, snapshot);
     if (event.type === 'RESPAWN') this.adapter.emitRespawn(event.playerId, event.position);
     return true;
@@ -60,11 +74,27 @@ export class ImpactFx {
     const strength = clamp(event.impulse / MAX_HIT_IMPULSE, MIN_HIT_STRENGTH, 1);
 
     this.adapter.flashTarget(event.targetId, strength);
-    this.adapter.holdHitPose(event.targetId, Math.round(70 + strength * 50));
+    if (!this.reducedMotion) this.adapter.holdHitPose(event.targetId, Math.round(20 + strength * 15));
     this.adapter.emitDirectionalParticles(event.impactPosition, direction, strength);
     this.adapter.pulseOverload(event.targetId, event.resultingOverload, strength);
     this.adapter.emitKnockbackTrail(event.targetId, direction, strength);
     if (!this.reducedMotion) this.adapter.nudgeCamera(direction, strength);
+  }
+
+  private presentClash(event: Extract<GameEvent, { type: 'CLASH' }>, snapshot: MatchSnapshot): void {
+    const strength = event.strength === 'HEAVY' ? 0.9 : 0.58;
+    for (const playerId of event.playerIds) this.adapter.flashTarget(playerId, strength);
+    if (!this.reducedMotion) {
+      for (const playerId of event.playerIds) this.adapter.holdHitPose(playerId, event.strength === 'HEAVY' ? 35 : 27);
+    }
+    this.adapter.emitClash(event.impactPosition, event.strength);
+    if (this.reducedMotion) return;
+    const left = snapshot.players.find((player) => player.playerId === event.playerIds[0]);
+    const right = snapshot.players.find((player) => player.playerId === event.playerIds[1]);
+    const direction = normalize(left && right
+      ? { x: right.position.x - left.position.x, y: right.position.y - left.position.y }
+      : { x: 1, y: 0 });
+    this.adapter.nudgeCamera(direction, strength * 0.72);
   }
 
   private presentKnockout(event: Extract<GameEvent, { type: 'KNOCKOUT' }>, snapshot: MatchSnapshot): void {

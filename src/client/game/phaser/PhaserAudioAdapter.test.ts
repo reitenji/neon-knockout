@@ -86,4 +86,17 @@ describe('PhaserAudioAdapter', () => {
     expect(manager.sounds[0]?.destroys).toBe(1);
     expect(manager.sounds[0]?.stops).toBe(0);
   });
+
+  it('plays each counterplay cue through the same owned one-shot lifecycle', () => {
+    const manager = new FakeSoundManager(false);
+    const adapter = new PhaserAudioAdapter(manager as never, new EventTarget());
+
+    for (const cue of ['clash', 'perfect-dodge', 'pulse-spawn', 'pulse-break'] as const) {
+      adapter.play(cue, { volume: 0.7, detune: 8 });
+    }
+    adapter.stopAll();
+
+    expect(manager.keys).toEqual(['clash', 'perfect-dodge', 'pulse-spawn', 'pulse-break']);
+    expect(manager.sounds.every((sound) => sound.destroys === 1)).toBe(true);
+  });
 });

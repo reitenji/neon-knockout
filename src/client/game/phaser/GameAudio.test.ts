@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { GameEvent } from '../../../shared/model.js';
 import {
-  GameAudio, detuneForEvent, type AudioPlayOptions, type GameAudioAdapter, type GameAudioCue
+  GAME_AUDIO_ASSETS, GameAudio, detuneForEvent, type AudioPlayOptions, type GameAudioAdapter, type GameAudioCue
 } from './GameAudio.js';
 
 type PlayedCue = Readonly<{ cue: GameAudioCue; options: AudioPlayOptions }>;
@@ -99,6 +99,47 @@ describe('GameAudio', () => {
     for (const event of events) audio.playEvent(event);
 
     expect(adapter.played.map(({ cue }) => cue)).toEqual(['countdown', 'warning', 'victory']);
+  });
+
+  it('maps every counterplay event to its own deduplicated cue with stable event detune', () => {
+    const adapter = new RecordingAudioAdapter();
+    const audio = new GameAudio(adapter);
+    adapter.gesture();
+    const events: GameEvent[] = [
+      {
+        eventId: 20, tick: 5, type: 'CLASH', playerIds: ['a', 'b'], attackIds: [1, 2],
+        impactPosition: { x: 20, y: 30 }, strength: 'QUICK'
+      },
+      {
+        eventId: 21, tick: 5, type: 'PERFECT_DODGE', playerId: 'b', attackerId: 'a', attackId: 1,
+        source: 'QUICK_1', projectileId: null, impactPosition: { x: 20, y: 30 }, refundedMs: 550
+      },
+      {
+        eventId: 22, tick: 5, type: 'PULSE_SPAWN', projectileId: 3, ownerPlayerId: 'a',
+        originatingAttackId: 4, position: { x: 20, y: 30 }
+      },
+      {
+        eventId: 23, tick: 6, type: 'PULSE_BREAK', projectileId: 3, breakerPlayerId: 'b',
+        breakerAttackId: 5, impactPosition: { x: 30, y: 30 }
+      }
+    ];
+    for (const event of events) {
+      expect(audio.playEvent(event)).toBe(true);
+      expect(audio.playEvent(event)).toBe(false);
+    }
+
+    expect(adapter.played).toEqual([
+      { cue: 'clash', options: { volume: 0.72, detune: detuneForEvent(20) } },
+      { cue: 'perfect-dodge', options: { volume: 0.68, detune: detuneForEvent(21) } },
+      { cue: 'pulse-spawn', options: { volume: 0.78, detune: detuneForEvent(22) } },
+      { cue: 'pulse-break', options: { volume: 0.76, detune: detuneForEvent(23) } }
+    ]);
+    expect(GAME_AUDIO_ASSETS).toMatchObject({
+      clash: '/assets/audio/clash.wav',
+      'perfect-dodge': '/assets/audio/perfect-dodge.wav',
+      'pulse-spawn': '/assets/audio/pulse-spawn.wav',
+      'pulse-break': '/assets/audio/pulse-break.wav'
+    });
   });
 
   it('removes the gesture listener, stops sound, and destroys owned sounds once on teardown', () => {

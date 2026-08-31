@@ -41,6 +41,12 @@ class RecordingAdapter implements ImpactFxAdapter {
   emitKnockbackTrail(...args: Parameters<ImpactFxAdapter['emitKnockbackTrail']>): void {
     this.record('emitKnockbackTrail', args);
   }
+  emitClash(...args: Parameters<ImpactFxAdapter['emitClash']>): void { this.record('emitClash', args); }
+  emitPerfectDodge(...args: Parameters<ImpactFxAdapter['emitPerfectDodge']>): void {
+    this.record('emitPerfectDodge', args);
+  }
+  emitPulseSpawn(...args: Parameters<ImpactFxAdapter['emitPulseSpawn']>): void { this.record('emitPulseSpawn', args); }
+  emitPulseBreak(...args: Parameters<ImpactFxAdapter['emitPulseBreak']>): void { this.record('emitPulseBreak', args); }
   nudgeCamera(...args: Parameters<ImpactFxAdapter['nudgeCamera']>): void { this.record('nudgeCamera', args); }
   emitKnockoutBurst(...args: Parameters<ImpactFxAdapter['emitKnockoutBurst']>): void {
     this.record('emitKnockoutBurst', args);
@@ -79,17 +85,70 @@ describe('ImpactFx', () => {
     expect(adapter.calls[3]?.args).toEqual(['target', 47, 0.5]);
     expect(adapter.calls[4]?.args).toEqual(['target', { x: 1, y: 0 }, 0.5]);
     expect(adapter.calls[5]?.args).toEqual([{ x: 1, y: 0 }, 0.5]);
+    expect(adapter.calls[1]?.args[1]).toBeLessThanOrEqual(35);
   });
 
-  it('keeps hit readability but suppresses camera motion when reduced motion is active', () => {
+  it('keeps hit readability but suppresses camera motion and hit-stop when reduced motion is active', () => {
     const adapter = new RecordingAdapter();
     const effects = new ImpactFx(adapter, { reducedMotion: true });
 
     effects.ingest(hit(), snapshot());
 
     expect(adapter.calls.map((call) => call.method)).toEqual([
-      'flashTarget', 'holdHitPose', 'emitDirectionalParticles', 'pulseOverload', 'emitKnockbackTrail'
+      'flashTarget', 'emitDirectionalParticles', 'pulseOverload', 'emitKnockbackTrail'
     ]);
+  });
+
+  it('gives clash, perfect dodge, pulse spawn, and pulse break distinct deduplicated feedback routes', () => {
+    const adapter = new RecordingAdapter();
+    const effects = new ImpactFx(adapter);
+    const events: GameEvent[] = [
+      {
+        eventId: 10, tick: 31, type: 'CLASH', playerIds: ['attacker', 'target'], attackIds: [4, 5],
+        impactPosition: { x: 250, y: 360 }, strength: 'HEAVY'
+      },
+      {
+        eventId: 11, tick: 31, type: 'PERFECT_DODGE', playerId: 'target', attackerId: 'attacker',
+        attackId: 4, source: 'QUICK_1', projectileId: null, impactPosition: { x: 290, y: 360 }, refundedMs: 550
+      },
+      {
+        eventId: 12, tick: 31, type: 'PULSE_SPAWN', projectileId: 8, ownerPlayerId: 'attacker',
+        originatingAttackId: 6, position: { x: 240, y: 360 }
+      },
+      {
+        eventId: 13, tick: 32, type: 'PULSE_BREAK', projectileId: 8, breakerPlayerId: 'target',
+        breakerAttackId: 7, impactPosition: { x: 330, y: 360 }
+      }
+    ];
+
+    for (const event of events) {
+      expect(effects.ingest(event, snapshot())).toBe(true);
+      expect(effects.ingest(event, snapshot())).toBe(false);
+    }
+
+    expect(adapter.calls.filter(({ method }) => method === 'emitClash')).toEqual([
+      { method: 'emitClash', args: [{ x: 250, y: 360 }, 'HEAVY'] }
+    ]);
+    expect(adapter.calls.filter(({ method }) => method === 'emitPerfectDodge')).toEqual([
+      { method: 'emitPerfectDodge', args: [{ x: 290, y: 360 }] }
+    ]);
+    expect(adapter.calls.filter(({ method }) => method === 'emitPulseSpawn')).toEqual([
+      { method: 'emitPulseSpawn', args: [{ x: 240, y: 360 }] }
+    ]);
+    expect(adapter.calls.filter(({ method }) => method === 'emitPulseBreak')).toEqual([
+      { method: 'emitPulseBreak', args: [{ x: 330, y: 360 }] }
+    ]);
+  });
+
+  it('keeps clash flashes and particles in reduced motion while removing displacement and hit-stop', () => {
+    const adapter = new RecordingAdapter();
+    const effects = new ImpactFx(adapter, { reducedMotion: true });
+    effects.ingest({
+      eventId: 14, tick: 32, type: 'CLASH', playerIds: ['attacker', 'target'], attackIds: [8, 9],
+      impactPosition: { x: 250, y: 360 }, strength: 'QUICK'
+    }, snapshot());
+
+    expect(adapter.calls.map(({ method }) => method)).toEqual(['flashTarget', 'flashTarget', 'emitClash']);
   });
 
   it('adds a larger edge burst, score pulse, announcer, and camera response for a knockout', () => {

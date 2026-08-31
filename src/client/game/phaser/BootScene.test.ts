@@ -41,8 +41,12 @@ describe('BootScene', () => {
 
     scene.preload();
 
-    expect(audio).toHaveBeenCalledTimes(10);
+    expect(audio).toHaveBeenCalledTimes(14);
     expect(audio).toHaveBeenCalledWith('quick', '/assets/audio/quick.wav');
+    expect(audio).toHaveBeenCalledWith('clash', '/assets/audio/clash.wav');
+    expect(audio).toHaveBeenCalledWith('perfect-dodge', '/assets/audio/perfect-dodge.wav');
+    expect(audio).toHaveBeenCalledWith('pulse-spawn', '/assets/audio/pulse-spawn.wav');
+    expect(audio).toHaveBeenCalledWith('pulse-break', '/assets/audio/pulse-break.wav');
     expect(audio).toHaveBeenCalledWith('victory', '/assets/audio/victory.wav');
   });
 

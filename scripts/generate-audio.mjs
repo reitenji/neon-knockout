@@ -91,6 +91,41 @@ const cues = [
     }
   },
   {
+    name: 'clash', duration: 0.24,
+    sample: ({ time, duration, index, seed }) => {
+      const impact = noise(index, seed) * Math.exp(-time * 34) * 0.38;
+      const lowMetal = sine(164, time) * Math.exp(-time * 12) * 0.34;
+      const highMetal = sine(1_180, time, Math.PI / 4) * Math.exp(-time * 18) * 0.24;
+      return (impact + lowMetal + highMetal) * envelope(time, duration, 0.0015, 0.065);
+    }
+  },
+  {
+    name: 'perfect-dodge', duration: 0.26,
+    sample: ({ time, duration }) => {
+      const slip = chirp(420, 1_620, time, duration) * 0.38;
+      const answer = chirp(960, 520, time, duration, Math.PI / 2) * 0.19;
+      return (slip + answer) * envelope(time, duration, 0.004, 0.055);
+    }
+  },
+  {
+    name: 'pulse-spawn', duration: 0.32,
+    sample: ({ time, duration }) => {
+      const launch = chirp(118, 780, time, duration) * 0.43;
+      const energy = sine(236, time) * Math.sin(Math.PI * time / duration) * 0.22;
+      const shimmer = sine(1_560, time) * Math.exp(-time * 8) * 0.11;
+      return (launch + energy + shimmer) * envelope(time, duration, 0.006, 0.07);
+    }
+  },
+  {
+    name: 'pulse-break', duration: 0.21,
+    sample: ({ time, duration, index, seed }) => {
+      const fracture = noise(index, seed) * Math.exp(-time * 30) * 0.42;
+      const collapse = chirp(860, 92, time, duration) * 0.36;
+      const spark = sine(1_920, time) * Math.exp(-time * 24) * 0.12;
+      return (fracture + collapse + spark) * envelope(time, duration, 0.0015, 0.052);
+    }
+  },
+  {
     name: 'knockout', duration: 0.55,
     sample: ({ time, duration, index, seed }) => {
       const shock = chirp(118, 36, time, duration) * 0.55;

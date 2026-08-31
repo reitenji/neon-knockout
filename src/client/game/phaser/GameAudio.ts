@@ -1,7 +1,8 @@
 import type { GameEvent } from '../../../shared/model.js';
 
 export const GAME_AUDIO_CUES = [
-  'quick', 'heavy-charge', 'heavy-release', 'hit', 'dash', 'knockout', 'respawn', 'countdown', 'warning', 'victory'
+  'quick', 'heavy-charge', 'heavy-release', 'hit', 'dash', 'clash', 'perfect-dodge', 'pulse-spawn', 'pulse-break',
+  'knockout', 'respawn', 'countdown', 'warning', 'victory'
 ] as const;
 
 export type GameAudioCue = (typeof GAME_AUDIO_CUES)[number];
@@ -13,6 +14,10 @@ export const GAME_AUDIO_ASSETS: Readonly<Record<GameAudioCue, string>> = Object.
   'heavy-release': '/assets/audio/heavy-release.wav',
   hit: '/assets/audio/hit.wav',
   dash: '/assets/audio/dash.wav',
+  clash: '/assets/audio/clash.wav',
+  'perfect-dodge': '/assets/audio/perfect-dodge.wav',
+  'pulse-spawn': '/assets/audio/pulse-spawn.wav',
+  'pulse-break': '/assets/audio/pulse-break.wav',
   knockout: '/assets/audio/knockout.wav',
   respawn: '/assets/audio/respawn.wav',
   countdown: '/assets/audio/countdown.wav',
@@ -64,6 +69,14 @@ export class GameAudio {
       const attackCue: GameAudioCue = event.attack === 'HEAVY' ? 'heavy-release' : 'quick';
       this.play(attackCue, event.eventId, 0, event.attack === 'HEAVY' ? 0.76 : 0.56);
       this.play('hit', event.eventId, 1, event.attack === 'HEAVY' ? 0.86 : 0.72);
+    } else if (event.type === 'CLASH') {
+      this.play('clash', event.eventId, 0, 0.72);
+    } else if (event.type === 'PERFECT_DODGE') {
+      this.play('perfect-dodge', event.eventId, 0, 0.68);
+    } else if (event.type === 'PULSE_SPAWN') {
+      this.play('pulse-spawn', event.eventId, 0, 0.78);
+    } else if (event.type === 'PULSE_BREAK') {
+      this.play('pulse-break', event.eventId, 0, 0.76);
     } else if (event.type === 'KNOCKOUT') {
       this.play('knockout', event.eventId, 0, 0.92);
     } else if (event.type === 'RESPAWN') {

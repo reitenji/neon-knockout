@@ -87,6 +87,14 @@
   letter-spacing: 0.06em;
 }
 
+.match-hud__contraction {
+  color: #ffd982;
+  font-size: 0.58rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+}
+
 .match-hud__ranking {
   top: 12px;
   left: 12px;
@@ -235,6 +243,11 @@
   font-size: 0.72rem;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.match-hud__action.is-pulse-ready strong {
+  color: #f6d743;
+  text-shadow: 0 2px 10px rgb(246 215 67 / 0.28);
 }
 
 .match-hud__overload strong {

@@ -44,10 +44,12 @@ function actionLabel(player: MatchPlayer): string {
   }
   if (player.hitstunRemainingMs > 0 || player.action.kind === 'HITSTUN') return 'Sarsıldı';
   if (player.dashRemainingMs > 0 || player.action.kind === 'DASH') return 'Dash aktif';
-  if (player.action.kind === 'HEAVY') {
+  if (player.action.chargeMs >= GAME.heavyMaxChargeMs) return 'PULSE READY';
+  if (player.action.chargeMs > 0) {
     const charge = Math.round(clamp(player.action.chargeMs / GAME.heavyMaxChargeMs, 0, 1) * 100);
-    return `Ağır saldırı %${charge}`;
+    return `ŞARJ ${charge}%`;
   }
+  if (player.action.kind === 'HEAVY') return 'Ağır saldırı';
   if (player.action.kind?.startsWith('QUICK_')) return `Kombo ${player.action.comboStep}`;
   return 'Beklemede';
 }
@@ -129,10 +131,10 @@ function Ranking({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot
 function ControlsHint() {
   return (
     <div className="match-hud__controls" aria-label="Kontroller">
-      <span><kbd>WASD</kbd><kbd>Oklar</kbd><small>Hareket</small></span>
-      <span><kbd>Sol tık</kbd><small>Kombo</small></span>
-      <span><kbd>Sağ tık</kbd><small>Yükle / vur</small></span>
-      <span><kbd>Boşluk</kbd><small>Dash</small></span>
+      <span><kbd>WASD</kbd><small>Hareket</small></span>
+      <span><kbd>Oklar</kbd><small>Kombo / yön</small></span>
+      <span><kbd>Shift + oklar</kbd><small>Yükle / vur</small></span>
+      <span><kbd>Space</kbd><small>Dash</small></span>
     </div>
   );
 }
@@ -146,6 +148,10 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
   const dashProgress = localPlayer
     ? 1 - clamp(localPlayer.dashCooldownRemainingMs / GAME.dashCooldownMs, 0, 1)
     : 0;
+  const contractionWarning = snapshot?.phase === 'REGULATION' &&
+    snapshot.remainingMs <= GAME.contractionWarningRemainingMs &&
+    snapshot.remainingMs > GAME.contractionMinimumRemainingMs;
+  const pulseReady = Boolean(localPlayer && localPlayer.action.chargeMs >= GAME.heavyMaxChargeMs);
 
   return (
     <aside className="match-hud" aria-label="Maç bilgileri">
@@ -156,6 +162,11 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
             <time role="timer" aria-label="Kalan süre" dateTime={`PT${Math.ceil(snapshot.remainingMs / 1_000)}S`}>
               {formatTime(snapshot.remainingMs)}
             </time>
+            {contractionWarning ? (
+              <strong className="match-hud__contraction" role="status" aria-label="Arena daralma uyarısı">
+                ARENA DARALIYOR
+              </strong>
+            ) : null}
           </header>
 
           <Ranking snapshot={snapshot} localPlayerId={localPlayerId} />
@@ -190,7 +201,11 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
                 ><i /></div>
               </div>
 
-              <div className="match-hud__action" role="status" aria-label="Aksiyon durumu">
+              <div
+                className={`match-hud__action ${pulseReady ? 'is-pulse-ready' : ''}`}
+                role="status"
+                aria-label="Aksiyon durumu"
+              >
                 <span>AKSİYON</span>
                 <strong>{actionLabel(localPlayer)}</strong>
               </div>

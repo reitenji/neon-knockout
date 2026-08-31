@@ -87,6 +87,32 @@ describe('PhaserImpactAdapter', () => {
     });
   });
 
+  it('caps presentation hit-stop at 35ms', () => {
+    const stub = harness();
+    const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+
+    adapter.holdHitPose('p1', 999);
+
+    expect(stub.tweens.at(-1)?.config.duration).toBe(35);
+  });
+
+  it('renders clash, perfect dodge, pulse spawn, and pulse break with distinct bounded palettes', () => {
+    const stub = harness();
+    const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+
+    adapter.emitClash({ x: 260, y: 360 }, 'HEAVY');
+    adapter.emitPerfectDodge({ x: 280, y: 360 });
+    adapter.emitPulseSpawn({ x: 300, y: 360 });
+    adapter.emitPulseBreak({ x: 340, y: 360 });
+
+    const colors = new Set(stub.objects.map(({ object }) => object.color));
+    expect(colors).toContain(0xf6d743);
+    expect(colors).toContain(0x9ef25b);
+    expect(colors).toContain(0x6ee7f2);
+    expect(colors).toContain(0xff5fa2);
+    expect(stub.objects.length).toBeLessThanOrEqual(40);
+  });
+
   it('renders knockout, score, announcer, and respawn feedback as larger ephemeral layers', () => {
     const stub = harness();
     const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);

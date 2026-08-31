@@ -26,7 +26,11 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
     if (!content) return;
     content.setScale(1.12, 0.9);
     this.addTween({
-      targets: content, scaleX: 1, scaleY: 1, duration: Math.max(45, durationMs), ease: 'Back.Out'
+      targets: content,
+      scaleX: 1,
+      scaleY: 1,
+      duration: Math.min(35, Math.max(12, durationMs)),
+      ease: 'Quad.Out'
     });
   }
 
@@ -88,6 +92,71 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
       duration: 180,
       ease: 'Quad.Out'
     });
+  }
+
+  emitClash(position: Vec2, strength: 'QUICK' | 'HEAVY'): void {
+    const heavy = strength === 'HEAVY';
+    const ring = this.track(
+      this.scene.add.circle(position.x, position.y, heavy ? 24 : 18, 0xf6d743, heavy ? 0.3 : 0.22)
+        .setStrokeStyle(heavy ? 4 : 3, 0xf4f7fb, 0.94)
+        .setDepth(34)
+    );
+    this.fadeAndDestroy(ring, {
+      scaleX: heavy ? 2.45 : 2,
+      scaleY: heavy ? 2.45 : 2,
+      alpha: 0,
+      duration: heavy ? 280 : 210,
+      ease: 'Cubic.Out'
+    });
+    this.emitBurstShards(position, heavy ? 10 : 6, heavy ? 92 : 68, [0xf6d743, 0xf4f7fb]);
+  }
+
+  emitPerfectDodge(position: Vec2): void {
+    const ring = this.track(
+      this.scene.add.circle(position.x, position.y, 26, 0x9ef25b, 0.13)
+        .setStrokeStyle(3, 0x9ef25b, 0.94)
+        .setDepth(33)
+    );
+    this.fadeAndDestroy(ring, {
+      scaleX: 1.75,
+      scaleY: 1.75,
+      alpha: 0,
+      duration: 260,
+      ease: 'Cubic.Out'
+    });
+    this.emitBurstShards(position, 4, 58, [0x9ef25b, 0xf4f7fb]);
+  }
+
+  emitPulseSpawn(position: Vec2): void {
+    const ring = this.track(
+      this.scene.add.circle(position.x, position.y, 18, 0x6ee7f2, 0.24)
+        .setStrokeStyle(3, 0xf4f7fb, 0.92)
+        .setDepth(32)
+    );
+    this.fadeAndDestroy(ring, {
+      scaleX: 2.2,
+      scaleY: 2.2,
+      alpha: 0,
+      duration: 220,
+      ease: 'Cubic.Out'
+    });
+    this.emitBurstShards(position, 4, 52, [0x6ee7f2, 0xf4f7fb]);
+  }
+
+  emitPulseBreak(position: Vec2): void {
+    const ring = this.track(
+      this.scene.add.circle(position.x, position.y, 20, 0xff5fa2, 0.22)
+        .setStrokeStyle(3, 0xff5fa2, 0.94)
+        .setDepth(35)
+    );
+    this.fadeAndDestroy(ring, {
+      scaleX: 2.6,
+      scaleY: 2.6,
+      alpha: 0,
+      duration: 250,
+      ease: 'Cubic.Out'
+    });
+    this.emitBurstShards(position, 8, 78, [0xff5fa2, 0xf6d743]);
   }
 
   nudgeCamera(direction: Vec2, strength: number): void {
@@ -221,12 +290,17 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
     this.tweens.add(tween);
   }
 
-  private emitBurstShards(position: Vec2, count: number, distance: number): void {
+  private emitBurstShards(
+    position: Vec2,
+    count: number,
+    distance: number,
+    colors: readonly [number, number] = [0xff8a5b, 0xf4f7fb]
+  ): void {
     for (let index = 0; index < count; index += 1) {
       const angle = (index / count) * Math.PI * 2;
       const shard = this.track(
         this.scene.add.rectangle(position.x, position.y, 14, 4,
-          index % 2 === 0 ? 0xff8a5b : 0xf4f7fb, 0.94)
+          colors[index % 2]!, 0.94)
           .setRotation(angle)
           .setDepth(32)
       );

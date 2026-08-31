@@ -22,7 +22,7 @@ function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
     facing: { x: 1, y: 0 },
     overload: 84,
     lastProcessedInputSeq: 0,
-    action: { ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 350 },
+    action: { ...idleAction, chargeMs: 350, charging: true },
     dashRemainingMs: 0,
     dashCooldownRemainingMs: 550,
     hitstunRemainingMs: 0,
@@ -120,15 +120,29 @@ describe('MatchHud', () => {
     expect(screen.getByRole('meter', { name: 'Overload' })).toHaveAttribute('aria-valuenow', '84');
     expect(screen.getByText('84%')).toBeVisible();
     expect(screen.getByRole('meter', { name: 'Dash dolumu' })).toHaveAttribute('aria-valuenow', '50');
-    expect(screen.getByText('Ağır saldırı %50')).toBeVisible();
+    expect(screen.getByText('ŞARJ 50%')).toBeVisible();
     expect(screen.getByRole('status', { name: 'Bağlantı durumu' })).toHaveTextContent('Bağlı');
 
     const controls = screen.getByLabelText('Kontroller');
     expect(controls).toHaveTextContent('WASD');
     expect(controls).toHaveTextContent('Oklar');
-    expect(controls).toHaveTextContent('Sol tık');
-    expect(controls).toHaveTextContent('Sağ tık');
-    expect(controls).toHaveTextContent('Boşluk');
+    expect(controls).toHaveTextContent('Shift + oklar');
+    expect(controls).toHaveTextContent('Space');
+    expect(controls).not.toHaveTextContent(/tık|fare|mouse/i);
+  });
+
+  it('shows exact charge readiness and the authoritative 78-second contraction warning', () => {
+    const bridge = new PresentationBridge();
+    bridge.current = snapshot({
+      phase: 'REGULATION',
+      remainingMs: 78_000,
+      players: [player({ action: { ...idleAction, chargeMs: 700, charging: true } })]
+    });
+
+    render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
+
+    expect(screen.getByRole('status', { name: 'Aksiyon durumu' })).toHaveTextContent('PULSE READY');
+    expect(screen.getByRole('status', { name: 'Arena daralma uyarısı' })).toHaveTextContent('ARENA DARALIYOR');
   });
 
   it('tracks live phase, combat, and transport changes without remounting the arena', () => {
