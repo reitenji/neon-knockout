@@ -9,6 +9,8 @@ import {
   type ActiveAttackShape,
   type ActiveAttackSlice
 } from './combatResolution.js';
+import { advanceCombatTimers, startActions } from './combat.js';
+import { snapshotMatch } from './simulation.js';
 import { createMatchState, type AttackRuntime, type MatchState } from './state.js';
 
 function createState(): MatchState {
@@ -67,6 +69,44 @@ function shape(
 }
 
 describe('shared-shape melee resolution', () => {
+  it('resolves a full active slice after a large step expires its runtime without leaking it', () => {
+    const state = createState();
+    state.players.p1.position = { x: 600, y: 360 };
+    state.players.p2.position = { x: 642, y: 360 };
+    state.players.p1.latestInput = { ...state.players.p1.latestInput, quick: true };
+    startActions(state);
+
+    const timers = advanceCombatTimers(
+      state,
+      GAME.quickCombo[0].windupMs +
+        GAME.quickCombo[0].activeMs +
+        GAME.quickCombo[0].recoveryMs
+    );
+    const shapes = buildActiveAttackShapes(state, timers.activeSlices);
+
+    expect(timers.activeSlices).toEqual([
+      expect.objectContaining({ playerId: 'p1', previousProgress: 0, currentProgress: 1 })
+    ]);
+    expect(shapes).toHaveLength(1);
+    expect(state.players.p1.attack).toBeNull();
+    expect(state.players.p1.stats.completedAttacks).toBe(1);
+    expect(resolveMeleeInteractions(state, shapes)).toEqual([
+      expect.objectContaining({ type: 'HIT', attackerId: 'p1', targetId: 'p2' })
+    ]);
+    expect(resolveMeleeInteractions(state, shapes)).toEqual([]);
+    expect(state.players.p1.stats.completedAttacks).toBe(1);
+    expect(snapshotMatch(state).players.find(({ playerId }) => playerId === 'p1')?.action).toMatchObject({
+      kind: null,
+      attackId: null,
+      hitTargetIds: []
+    });
+
+    state.tick += 1;
+    state.players.p3.position = { x: 642, y: 360 };
+    expect(resolveMeleeInteractions(state, shapes)).toEqual([]);
+    expect(state.players.p3.overload).toBe(0);
+  });
+
   it('lands a visible swept-capsule contact and rejects a one-pixel near miss', () => {
     const hitState = createState();
     const hitAttack = attack(hitState, 'p1', 1, 'QUICK_1');

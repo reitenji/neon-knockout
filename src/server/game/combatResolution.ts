@@ -25,22 +25,31 @@ export type ActiveAttackSlice = Readonly<{
   enteredActive: boolean;
 }>;
 
+const shapeRuntimeAssociations = new WeakMap<
+  ActiveAttackShape,
+  Readonly<{ state: MatchState; tick: number; attack: AttackRuntime }>
+>();
+
 export function buildActiveAttackShapes(
   state: MatchState,
   slices: readonly ActiveAttackSlice[]
 ): readonly ActiveAttackShape[] {
-  return slices.map((slice) => ({
-    playerId: slice.playerId,
-    attackId: slice.attack.attackId,
-    kind: slice.attack.kind,
-    capsule: buildAttackCapsule(
-      state.players[slice.playerId].position,
-      slice.attack.lockedFacing,
-      profileForAttack(slice.attack.kind),
-      slice.previousProgress,
-      slice.currentProgress
-    )
-  }));
+  return slices.map((slice) => {
+    const shape: ActiveAttackShape = {
+      playerId: slice.playerId,
+      attackId: slice.attack.attackId,
+      kind: slice.attack.kind,
+      capsule: buildAttackCapsule(
+        state.players[slice.playerId].position,
+        slice.attack.lockedFacing,
+        profileForAttack(slice.attack.kind),
+        slice.previousProgress,
+        slice.currentProgress
+      )
+    };
+    shapeRuntimeAssociations.set(shape, { state, tick: state.tick, attack: slice.attack });
+    return shape;
+  });
 }
 
 const compareStableIds = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
@@ -60,7 +69,13 @@ function runtimeForShape(
   shape: ActiveAttackShape
 ): Readonly<{ player: MutableMatchPlayer; attack: AttackRuntime }> | null {
   const player = state.players[shape.playerId];
-  if (!player || !activePlayer(player) || player.attack?.attackId !== shape.attackId) return null;
+  if (!player || !activePlayer(player)) return null;
+  const association = shapeRuntimeAssociations.get(shape);
+  if (association?.state === state && association.tick === state.tick &&
+    association.attack.attackId === shape.attackId && association.attack.kind === shape.kind) {
+    return { player, attack: association.attack };
+  }
+  if (player.attack?.attackId !== shape.attackId || player.attack.kind !== shape.kind) return null;
   return { player, attack: player.attack };
 }
 
