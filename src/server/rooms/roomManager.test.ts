@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { GAME } from '../../shared/constants.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import type { Chassis, InputFrame, MatchSnapshot, RoomState } from '../../shared/model.js';
 import { DomainError } from './domainError.js';
 import { RoomManager, type RoomPublication } from './roomManager.js';
@@ -90,6 +91,21 @@ function advanceCountdown(subject: ReturnType<typeof fixture>): void {
   for (let index = 0; index < 60; index += 1) subject.manager.advance(50);
 }
 
+function forceTargetResult(
+  subject: ReturnType<typeof fixture>,
+  roomCode: string,
+  attackerId: string,
+  targetId: string,
+  knockoutTarget: number
+): void {
+  for (let knockout = 0; knockout < knockoutTarget; knockout += 1) {
+    subject.manager.forceKnockout(roomCode, attackerId, targetId);
+    if (knockout < knockoutTarget - 1) {
+      for (let index = 0; index < 14; index += 1) subject.manager.advance(50);
+    }
+  }
+}
+
 function spawnFullChargePulse(subject: ReturnType<typeof fixture>): void {
   subject.manager.applyInput('c-1', { ...idleInput(0), heavy: true });
   for (let index = 0; index < 15; index += 1) subject.manager.advance(50);
@@ -145,6 +161,175 @@ describe('RoomManager FFA lifecycle', () => {
     subject.manager.setChassis('c-1', 'PULSE');
     expect(subject.roomState(room.roomCode).players[0].ready).toBe(true);
     expectErrorCode(() => subject.manager.setChassis('c-1', 'CORE' as Chassis), 'INVALID_CHASSIS');
+  });
+
+  it('publishes default settings, lets only the host change them in the lobby, and resets readiness only on real changes', () => {
+    const subject = fixture();
+    const host = subject.manager.createRoom('c-1', 'Ada');
+    subject.manager.joinRoom('c-2', host.roomCode, 'Linus');
+    expect(subject.roomState(host.roomCode).settings).toEqual(DEFAULT_ROOM_SETTINGS);
+
+    subject.manager.setReady('c-1', true);
+    subject.manager.setReady('c-2', true);
+    subject.manager.setRoomSettings('c-1', { durationMs: 90_000, knockoutTarget: 3 });
+    expect(subject.roomState(host.roomCode)).toMatchObject({
+      settings: { durationMs: 90_000, knockoutTarget: 3 },
+      players: [{ ready: false }, { ready: false }]
+    });
+
+    subject.manager.setReady('c-1', true);
+    const publicationsBeforeNoOp = subject.publications.length;
+    subject.manager.setRoomSettings('c-1', { durationMs: 90_000, knockoutTarget: 3 });
+    expect(subject.roomState(host.roomCode).players[0]?.ready).toBe(true);
+    expect(subject.publications).toHaveLength(publicationsBeforeNoOp);
+
+    const stateBeforeGuestWrite = subject.roomState(host.roomCode);
+    expectErrorCode(() => subject.manager.setRoomSettings('c-2', { durationMs: 120_000, knockoutTarget: 5 }), 'NOT_HOST');
+    expect(subject.roomState(host.roomCode)).toEqual(stateBeforeGuestWrite);
+    expect(subject.publications).toHaveLength(publicationsBeforeNoOp);
+  });
+
+  it('rejects host settings writes in countdown, match, and result without changing the configured pair', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject);
+
+    expectErrorCode(() => subject.manager.setRoomSettings('c-1', { durationMs: 90_000, knockoutTarget: 3 }), 'INVALID_PHASE');
+    expect(subject.roomState(roomCode).settings).toEqual(DEFAULT_ROOM_SETTINGS);
+    advanceCountdown(subject);
+    expectErrorCode(() => subject.manager.setRoomSettings('c-1', { durationMs: 90_000, knockoutTarget: 3 }), 'INVALID_PHASE');
+
+    forceTargetResult(subject, roomCode, players[0].playerId, players[1].playerId, DEFAULT_ROOM_SETTINGS.knockoutTarget);
+    expect(subject.roomState(roomCode).phase).toBe('RESULT');
+    expectErrorCode(() => subject.manager.setRoomSettings('c-1', { durationMs: 90_000, knockoutTarget: 3 }), 'INVALID_PHASE');
+    expect(subject.roomState(roomCode).settings).toEqual(DEFAULT_ROOM_SETTINGS);
+  });
+
+  it('preserves settings and migrated ownership through resume, member removal, result, rematches, and lobby return', () => {
+    const subject = fixture();
+    const first = subject.manager.createRoom('c-1', 'Ada');
+    const second = subject.manager.joinRoom('c-2', first.roomCode, 'Linus');
+    subject.manager.joinRoom('c-3', first.roomCode, 'Grace');
+    subject.manager.joinRoom('c-4', first.roomCode, 'Edsger');
+    const configured = { durationMs: 90_000, knockoutTarget: 3 } as const;
+    subject.manager.setRoomSettings('c-1', configured);
+
+    subject.manager.disconnect('c-1');
+    expect(subject.roomState(first.roomCode)).toMatchObject({ hostPlayerId: second.playerId, settings: configured });
+    subject.manager.resume('c-5', first.roomCode, first.resumeToken);
+    expect(subject.roomState(first.roomCode)).toMatchObject({ hostPlayerId: second.playerId, settings: configured });
+
+    subject.manager.leaveRoom('c-3');
+    expect(subject.roomState(first.roomCode).hostPlayerId).toBe(second.playerId);
+    subject.manager.disconnect('c-4');
+    subject.clock.advance(GAME.reconnectGraceMs);
+    subject.manager.advance(0);
+    expect(subject.roomState(first.roomCode).hostPlayerId).toBe(second.playerId);
+
+    subject.manager.setReady('c-2', true);
+    subject.manager.setReady('c-5', true);
+    subject.manager.startMatch('c-2');
+    expect(subject.snapshot(first.roomCode).settings).toEqual(configured);
+    advanceCountdown(subject);
+    forceTargetResult(subject, first.roomCode, second.playerId, first.playerId, configured.knockoutTarget);
+    expect(subject.roomState(first.roomCode)).toMatchObject({ phase: 'RESULT', settings: configured });
+
+    subject.manager.setResultReady('c-2', true);
+    subject.manager.setResultReady('c-5', true);
+    subject.manager.startMatch('c-2');
+    expect(subject.snapshot(first.roomCode).settings).toEqual(configured);
+    advanceCountdown(subject);
+    forceTargetResult(subject, first.roomCode, second.playerId, first.playerId, configured.knockoutTarget);
+    subject.manager.returnToLobby('c-2');
+    expect(subject.roomState(first.roomCode)).toMatchObject({ phase: 'LOBBY', settings: configured });
+
+    subject.manager.setReady('c-2', true);
+    subject.manager.setReady('c-5', true);
+    subject.manager.startMatch('c-2');
+    expect(subject.snapshot(first.roomCode).settings).toEqual(configured);
+  });
+
+  it('leaves a lobby immediately, preserves survivor readiness, migrates host, invalidates resume, and closes the empty room', () => {
+    const subject = fixture();
+    const first = subject.manager.createRoom('c-1', 'Ada');
+    const second = subject.manager.joinRoom('c-2', first.roomCode, 'Linus');
+    subject.manager.setReady('c-2', true);
+
+    expect(subject.manager.leaveRoom('c-1')).toBe(first.roomCode);
+    expect(subject.roomState(first.roomCode)).toMatchObject({
+      hostPlayerId: second.playerId,
+      players: [{ playerId: second.playerId, ready: true, connected: true }]
+    });
+    expectErrorCode(() => subject.manager.resume('resume-old', first.roomCode, first.resumeToken), 'INVALID_RESUME_TOKEN');
+    expect(subject.manager.createRoom('c-1', 'Yeni Ada').roomCode).not.toBe(first.roomCode);
+
+    expect(subject.manager.leaveRoom('c-2')).toBe(first.roomCode);
+    expect(subject.manager.debugRoom(first.roomCode)).toBeNull();
+    expect(subject.publications.filter(
+      (publication) => publication.type === 'ROOM_CLOSED' && publication.roomCode === first.roomCode
+    )).toHaveLength(1);
+  });
+
+  it('returns result survivors to a clean lobby while preserving configured settings', () => {
+    const subject = fixture();
+    const host = subject.manager.createRoom('c-1', 'Ada');
+    const guest = subject.manager.joinRoom('c-2', host.roomCode, 'Linus');
+    const configured = { durationMs: 90_000, knockoutTarget: 3 } as const;
+    subject.manager.setRoomSettings('c-1', configured);
+    subject.manager.setReady('c-1', true);
+    subject.manager.setReady('c-2', true);
+    subject.manager.startMatch('c-1');
+    advanceCountdown(subject);
+    forceTargetResult(subject, host.roomCode, host.playerId, guest.playerId, configured.knockoutTarget);
+    subject.manager.setResultReady('c-2', true);
+
+    expect(subject.manager.leaveRoom('c-1')).toBe(host.roomCode);
+    expect(subject.roomState(host.roomCode)).toMatchObject({
+      phase: 'LOBBY',
+      hostPlayerId: guest.playerId,
+      settings: configured,
+      players: [{ playerId: guest.playerId, ready: false }]
+    });
+    expect(subject.manager.debugRoom(host.roomCode)?.scores).toBeNull();
+  });
+
+  it('removes a leaver, queued input, score entry, and owned pulses while a three-player match continues', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject, 3);
+    advanceCountdown(subject);
+    spawnFullChargePulse(subject);
+    expect(subject.snapshot(roomCode).pulses.some((pulse) => pulse.ownerPlayerId === players[0].playerId)).toBe(true);
+
+    expect(subject.manager.leaveRoom('c-1')).toBe(roomCode);
+    expect(subject.manager.debugRoom(roomCode)).toMatchObject({ phase: 'MATCH', connectedCount: 2, reservedCount: 0 });
+    expect(subject.snapshot(roomCode).scores).toEqual({ [players[1].playerId]: 0, [players[2].playerId]: 0 });
+    expect(subject.snapshot(roomCode).players.map((player) => player.playerId)).toEqual([
+      players[1].playerId,
+      players[2].playerId
+    ]);
+    expect(subject.snapshot(roomCode).pulses.some((pulse) => pulse.ownerPlayerId === players[0].playerId)).toBe(false);
+    expectErrorCode(() => subject.manager.applyInput('c-1', idleInput(2)), 'PLAYER_NOT_FOUND');
+  });
+
+  it('removes a leaving player immediately, invalidates resume, migrates host, and no-contests an under-populated active match', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject);
+    advanceCountdown(subject);
+
+    expect(subject.manager.leaveRoom('c-1')).toBe(roomCode);
+    expect(subject.roomState(roomCode)).toMatchObject({
+      phase: 'LOBBY',
+      hostPlayerId: players[1].playerId,
+      players: [{ playerId: players[1].playerId, connected: true }]
+    });
+    expect(subject.manager.debugRoom(roomCode)?.scores).toBeNull();
+    expectErrorCode(() => subject.manager.resume('c-3', roomCode, players[0].resumeToken), 'INVALID_RESUME_TOKEN');
+    const noContests = subject.publications.filter(
+      (publication) => publication.type === 'MATCH_EVENT' && publication.event.type === 'RESULT' && publication.event.reason === 'NO_CONTEST'
+    );
+    expect(noContests).toHaveLength(1);
+    expect(noContests[0]?.type === 'MATCH_EVENT' && noContests[0].event.type === 'RESULT'
+      ? noContests[0].event.scores
+      : null).toEqual({ [players[1].playerId]: 0 });
   });
 
   it('starts FFA matches with two through eight connected ready players and enforces host/start rules', () => {

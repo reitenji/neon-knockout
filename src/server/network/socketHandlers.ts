@@ -6,12 +6,14 @@ import { GAME } from '../../shared/constants.js';
 import {
   lobbyChassisSchema,
   lobbyReadySchema,
+  lobbySettingsSchema,
   matchInputSchema,
   matchStartSchema,
   resultLobbySchema,
   resultReadySchema,
   roomCreateSchema,
   roomJoinSchema,
+  roomLeaveSchema,
   sessionResumeSchema,
   type ClientToServerEvents,
   type ServerToClientEvents
@@ -30,6 +32,7 @@ type SocketHandlerOptions = Readonly<{
   now: () => number;
   logger: ErrorLogger;
   onSession: (socket: GameSocket, welcome: SessionWelcome) => void;
+  onLeave: (socket: GameSocket, roomCode: string) => void;
   onDisconnect: (socket: GameSocket) => void;
 }>;
 
@@ -108,7 +111,7 @@ class SocketRateLimiter {
 }
 
 export function registerSocketHandlers(options: SocketHandlerOptions): void {
-  const { io, rooms, now, logger, onSession, onDisconnect } = options;
+  const { io, rooms, now, logger, onSession, onLeave, onDisconnect } = options;
 
   io.on('connection', (socket) => {
     const limiter = new SocketRateLimiter(now);
@@ -190,6 +193,20 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     socket.on('lobby:ready', (payload, callback) => {
       acknowledge(lobbyReadySchema, payload, callback, (validated) => {
         rooms.setReady(socket.id, validated.ready);
+        return null;
+      });
+    });
+    socket.on('lobby:settings', (payload, callback) => {
+      acknowledge(lobbySettingsSchema, payload, callback, (validated) => {
+        rooms.setRoomSettings(socket.id, validated);
+        return null;
+      });
+    });
+    socket.on('room:leave', (payload, callback) => {
+      acknowledge(roomLeaveSchema, payload, callback, () => {
+        const roomCode = rooms.leaveRoom(socket.id);
+        void socket.leave(roomCode);
+        onLeave(socket, roomCode);
         return null;
       });
     });

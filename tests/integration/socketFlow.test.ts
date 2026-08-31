@@ -276,6 +276,74 @@ describe('Socket.IO FFA game server flow', () => {
     })));
   };
 
+  it('synchronizes strict host room settings, resets readiness, and rejects guest or malformed writes', async () => {
+    const hostClient = await client();
+    const guestClient = await client();
+    const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
+    await emitSuccess<SessionWelcome>(guestClient, 'room:join', { name: 'Linus', roomCode: host.roomCode });
+    await emitSuccess<null>(hostClient, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(guestClient, 'lobby:ready', { ready: true });
+
+    const hostUpdate = expectEvent(hostClient, 'room:state', (state) =>
+      state.settings.durationMs === 90_000 && state.settings.knockoutTarget === 3 &&
+      state.players.every((candidate) => !candidate.ready));
+    const guestUpdate = expectEvent(guestClient, 'room:state', (state) =>
+      state.settings.durationMs === 90_000 && state.settings.knockoutTarget === 3 &&
+      state.players.every((candidate) => !candidate.ready));
+    expect(await emitAck<null>(hostClient, 'lobby:settings', { durationMs: 90_000, knockoutTarget: 3 }))
+      .toEqual({ ok: true, data: null });
+    expect((await hostUpdate).settings).toEqual({ durationMs: 90_000, knockoutTarget: 3 });
+    expect((await guestUpdate).settings).toEqual({ durationMs: 90_000, knockoutTarget: 3 });
+
+    const observed: RoomState[] = [];
+    hostClient.on('room:state', (state) => observed.push(state));
+    expect(await emitAck<null>(guestClient, 'lobby:settings', { durationMs: 120_000, knockoutTarget: 5 }))
+      .toMatchObject({ ok: false, error: { code: 'NOT_HOST' } });
+    expect(await emitAck<null>(hostClient, 'lobby:settings', { durationMs: 100_000, knockoutTarget: 5 }))
+      .toMatchObject({ ok: false, error: { code: 'INVALID_PAYLOAD' } });
+    expect(await emitAck<null>(hostClient, 'lobby:settings', { durationMs: 120_000, knockoutTarget: 5, map: 'void' }))
+      .toMatchObject({ ok: false, error: { code: 'INVALID_PAYLOAD' } });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(observed.some((state) => state.settings.durationMs !== 90_000 || state.settings.knockoutTarget !== 3)).toBe(false);
+  });
+
+  it('leaves the Socket.IO room, clears the connection mapping, invalidates resume, and reuses the same socket', async () => {
+    const hostClient = await client();
+    const guestClient = await client();
+    const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
+    const guest = await emitSuccess<SessionWelcome>(guestClient, 'room:join', { name: 'Linus', roomCode: host.roomCode });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(await emitAck<null>(guestClient, 'room:leave', { extra: true }))
+      .toMatchObject({ ok: false, error: { code: 'INVALID_PAYLOAD' } });
+    const oldRoomStates: RoomState[] = [];
+    guestClient.on('room:state', (state) => {
+      if (state.roomCode === host.roomCode) oldRoomStates.push(state);
+    });
+    const hostRoster = expectEvent(hostClient, 'room:state', (state) =>
+      state.roomCode === host.roomCode && state.players.length === 1);
+    expect(await emitAck<null>(guestClient, 'room:leave', {})).toEqual({ ok: true, data: null });
+    expect((await hostRoster).players.map((candidate) => candidate.playerId)).toEqual([host.playerId]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(oldRoomStates).toEqual([]);
+
+    harness().disconnectPlayer(host.roomCode, guest.playerId);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(guestClient.connected).toBe(true);
+
+    const replacement = await emitSuccess<SessionWelcome>(guestClient, 'room:create', { name: 'Yeni Linus' });
+    expect(replacement.roomCode).not.toBe(host.roomCode);
+    const resumeClient = await client();
+    expect(await emitAck<SessionWelcome>(resumeClient, 'session:resume', {
+      roomCode: host.roomCode,
+      resumeToken: guest.resumeToken
+    })).toMatchObject({ ok: false, error: { code: 'INVALID_RESUME_TOKEN' } });
+
+    await emitSuccess<null>(hostClient, 'lobby:settings', { durationMs: 90_000, knockoutTarget: 3 });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(oldRoomStates).toEqual([]);
+  });
+
   it('keeps deterministic placement and cloned event history private to an enabled in-process harness', async () => {
     const production = createGameServer({ host: '127.0.0.1', port: 0, clientDirectory: false });
     expect(production.testHarness).toBeNull();
@@ -318,6 +386,74 @@ describe('Socket.IO FFA game server flow', () => {
       await staticServer.stop();
       await rm(temporaryRoot, { recursive: true, force: true });
     }
+  });
+
+  it('lets only the host change room settings and seeds the started match from that authoritative pair', async () => {
+    const hostClient = await client();
+    const guestClient = await client();
+    const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
+    await emitSuccess<SessionWelcome>(guestClient, 'room:join', { name: 'Linus', roomCode: host.roomCode });
+
+    const guestRejection = await emitAck<null>(guestClient, 'lobby:settings', { durationMs: 90_000, knockoutTarget: 3 });
+    expect(guestRejection).toMatchObject({
+      ok: false,
+      error: {
+        code: 'NOT_HOST',
+        recoverable: true
+      }
+    });
+
+    const hostRoomUpdate = expectEvent(
+      hostClient,
+      'room:state',
+      (state) => state.roomCode === host.roomCode && state.settings.durationMs === 180_000 && state.settings.knockoutTarget === 7
+    );
+    const guestRoomUpdate = expectEvent(
+      guestClient,
+      'room:state',
+      (state) => state.roomCode === host.roomCode && state.settings.durationMs === 180_000 && state.settings.knockoutTarget === 7
+    );
+    await emitSuccess<null>(hostClient, 'lobby:settings', { durationMs: 180_000, knockoutTarget: 7 });
+    await expect(hostRoomUpdate).resolves.toMatchObject({
+      settings: { durationMs: 180_000, knockoutTarget: 7 }
+    });
+    await expect(guestRoomUpdate).resolves.toMatchObject({
+      settings: { durationMs: 180_000, knockoutTarget: 7 }
+    });
+
+    await emitSuccess<null>(hostClient, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(guestClient, 'lobby:ready', { ready: true });
+    const startedPromise = expectEvent(
+      hostClient,
+      'match:started',
+      (snapshot) => snapshot.settings.durationMs === 180_000 && snapshot.settings.knockoutTarget === 7
+    );
+    await emitSuccess<null>(hostClient, 'match:start', {});
+    const started = await startedPromise;
+    expect(started.settings).toEqual({ durationMs: 180_000, knockoutTarget: 7 });
+  });
+
+  it('keeps the socket reusable after an active leave and returns survivors to the lobby with preserved settings', async () => {
+    const match = await startMatch();
+    const roomUpdate = expectEvent(
+      match.guestClient,
+      'room:state',
+      (state) =>
+        state.roomCode === match.roomCode &&
+        state.phase === 'LOBBY' &&
+        state.players.length === 1 &&
+        state.players[0]?.playerId === match.guest.playerId
+    );
+
+    await emitSuccess<null>(match.hostClient, 'room:leave', {});
+    await expect(roomUpdate).resolves.toMatchObject({
+      hostPlayerId: match.guest.playerId,
+      settings: { durationMs: 120_000, knockoutTarget: 5 },
+      players: [{ playerId: match.guest.playerId, connected: true }]
+    });
+
+    const newRoom = await emitSuccess<SessionWelcome>(match.hostClient, 'room:create', { name: 'Ada 2' });
+    expect(newRoom.roomCode).not.toBe(match.roomCode);
   });
 
   it('resolves quick/quick, heavy/quick, and heavy/heavy from monotonic socket input frames', async () => {

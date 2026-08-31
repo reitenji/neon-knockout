@@ -149,6 +149,11 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     onSession: (socket: GameSocket, welcome: SessionWelcome) => {
       playerConnections.set(welcome.playerId, { roomCode: welcome.roomCode, socketId: socket.id });
     },
+    onLeave: (socket: GameSocket, roomCode: string) => {
+      for (const [playerId, connection] of playerConnections) {
+        if (connection.socketId === socket.id && connection.roomCode === roomCode) playerConnections.delete(playerId);
+      }
+    },
     onDisconnect: (socket: GameSocket) => {
       for (const [playerId, connection] of playerConnections) {
         if (connection.socketId === socket.id) playerConnections.delete(playerId);

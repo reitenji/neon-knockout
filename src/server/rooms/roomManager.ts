@@ -1,5 +1,6 @@
 import { timingSafeEqual } from 'node:crypto';
 import { ARENA, CHASSIS, GAME } from '../../shared/constants.js';
+import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from '../../shared/roomSettings.js';
 import type {
   Chassis,
   GameEvent,
@@ -57,6 +58,7 @@ type Room = {
   roomCode: string;
   phase: RoomPhase;
   hostPlayerId: string;
+  settings: RoomSettings;
   players: Map<string, RoomPlayer>;
   nextPlayerOrder: number;
   match: MatchState | null;
@@ -137,6 +139,7 @@ export class RoomManager {
       roomCode,
       phase: 'LOBBY',
       hostPlayerId: playerId,
+      settings: { ...DEFAULT_ROOM_SETTINGS },
       players: new Map([[playerId, player]]),
       nextPlayerOrder: 1,
       match: null,
@@ -223,6 +226,45 @@ export class RoomManager {
     this.publishRoom(room);
   }
 
+  setRoomSettings(connectionId: string, settings: RoomSettings): void {
+    const { room, player } = this.requireConnectedPlayer(connectionId);
+    if (room.phase !== 'LOBBY') throw new DomainError('INVALID_PHASE', 'Bu işlem şu anda kullanılamaz.', true);
+    if (room.hostPlayerId !== player.playerId) {
+      throw new DomainError('NOT_HOST', 'Bu işlemi yalnızca oda sahibi yapabilir.', true);
+    }
+    if (room.settings.durationMs === settings.durationMs && room.settings.knockoutTarget === settings.knockoutTarget) return;
+    room.settings = { ...settings };
+    for (const candidate of room.players.values()) candidate.ready = false;
+    this.publishRoom(room);
+  }
+
+  leaveRoom(connectionId: string): string {
+    const { room, player } = this.requireConnectedPlayer(connectionId);
+    const leavingHost = room.hostPlayerId === player.playerId;
+    this.connections.delete(connectionId);
+    room.inputs.delete(player.playerId);
+    room.players.delete(player.playerId);
+    if (room.match) {
+      removePulsesOwnedBy(room.match, player.playerId);
+      delete room.match.players[player.playerId];
+      delete room.match.scores[player.playerId];
+    }
+    if (leavingHost) this.reassignHost(room);
+    if (room.players.size === 0) {
+      if (room.match) clearPulses(room.match);
+      this.rooms.delete(room.roomCode);
+      this.deps.publish({ type: 'ROOM_CLOSED', roomCode: room.roomCode });
+      return room.roomCode;
+    }
+    if (room.match && (room.phase === 'COUNTDOWN' || room.phase === 'MATCH')) {
+      if (!this.reconcilePopulation(room)) return room.roomCode;
+      this.publishSnapshot(room);
+    }
+    if (room.phase === 'RESULT') this.resetMatchToLobby(room);
+    this.publishRoom(room);
+    return room.roomCode;
+  }
+
   startMatch(connectionId: string): void {
     const { room, player } = this.requireConnectedPlayer(connectionId);
     if (room.phase !== 'LOBBY' && room.phase !== 'RESULT') {
@@ -250,7 +292,7 @@ export class RoomManager {
       chassis: candidate.chassis,
       accent: candidate.accent,
       connected: candidate.connected
-    })), this.deps.now());
+    })), this.deps.now(), room.settings);
     room.phase = 'COUNTDOWN';
     room.inputs.clear();
     room.accumulatorMs = 0;
@@ -344,8 +386,14 @@ export class RoomManager {
       let membershipChanged = false;
       for (const player of [...room.players.values()]) {
         if (!player.connected && player.expiresAt !== null && player.expiresAt <= now) {
+          const expiredHost = room.hostPlayerId === player.playerId;
           if (room.match) removePulsesOwnedBy(room.match, player.playerId);
           room.players.delete(player.playerId);
+          if (room.match) {
+            delete room.match.players[player.playerId];
+            delete room.match.scores[player.playerId];
+          }
+          if (expiredHost) this.reassignHost(room);
           membershipChanged = true;
         }
       }
@@ -421,6 +469,11 @@ export class RoomManager {
 
   private migrateHost(room: Room): void {
     const successor = this.orderedPlayers(room).find((player) => player.connected);
+    if (successor) room.hostPlayerId = successor.playerId;
+  }
+
+  private reassignHost(room: Room): void {
+    const successor = this.orderedPlayers(room).find((player) => player.connected) ?? this.orderedPlayers(room)[0];
     if (successor) room.hostPlayerId = successor.playerId;
   }
 
@@ -610,6 +663,7 @@ export class RoomManager {
         hostPlayerId: room.hostPlayerId,
         pauseRemainingMs: room.match?.phase === 'PAUSED' ? this.pauseRemainingMs(room) : null,
         result,
+        settings: { ...room.settings },
         players: this.orderedPlayers(room).map((player) => ({
           playerId: player.playerId,
           name: player.name,
