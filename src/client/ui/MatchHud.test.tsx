@@ -1,9 +1,10 @@
 import '@testing-library/jest-dom/vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import type { GamePresentationBridge } from '../game/GamePresentationBridge.js';
 import { PhaserArena } from '../game/PhaserArena.js';
+import { MatchHud } from './MatchHud.js';
 
 const idleAction = { kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0 } as const;
 
@@ -85,7 +86,12 @@ class PresentationBridge implements GamePresentationBridge {
 }
 
 describe('MatchHud', () => {
-  afterEach(cleanup);
+  beforeEach(() => vi.useFakeTimers());
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
 
   it('makes countdown, ranking, local combat state, connection, and every control discoverable', () => {
     const bridge = new PresentationBridge();
@@ -161,5 +167,45 @@ describe('MatchHud', () => {
     render(<PhaserArena bridge={bridge} localPlayerId="p-local" createGame={() => ({ destroy() {} })} reducedMotion />);
 
     expect(screen.getByRole('status', { name: 'Aksiyon durumu' })).toHaveTextContent('Geri dönüş 0.7 sn');
+  });
+
+  it('shows sudden death once for 1100ms despite repeated snapshots while retaining the phase header', () => {
+    const bridge = new PresentationBridge();
+    render(
+      <PhaserArena bridge={bridge} localPlayerId="p-local" createGame={() => ({ destroy() {} })} reducedMotion />
+    );
+
+    act(() => bridge.publish(snapshot({ phase: 'REGULATION', remainingMs: 90_000 })));
+    expect(screen.queryByRole('status', { name: 'Raunt durumu' })).not.toBeInTheDocument();
+
+    act(() => bridge.publish(snapshot({ phase: 'SUDDEN_DEATH', remainingMs: 30_000 })));
+    expect(screen.getByRole('status', { name: 'Raunt durumu' })).toHaveTextContent('SON VURUŞ');
+
+    act(() => bridge.publish(snapshot({ phase: 'SUDDEN_DEATH', remainingMs: 29_500 })));
+    act(() => vi.advanceTimersByTime(1_099));
+    expect(screen.getByRole('status', { name: 'Raunt durumu' })).toHaveTextContent('SON VURUŞ');
+
+    act(() => vi.advanceTimersByTime(1));
+    expect(screen.queryByRole('status', { name: 'Raunt durumu' })).not.toBeInTheDocument();
+    expect(screen.getByRole('timer', { name: 'Kalan süre' }).closest('header')).toHaveTextContent('SON VURUŞ');
+  });
+
+  it('keeps paused announcements persistent and clears a pending sudden-death timeout on unmount', () => {
+    const bridge = new PresentationBridge();
+    bridge.current = snapshot({ phase: 'PAUSED', remainingMs: 30_000 });
+    const pausedView = render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
+
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(screen.getByRole('status', { name: 'Raunt durumu' })).toHaveTextContent('BEKLE');
+    pausedView.unmount();
+
+    bridge.current = snapshot({ phase: 'REGULATION', remainingMs: 90_000 });
+    const suddenDeathView = render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
+    act(() => bridge.publish(snapshot({ phase: 'SUDDEN_DEATH', remainingMs: 30_000 })));
+    expect(vi.getTimerCount()).toBe(1);
+
+    suddenDeathView.unmount();
+    expect(vi.getTimerCount()).toBe(0);
+    act(() => vi.runOnlyPendingTimers());
   });
 });

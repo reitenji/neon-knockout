@@ -1,4 +1,4 @@
-import { useCallback, useSyncExternalStore, type CSSProperties } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ACCENTS, GAME } from '../../shared/constants.js';
 import type { MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import type { GamePresentationBridge } from '../game/GamePresentationBridge.js';
@@ -16,6 +16,8 @@ const PHASE_LABELS: Readonly<Record<MatchPhase, string>> = {
   FINISHED: 'BİTTİ'
 };
 
+const SUDDEN_DEATH_ANNOUNCEMENT_MS = 1_100;
+
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
@@ -32,7 +34,6 @@ function phaseAnnouncement(snapshot: MatchSnapshot): Readonly<{ label: string; t
   if (snapshot.phase === 'REGULATION' && snapshot.remainingMs > GAME.regulationMs - 800) {
     return { label: 'Raunt başlangıcı', text: 'FIGHT' };
   }
-  if (snapshot.phase === 'SUDDEN_DEATH') return { label: 'Raunt durumu', text: 'SON VURUŞ' };
   if (snapshot.phase === 'PAUSED') return { label: 'Raunt durumu', text: 'BEKLE' };
   return null;
 }
@@ -71,6 +72,31 @@ function useConnection(bridge: GamePresentationBridge): boolean {
   );
   const getSnapshot = useCallback(() => bridge.isConnected(), [bridge]);
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function PhaseAnnouncement({ announcement }: Readonly<{ announcement: Readonly<{ label: string; text: string }> }>) {
+  return (
+    <strong
+      key={`${announcement.label}-${announcement.text}`}
+      className="match-hud__announcement"
+      role="status"
+      aria-label={announcement.label}
+      aria-live="assertive"
+    >
+      {announcement.text}
+    </strong>
+  );
+}
+
+function SuddenDeathAnnouncement() {
+  const [visible, setVisible] = useState(true);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setVisible(false), SUDDEN_DEATH_ANNOUNCEMENT_MS);
+    return () => window.clearTimeout(timeout);
+  }, []);
+
+  return visible ? <PhaseAnnouncement announcement={{ label: 'Raunt durumu', text: 'SON VURUŞ' }} /> : null;
 }
 
 function Ranking({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot; localPlayerId: string }>) {
@@ -187,17 +213,7 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
 
       <ControlsHint />
 
-      {announcement ? (
-        <strong
-          key={`${announcement.label}-${announcement.text}`}
-          className="match-hud__announcement"
-          role="status"
-          aria-label={announcement.label}
-          aria-live="assertive"
-        >
-          {announcement.text}
-        </strong>
-      ) : null}
+      {snapshot?.phase === 'SUDDEN_DEATH' ? <SuddenDeathAnnouncement /> : announcement ? <PhaseAnnouncement announcement={announcement} /> : null}
     </aside>
   );
 }
