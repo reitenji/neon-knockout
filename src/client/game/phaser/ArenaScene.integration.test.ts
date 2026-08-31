@@ -209,7 +209,12 @@ describe('ArenaScene live presentation integration', () => {
     scene.update();
 
     expect(probes.arenaApply).toHaveBeenCalledWith(
-      { phase: 'REGULATION', remainingMs: 82_000, platformProgress: 0.35 },
+      {
+        phase: 'REGULATION',
+        remainingMs: 82_000,
+        platformProgress: 0.35,
+        settings: DEFAULT_ROOM_SETTINGS
+      },
       expect.any(Number)
     );
     expect(probes.createFighterView).toHaveBeenCalledWith(scene, expect.objectContaining({ playerId: 'p1' }), true, {

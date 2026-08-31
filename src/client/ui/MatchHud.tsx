@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ACCENTS, GAME } from '../../shared/constants.js';
 import type { MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
+import { matchTimingFor } from '../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../game/GamePresentationBridge.js';
 
 type MatchHudProps = Readonly<{
@@ -31,7 +32,7 @@ function phaseAnnouncement(snapshot: MatchSnapshot): Readonly<{ label: string; t
   if (snapshot.phase === 'COUNTDOWN') {
     return { label: 'Geri sayım', text: String(Math.max(1, Math.ceil(snapshot.remainingMs / 1_000))) };
   }
-  if (snapshot.phase === 'REGULATION' && snapshot.remainingMs > GAME.regulationMs - 800) {
+  if (snapshot.phase === 'REGULATION' && snapshot.remainingMs > snapshot.settings.durationMs - 800) {
     return { label: 'Raunt başlangıcı', text: 'FIGHT' };
   }
   if (snapshot.phase === 'PAUSED') return { label: 'Raunt durumu', text: 'BEKLE' };
@@ -163,9 +164,10 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
   const dashProgress = localPlayer
     ? 1 - clamp(localPlayer.dashCooldownRemainingMs / GAME.dashCooldownMs, 0, 1)
     : 0;
+  const matchTiming = snapshot ? matchTimingFor(snapshot.settings.durationMs) : null;
   const contractionWarning = snapshot?.phase === 'REGULATION' &&
-    snapshot.remainingMs <= GAME.contractionWarningRemainingMs &&
-    snapshot.remainingMs > GAME.contractionMinimumRemainingMs;
+    snapshot.remainingMs <= (matchTiming?.contractionWarningRemainingMs ?? 0) &&
+    snapshot.remainingMs > (matchTiming?.contractionMinimumRemainingMs ?? 0);
   const pulseReady = Boolean(localPlayer && localPlayer.action.chargeMs >= GAME.heavyMaxChargeMs);
 
   return (
@@ -177,6 +179,9 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
             <time role="timer" aria-label="Kalan süre" dateTime={`PT${Math.ceil(snapshot.remainingMs / 1_000)}S`}>
               {formatTime(snapshot.remainingMs)}
             </time>
+            <strong className="match-hud__rule" aria-label="Kazanma hedefi">
+              İlk {snapshot.settings.knockoutTarget} knockout
+            </strong>
             {contractionWarning ? (
               <strong className="match-hud__contraction" role="status" aria-label="Arena daralma uyarısı">
                 ARENA DARALIYOR

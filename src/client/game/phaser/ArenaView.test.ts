@@ -1,8 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DEFAULT_ROOM_SETTINGS, type MatchDurationMs } from '../../../shared/roomSettings.js';
 
 vi.mock('phaser', () => ({ default: {} }));
 
 import { createArenaView } from './ArenaView.js';
+
+function visualState(durationMs: MatchDurationMs, remainingMs: number, platformProgress = 0) {
+  return {
+    phase: 'REGULATION' as const,
+    remainingMs,
+    platformProgress,
+    settings: { ...DEFAULT_ROOM_SETTINGS, durationMs }
+  };
+}
 
 type RecordedCall = Readonly<{ method: string; args: readonly unknown[] }>;
 
@@ -54,7 +64,7 @@ describe('ArenaView', () => {
     const stub = scene();
     const arena = createArenaView(stub as never, { reducedMotion: false });
 
-    arena.apply({ phase: 'REGULATION', remainingMs: 24_000, platformProgress: 0.35 }, 420);
+    arena.apply(visualState(90_000, 24_000, 0.35), 420);
 
     const overlay = stub.graphics[2]!;
     expect(overlay.calls[0]).toEqual({ method: 'clear', args: [] });
@@ -69,15 +79,26 @@ describe('ArenaView', () => {
     const arena = createArenaView(stub as never, { reducedMotion: false });
     const overlay = stub.graphics[2]!;
 
-    arena.apply({ phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0 }, 100);
-    arena.apply({ phase: 'REGULATION', remainingMs: 99_000, platformProgress: 0 }, 900);
+    arena.apply(visualState(90_000, 60_000), 100);
+    arena.apply(visualState(90_000, 59_000), 900);
     expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(1);
 
-    arena.apply({ phase: 'REGULATION', remainingMs: 78_000, platformProgress: 0 }, 900);
+    arena.apply(visualState(90_000, 58_500), 900);
     expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(2);
 
-    arena.apply({ phase: 'REGULATION', remainingMs: 78_000, platformProgress: 0 }, 1_180);
+    arena.apply(visualState(90_000, 58_500), 1_180);
     expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(3);
+  });
+
+  it('redraws when the configured duration changes the warning threshold', () => {
+    const stub = scene();
+    const arena = createArenaView(stub as never, { reducedMotion: true });
+    const overlay = stub.graphics[2]!;
+
+    arena.apply(visualState(90_000, 100_000), 100);
+    arena.apply(visualState(180_000, 100_000), 100);
+
+    expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(2);
   });
 
   it('redraws immediately when contraction progress or phase changes', () => {
@@ -85,9 +106,9 @@ describe('ArenaView', () => {
     const arena = createArenaView(stub as never, { reducedMotion: true });
     const overlay = stub.graphics[2]!;
 
-    arena.apply({ phase: 'REGULATION', remainingMs: 70_000, platformProgress: 0 }, 100);
-    arena.apply({ phase: 'REGULATION', remainingMs: 70_000, platformProgress: 0.2 }, 100);
-    arena.apply({ phase: 'SUDDEN_DEATH', remainingMs: 0, platformProgress: 0.2 }, 100);
+    arena.apply(visualState(120_000, 70_000), 100);
+    arena.apply(visualState(120_000, 70_000, 0.2), 100);
+    arena.apply({ ...visualState(120_000, 0, 0.2), phase: 'SUDDEN_DEATH' }, 100);
 
     expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(3);
   });

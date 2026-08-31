@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
-import { GAME } from '../../../shared/constants.js';
 import type { MatchPhase, Vec2 } from '../../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS, matchTimingFor } from '../../../shared/roomSettings.js';
 import { buildArenaVisualModel, type ArenaVisualModel, type ArenaVisualState } from './arenaVisualPlan.js';
 
 export interface ArenaView {
@@ -73,7 +73,12 @@ function inwardNormal(start: Vec2, end: Vec2, vertices: readonly Vec2[]): Vec2 {
 }
 
 function drawStaticShell(shell: GraphicsLike, detail: GraphicsLike): void {
-  const model = buildArenaVisualModel({ phase: 'COUNTDOWN', remainingMs: 3_000, platformProgress: 0 });
+  const model = buildArenaVisualModel({
+    phase: 'COUNTDOWN',
+    remainingMs: 3_000,
+    platformProgress: 0,
+    settings: DEFAULT_ROOM_SETTINGS
+  });
   const regulationPoints = toMutablePoints(model.regulationVertices);
   const shadowPoints = toMutablePoints(offsetVertices(model.regulationVertices, model.voidShadowOffset));
   const recessedPoints = toMutablePoints(model.recessedVertices);
@@ -131,14 +136,16 @@ function drawChevron(
 }
 
 function warningIsVisible(state: ArenaVisualState): boolean {
+  const timing = matchTimingFor(state.settings.durationMs);
   return state.platformProgress > 0 || state.phase === 'SUDDEN_DEATH' ||
-    (state.phase === 'REGULATION' && state.remainingMs <= GAME.contractionWarningRemainingMs);
+    (state.phase === 'REGULATION' && state.remainingMs <= timing.contractionWarningRemainingMs);
 }
 
 type VisualSignature = Readonly<{
   phase: MatchPhase;
   remainingMs: number;
   platformProgress: number;
+  durationMs: number;
   nowMs: number;
 }>;
 
@@ -152,13 +159,15 @@ function visualSignature(
     phase: state.phase,
     remainingMs: visibleWarning ? state.remainingMs : 0,
     platformProgress: state.platformProgress,
+    durationMs: state.settings.durationMs,
     nowMs: visibleWarning && !reducedMotion ? nowMs : 0
   };
 }
 
 function sameVisualSignature(left: VisualSignature | null, right: VisualSignature): boolean {
   return left !== null && left.phase === right.phase && left.remainingMs === right.remainingMs &&
-    left.platformProgress === right.platformProgress && left.nowMs === right.nowMs;
+    left.platformProgress === right.platformProgress && left.durationMs === right.durationMs &&
+    left.nowMs === right.nowMs;
 }
 
 function drawDynamicTelegraph(overlay: GraphicsLike, state: ArenaVisualState, model: ArenaVisualModel): void {

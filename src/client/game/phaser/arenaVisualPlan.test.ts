@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { ARENA } from '../../../shared/constants.js';
+import { DEFAULT_ROOM_SETTINGS, type MatchDurationMs } from '../../../shared/roomSettings.js';
 import { buildArenaVisualModel, interpolateArenaVertices } from './arenaVisualPlan.js';
+
+function visualState(durationMs: MatchDurationMs, remainingMs: number, platformProgress = 0) {
+  return {
+    phase: 'REGULATION' as const,
+    remainingMs,
+    platformProgress,
+    settings: { ...DEFAULT_ROOM_SETTINGS, durationMs }
+  };
+}
 
 describe('arenaVisualPlan', () => {
   it('interpolates the arena footprint exactly between regulation and minimum octagons', () => {
@@ -14,7 +24,7 @@ describe('arenaVisualPlan', () => {
 
   it('arms a readable contraction warning with brighter current edges and corner nodes during the lead window', () => {
     const visuals = buildArenaVisualModel(
-      { phase: 'REGULATION', remainingMs: 57_500, platformProgress: 0.5 },
+      visualState(90_000, 57_500, 0.5),
       { nowMs: 420, reducedMotion: false }
     );
 
@@ -31,7 +41,7 @@ describe('arenaVisualPlan', () => {
 
   it('keeps the warning readable but suppresses telegraph pulsing under reduced motion', () => {
     const visuals = buildArenaVisualModel(
-      { phase: 'REGULATION', remainingMs: 57_500, platformProgress: 0.5 },
+      visualState(90_000, 57_500, 0.5),
       { nowMs: 420, reducedMotion: true }
     );
 
@@ -40,21 +50,25 @@ describe('arenaVisualPlan', () => {
     expect(visuals.cornerNodeRadius).toBe(9);
   });
 
-  it('derives warning emphasis from 78 to 75 seconds remaining', () => {
+  it.each([
+    [90_000, 58_500, 56_250],
+    [120_000, 78_000, 75_000],
+    [180_000, 117_000, 112_500]
+  ] as const)('derives warning emphasis proportionally for a %i ms match', (durationMs, warningAt, startsAt) => {
     const before = buildArenaVisualModel(
-      { phase: 'REGULATION', remainingMs: 78_001, platformProgress: 0 },
+      visualState(durationMs, warningAt + 1),
       { reducedMotion: true }
     );
     const start = buildArenaVisualModel(
-      { phase: 'REGULATION', remainingMs: 78_000, platformProgress: 0 },
+      visualState(durationMs, warningAt),
       { reducedMotion: true }
     );
     const midpoint = buildArenaVisualModel(
-      { phase: 'REGULATION', remainingMs: 76_500, platformProgress: 0 },
+      visualState(durationMs, (warningAt + startsAt) / 2),
       { reducedMotion: true }
     );
     const complete = buildArenaVisualModel(
-      { phase: 'REGULATION', remainingMs: 75_000, platformProgress: 0 },
+      visualState(durationMs, startsAt),
       { reducedMotion: true }
     );
 

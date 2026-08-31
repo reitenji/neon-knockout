@@ -113,6 +113,7 @@ describe('MatchHud', () => {
     expect(screen.getByRole('complementary', { name: 'Maç bilgileri' })).toBeVisible();
     expect(screen.getByRole('timer', { name: 'Kalan süre' })).toHaveTextContent('00:03');
     expect(screen.getByRole('status', { name: 'Geri sayım' })).toHaveTextContent('3');
+    expect(screen.getByLabelText('Kazanma hedefi')).toHaveTextContent('İlk 5 knockout');
 
     const ranking = screen.getByRole('list', { name: 'Skor sıralaması' });
     const rows = within(ranking).getAllByRole('listitem');
@@ -138,6 +139,7 @@ describe('MatchHud', () => {
     bridge.current = snapshot({
       phase: 'REGULATION',
       remainingMs: 78_000,
+      settings: DEFAULT_ROOM_SETTINGS,
       players: [player({ action: { ...idleAction, chargeMs: 700, charging: true } })]
     });
 
@@ -145,6 +147,42 @@ describe('MatchHud', () => {
 
     expect(screen.getByRole('status', { name: 'Aksiyon durumu' })).toHaveTextContent('PULSE READY');
     expect(screen.getByRole('status', { name: 'Arena daralma uyarısı' })).toHaveTextContent('ARENA DARALIYOR');
+  });
+
+  it('derives the knockout label and contraction warning from each match settings snapshot', () => {
+    const bridge = new PresentationBridge();
+    bridge.current = snapshot({
+      phase: 'REGULATION',
+      remainingMs: 58_501,
+      settings: { durationMs: 90_000, knockoutTarget: 3 }
+    });
+
+    render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
+
+    expect(screen.getByLabelText('Kazanma hedefi')).toHaveTextContent('İlk 3 knockout');
+    expect(screen.queryByRole('status', { name: 'Arena daralma uyarısı' })).not.toBeInTheDocument();
+
+    act(() => bridge.publish(snapshot({
+      phase: 'REGULATION',
+      remainingMs: 58_500,
+      settings: { durationMs: 90_000, knockoutTarget: 3 }
+    })));
+    expect(screen.getByRole('status', { name: 'Arena daralma uyarısı' })).toBeVisible();
+
+    act(() => bridge.publish(snapshot({
+      phase: 'REGULATION',
+      remainingMs: 117_001,
+      settings: { durationMs: 180_000, knockoutTarget: 10 }
+    })));
+    expect(screen.getByLabelText('Kazanma hedefi')).toHaveTextContent('İlk 10 knockout');
+    expect(screen.queryByRole('status', { name: 'Arena daralma uyarısı' })).not.toBeInTheDocument();
+
+    act(() => bridge.publish(snapshot({
+      phase: 'REGULATION',
+      remainingMs: 117_000,
+      settings: { durationMs: 180_000, knockoutTarget: 10 }
+    })));
+    expect(screen.getByRole('status', { name: 'Arena daralma uyarısı' })).toBeVisible();
   });
 
   it('tracks live phase, combat, and transport changes without remounting the arena', () => {

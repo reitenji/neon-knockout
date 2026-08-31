@@ -153,7 +153,8 @@ export class ArenaScene extends Phaser.Scene {
     this.arenaView?.apply({
       phase: frame.current.phase,
       remainingMs: frame.current.remainingMs,
-      platformProgress: frame.current.platformProgress
+      platformProgress: frame.current.platformProgress,
+      settings: frame.current.settings
     }, nowMs);
     const localPresentation = this.session?.getLocalPresentation() ?? null;
     this.reconcilePulses(frame.current);
