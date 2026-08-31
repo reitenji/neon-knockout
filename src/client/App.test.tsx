@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NeonGameFactory } from './game/GamePresentationBridge.js';
 import type { ClientState, GameStore } from './state/gameStore.js';
@@ -24,6 +24,8 @@ function storeFor(state: ClientState): GameStore {
       joinRoom: vi.fn(async () => undefined),
       setChassis: vi.fn(async () => undefined),
       setReady: vi.fn(async () => undefined),
+      setRoomSettings: vi.fn(async () => undefined),
+      leaveRoom: vi.fn(async () => undefined),
       startMatch: vi.fn(async () => undefined),
       setResultReady: vi.fn(async () => undefined),
       returnToLobby: vi.fn(async () => undefined),
@@ -189,5 +191,28 @@ describe('App', () => {
     expect(screen.getByRole('heading', { name: 'Ada Kazandı' })).toBeVisible();
     screen.getByRole('button', { name: 'Tekrar Hazır' }).click();
     expect(store.actions.setResultReady).toHaveBeenCalledWith(true);
+  });
+
+  it('wires room settings and the single global leave room action through the store', () => {
+    const store = storeFor({
+      ...landing,
+      screen: 'LOBBY',
+      room: {
+        roomCode: 'AB2Z', phase: 'LOBBY', hostPlayerId: 'p-1', pauseRemainingMs: null, result: null,
+        settings: DEFAULT_ROOM_SETTINGS,
+        players: [{
+          playerId: 'p-1', name: 'Ada', chassis: 'RIFT', accent: 0, ready: false, connected: true,
+          reconnectRemainingMs: null, stats: { knockouts: 0, falls: 0, landedHits: 0, completedAttacks: 0 }
+        }]
+      },
+      session: { playerId: 'p-1', roomCode: 'AB2Z', resumeToken: 'token' }
+    });
+    render(<App store={store} />);
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Kazanma hedefi' }), { target: { value: '7' } });
+    expect(store.actions.setRoomSettings).toHaveBeenCalledWith({ durationMs: 120_000, knockoutTarget: 7 });
+    expect(screen.getAllByRole('button', { name: 'Odadan Çık' })).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Odadan Çık' }));
+    expect(store.actions.leaveRoom).toHaveBeenCalledOnce();
   });
 });

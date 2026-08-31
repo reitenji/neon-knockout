@@ -1,11 +1,19 @@
 import { CHASSIS, type Chassis, type RoomPlayer } from '../../shared/model.js';
 import { ACCENTS } from '../../shared/constants.js';
+import {
+  KNOCKOUT_TARGET_OPTIONS,
+  MATCH_DURATION_OPTIONS,
+  type KnockoutTarget,
+  type MatchDurationMs,
+  type RoomSettings
+} from '../../shared/roomSettings.js';
 import { selectCanStart, selectSelfPlayer, type ClientState } from '../state/gameStore.js';
 
 type LobbyScreenProps = Readonly<{
   state: ClientState;
   onSetChassis: (chassis: Chassis) => Promise<void>;
   onToggleReady: (ready: boolean) => Promise<void>;
+  onSetRoomSettings: (settings: RoomSettings) => Promise<void>;
   onStart: () => Promise<void>;
   onCopyRoomCode: () => Promise<void>;
 }>;
@@ -44,13 +52,30 @@ function PlayerRow({ player, hostPlayerId }: Readonly<{ player: RoomPlayer; host
   );
 }
 
-export function LobbyScreen({ state, onSetChassis, onToggleReady, onStart, onCopyRoomCode }: LobbyScreenProps) {
+export function LobbyScreen({
+  state,
+  onSetChassis,
+  onToggleReady,
+  onSetRoomSettings,
+  onStart,
+  onCopyRoomCode
+}: LobbyScreenProps) {
   if (!state.room) return null;
   const { room } = state;
   const selfPlayer = selectSelfPlayer(state);
   const isHost = selfPlayer?.playerId === room.hostPlayerId;
   const anyPending = state.pendingAction !== null;
-  const lobbyError = ['chassis', 'ready', 'start'].includes(state.errorAction ?? '') ? state.lastError : null;
+  const lobbyError = ['chassis', 'ready', 'settings', 'start'].includes(state.errorAction ?? '')
+    ? state.lastError
+    : null;
+
+  const updateDuration = (durationMs: MatchDurationMs): void => {
+    void onSetRoomSettings({ durationMs, knockoutTarget: room.settings.knockoutTarget });
+  };
+
+  const updateKnockoutTarget = (knockoutTarget: KnockoutTarget): void => {
+    void onSetRoomSettings({ durationMs: room.settings.durationMs, knockoutTarget });
+  };
 
   return (
     <section className="screen screen--lobby" aria-label="Oda lobisi">
@@ -86,6 +111,44 @@ export function LobbyScreen({ state, onSetChassis, onToggleReady, onStart, onCop
                 </button>
               );
             })}
+          </div>
+        </fieldset>
+
+        <fieldset
+          className="room-settings"
+          disabled={!selfPlayer || !isHost || anyPending}
+          aria-busy={state.pendingAction === 'settings'}
+        >
+          <legend>Oda Ayarları</legend>
+          <div className="room-settings__controls">
+            <label className="room-settings__field">
+              <span>Maç süresi</span>
+              <select
+                className="focus-ring"
+                value={room.settings.durationMs}
+                onChange={(event) => updateDuration(Number(event.currentTarget.value) as MatchDurationMs)}
+              >
+                {MATCH_DURATION_OPTIONS.map((durationMs) => (
+                  <option key={durationMs} value={durationMs}>
+                    {durationMs === 90_000 ? '90 sn' : durationMs === 120_000 ? '2 dk' : '3 dk'}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="room-settings__field">
+              <span>Kazanma hedefi</span>
+              <select
+                className="focus-ring"
+                value={room.settings.knockoutTarget}
+                onChange={(event) => updateKnockoutTarget(Number(event.currentTarget.value) as KnockoutTarget)}
+              >
+                {KNOCKOUT_TARGET_OPTIONS.map((knockoutTarget) => (
+                  <option key={knockoutTarget} value={knockoutTarget}>
+                    {knockoutTarget} knockout
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         </fieldset>
 

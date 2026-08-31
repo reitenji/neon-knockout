@@ -54,7 +54,7 @@ export function App({ store, gameFactory }: AppProps) {
 
   return (
     <div className="app-shell">
-      <TopBar state={state} onToggleSound={store.actions.toggleSound} />
+      <TopBar state={state} onToggleSound={store.actions.toggleSound} onLeaveRoom={store.actions.leaveRoom} />
 
       <main className="app-main">
         {state.screen === 'LANDING' ? (
@@ -66,6 +66,7 @@ export function App({ store, gameFactory }: AppProps) {
             state={state}
             onSetChassis={store.actions.setChassis}
             onToggleReady={store.actions.setReady}
+            onSetRoomSettings={store.actions.setRoomSettings}
             onStart={store.actions.startMatch}
             onCopyRoomCode={store.actions.copyRoomCode}
           />

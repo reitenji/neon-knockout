@@ -3,10 +3,14 @@ import type { ClientState } from '../state/gameStore.js';
 type TopBarProps = Readonly<{
   state: ClientState;
   onToggleSound: () => void;
+  onLeaveRoom: () => Promise<void>;
 }>;
 
-export function TopBar({ state, onToggleSound }: TopBarProps) {
+export function TopBar({ state, onToggleSound, onLeaveRoom }: TopBarProps) {
   const connected = state.connectionState === 'connected';
+  const canLeaveRoom = state.screen !== 'LANDING' && state.room !== null && state.session !== null;
+  const leavePending = state.pendingAction === 'leave-room';
+  const leaveError = state.errorAction === 'leave-room' ? state.lastError : null;
 
   return (
     <header className="top-bar">
@@ -24,6 +28,17 @@ export function TopBar({ state, onToggleSound }: TopBarProps) {
       </span>
 
       <span className="top-bar__controls">
+        {canLeaveRoom ? (
+          <button
+            className="chrome-button top-bar__leave focus-ring"
+            type="button"
+            disabled={state.pendingAction !== null}
+            aria-busy={leavePending}
+            onClick={() => void onLeaveRoom()}
+          >
+            Odadan Çık
+          </button>
+        ) : null}
         <span className={`connection-state ${connected ? 'is-connected' : 'is-connecting'}`} role="status">
           <span className="status-light" aria-hidden="true" />
           {connected ? 'Bağlı' : 'Bağlantı kuruluyor'}
@@ -38,6 +53,8 @@ export function TopBar({ state, onToggleSound }: TopBarProps) {
           {state.soundMuted ? 'Ses kapalı' : 'Ses açık'}
         </button>
       </span>
+
+      {leaveError ? <p className="top-bar__leave-error" role="alert">{leaveError.message}</p> : null}
     </header>
   );
 }

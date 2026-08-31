@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RoomPlayer, RoomState } from '../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import type { ClientState } from '../state/gameStore.js';
 import { LobbyScreen } from './LobbyScreen.js';
 
@@ -16,6 +17,7 @@ function player(overrides: Partial<RoomPlayer> = {}): RoomPlayer {
 function room(overrides: Partial<RoomState> = {}): RoomState {
   return {
     roomCode: 'AB2Z', phase: 'LOBBY', hostPlayerId: 'player-1', pauseRemainingMs: null, result: null,
+    settings: DEFAULT_ROOM_SETTINGS,
     players: [player(), player({ playerId: 'player-2', name: 'Linus', chassis: 'BASTION', accent: 1, ready: true })],
     ...overrides
   };
@@ -33,6 +35,7 @@ function renderLobby(clientState = state(), handlers: Partial<Parameters<typeof 
     state: clientState,
     onSetChassis: vi.fn(async () => undefined),
     onToggleReady: vi.fn(async () => undefined),
+    onSetRoomSettings: vi.fn(async () => undefined),
     onStart: vi.fn(async () => undefined),
     onCopyRoomCode: vi.fn(async () => undefined),
     ...handlers
@@ -82,6 +85,75 @@ describe('LobbyScreen', () => {
     cleanup();
     renderLobby(state({ room: { ...readyRoom, hostPlayerId: 'player-2' } }));
     expect(screen.queryByRole('button', { name: 'Maçı Başlat' })).toBeNull();
+  });
+
+  it('shows the authoritative room settings as enabled native selects for the host', () => {
+    renderLobby(state({
+      room: room({ settings: { durationMs: 120_000, knockoutTarget: 5 } })
+    }));
+
+    const duration = screen.getByRole('combobox', { name: 'Maç süresi' });
+    const target = screen.getByRole('combobox', { name: 'Kazanma hedefi' });
+    expect(duration).toBeEnabled();
+    expect(duration).toHaveValue('120000');
+    expect(Array.from((duration as HTMLSelectElement).options, (option) => option.text)).toEqual([
+      '90 sn', '2 dk', '3 dk'
+    ]);
+    expect(target).toBeEnabled();
+    expect(target).toHaveValue('5');
+    expect(Array.from((target as HTMLSelectElement).options, (option) => option.text)).toEqual([
+      '3 knockout', '5 knockout', '7 knockout', '10 knockout'
+    ]);
+  });
+
+  it('submits a complete authoritative settings pair for each host change', () => {
+    const onSetRoomSettings = vi.fn(async () => undefined);
+    renderLobby(state(), { onSetRoomSettings });
+    fireEvent.change(screen.getByLabelText('Maç süresi'), { target: { value: '90000' } });
+    expect(onSetRoomSettings).toHaveBeenCalledWith({ durationMs: 90_000, knockoutTarget: 5 });
+    fireEvent.change(screen.getByLabelText('Kazanma hedefi'), { target: { value: '7' } });
+    expect(onSetRoomSettings).toHaveBeenNthCalledWith(2, { durationMs: 120_000, knockoutTarget: 7 });
+  });
+
+  it('keeps the authoritative room settings visible but read-only for guests', () => {
+    renderLobby(state({
+      room: room({
+        hostPlayerId: 'player-2',
+        settings: { durationMs: 180_000, knockoutTarget: 10 }
+      })
+    }));
+
+    expect(screen.getByLabelText('Maç süresi')).toHaveValue('180000');
+    expect(screen.getByLabelText('Maç süresi')).toBeDisabled();
+    expect(screen.getByLabelText('Kazanma hedefi')).toHaveValue('10');
+    expect(screen.getByLabelText('Kazanma hedefi')).toBeDisabled();
+  });
+
+  it.each([
+    ['settings', 'true'],
+    ['ready', 'false']
+  ] as const)('disables room settings while %s is pending', (pendingAction, ariaBusy) => {
+    renderLobby(state({ pendingAction }));
+
+    expect(screen.getByRole('group', { name: 'Oda Ayarları' })).toHaveAttribute('aria-busy', ariaBusy);
+    expect(screen.getByLabelText('Maç süresi')).toBeDisabled();
+    expect(screen.getByLabelText('Kazanma hedefi')).toBeDisabled();
+  });
+
+  it('disables room settings when the session player is missing from the roster', () => {
+    renderLobby(state({ room: room({ players: [player({ playerId: 'player-2' })] }) }));
+
+    expect(screen.getByLabelText('Maç süresi')).toBeDisabled();
+    expect(screen.getByLabelText('Kazanma hedefi')).toBeDisabled();
+  });
+
+  it('shows a recoverable room settings failure in the lobby error surface', () => {
+    renderLobby(state({
+      lastError: { code: 'INVALID_SETTINGS', message: 'Oda ayarları geçersiz.', recoverable: true },
+      errorAction: 'settings'
+    }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('Oda ayarları geçersiz.');
   });
 
   it('shows copy feedback and adjacent chassis rejection without mutating the room code', () => {

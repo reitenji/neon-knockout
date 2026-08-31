@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { RoomPlayer } from '../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import type { ClientState } from '../state/gameStore.js';
 import { ResultScreen } from './ResultScreen.js';
 
@@ -19,6 +20,7 @@ function resultState(overrides: Partial<ClientState> = {}): ClientState {
     room: {
       roomCode: 'AB2Z', phase: 'RESULT', hostPlayerId: 'p-1', pauseRemainingMs: null,
       result: { winnerPlayerId: 'p-2', reason: 'TIME' },
+      settings: DEFAULT_ROOM_SETTINGS,
       players: [
         player(),
         player({ playerId: 'p-2', name: 'Zeynep', chassis: 'BASTION', accent: 1, stats: { knockouts: 4, falls: 2, landedHits: 9, completedAttacks: 12 } }),
