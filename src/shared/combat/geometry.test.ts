@@ -4,9 +4,16 @@ import { profileForAttack, sampleWeaponPoint } from './profiles.js';
 
 describe('shared combat geometry', () => {
   it('hits when a swept capsule crosses a hurt circle between 60 Hz samples', () => {
-    const capsule = buildAttackCapsule({ x: 0, y: 0 }, { x: 1, y: 0 }, profileForAttack('QUICK_1'), 0, 1 / 3);
+    const profile = profileForAttack('QUICK_1');
+    const capsule = buildAttackCapsule({ x: 0, y: 0 }, { x: 1, y: 0 }, profile, 0, (1000 / 60) / profile.activeMs);
+    const circle = {
+      center: { x: (capsule.from.x + capsule.to.x) / 2, y: (capsule.from.y + capsule.to.y) / 2 },
+      radius: 1,
+    };
 
-    expect(capsuleIntersectsCircle(capsule, { center: { x: 55, y: -24 }, radius: 1 })).toBe(true);
+    expect(capsuleIntersectsCircle({ from: capsule.from, to: capsule.from, radius: capsule.radius }, circle)).toBe(false);
+    expect(capsuleIntersectsCircle({ from: capsule.to, to: capsule.to, radius: capsule.radius }, circle)).toBe(false);
+    expect(capsuleIntersectsCircle(capsule, circle)).toBe(true);
   });
 
   it('does not hit a circle one epsilon outside combined radii', () => {
@@ -19,16 +26,22 @@ describe('shared combat geometry', () => {
   it('is rotationally symmetric across eight facings', () => {
     const origin = { x: 14, y: -9 };
     const profile = profileForAttack('QUICK_3');
-    const localDistance = Math.hypot(
-      sampleWeaponPoint({ x: 0, y: 0 }, { x: 1, y: 0 }, profile, 0.4).x,
-      sampleWeaponPoint({ x: 0, y: 0 }, { x: 1, y: 0 }, profile, 0.4).y,
-    );
+    const diagonal = Math.SQRT1_2;
+    const expected = [
+      { facing: { x: 1, y: 0 }, point: { x: 82.8, y: -27.4 } },
+      { facing: { x: diagonal, y: diagonal }, point: { x: 14 + 87.2 * diagonal, y: -9 + 50.4 * diagonal } },
+      { facing: { x: 0, y: 1 }, point: { x: 32.4, y: 59.8 } },
+      { facing: { x: -diagonal, y: diagonal }, point: { x: 14 - 50.4 * diagonal, y: -9 + 87.2 * diagonal } },
+      { facing: { x: -1, y: 0 }, point: { x: -54.8, y: 9.4 } },
+      { facing: { x: -diagonal, y: -diagonal }, point: { x: 14 - 87.2 * diagonal, y: -9 - 50.4 * diagonal } },
+      { facing: { x: 0, y: -1 }, point: { x: -4.4, y: -77.8 } },
+      { facing: { x: diagonal, y: -diagonal }, point: { x: 14 + 50.4 * diagonal, y: -9 - 87.2 * diagonal } },
+    ];
 
-    for (let index = 0; index < 8; index += 1) {
-      const angle = index * Math.PI / 4;
-      const facing = { x: Math.cos(angle), y: Math.sin(angle) };
-      const point = sampleWeaponPoint(origin, facing, profile, 0.4);
-      expect(Math.hypot(point.x - origin.x, point.y - origin.y)).toBeCloseTo(localDistance, 10);
+    for (const entry of expected) {
+      const point = sampleWeaponPoint(origin, entry.facing, profile, 0.4);
+      expect(point.x).toBeCloseTo(entry.point.x, 10);
+      expect(point.y).toBeCloseTo(entry.point.y, 10);
     }
   });
 
