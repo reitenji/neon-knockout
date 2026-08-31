@@ -11,6 +11,7 @@ export interface ArenaInputSource {
   attack(): HeldAttack;
   reset(): void;
   dispose?(): void;
+  onSuspend?(listener: () => void): () => void;
 }
 
 export type ArenaInputLifecycle = Readonly<{
@@ -20,6 +21,8 @@ export type ArenaInputLifecycle = Readonly<{
 }>;
 
 const INPUT_STEP_MS = 1_000 / GAME.maxInputFramesPerSecond;
+const SCENE_PAUSE_EVENT = 'pause';
+const SCENE_SLEEP_EVENT = 'sleep';
 const CAPTURED_KEY_CODES = [87, 65, 83, 68, 38, 40, 37, 39, 16, 32];
 const GAMEPLAY_CODE_TO_KEY = new Map([
   ['KeyW', 'moveUp'], ['KeyA', 'moveLeft'], ['KeyS', 'moveDown'], ['KeyD', 'moveRight'], ['Space', 'dash'],
@@ -51,8 +54,10 @@ export class ArenaInput {
   private readonly removeLifecycle: Array<() => void> = [];
 
   constructor(private readonly source: ArenaInputSource, lifecycle?: ArenaInputLifecycle) {
-    if (!lifecycle) return;
     const clear = (): void => this.clearHeld();
+    const removeSuspend = source.onSuspend?.(clear);
+    if (removeSuspend) this.removeLifecycle.push(removeSuspend);
+    if (!lifecycle) return;
     const keyDown = (event: Event): void => this.recordRawKeyDown((event as KeyboardEvent).code);
     const keyUp = (event: Event): void => this.recordRawKeyUp((event as KeyboardEvent).code);
     const clearWhenHidden = (): void => {
@@ -150,7 +155,7 @@ export class ArenaInput {
   }
 }
 
-type PhaserSceneInput = Pick<Phaser.Scene, 'input'>;
+type PhaserSceneInput = Pick<Phaser.Scene, 'input' | 'events'>;
 
 export function createPhaserInputSource(scene: PhaserSceneInput): ArenaInputSource {
   const keyboard = scene.input.keyboard;
@@ -161,6 +166,14 @@ export function createPhaserInputSource(scene: PhaserSceneInput): ArenaInputSour
     shift: 'SHIFT', dash: 'SPACE'
   }) as Record<string, Phaser.Input.Keyboard.Key>;
   const releaseCaptures = acquireCaptures(keyboard);
+  const onSuspend = (listener: () => void): (() => void) => {
+    scene.events.on(SCENE_PAUSE_EVENT, listener);
+    scene.events.on(SCENE_SLEEP_EVENT, listener);
+    return () => {
+      scene.events.off(SCENE_PAUSE_EVENT, listener);
+      scene.events.off(SCENE_SLEEP_EVENT, listener);
+    };
+  };
   return {
     movement: () => ({
       up: Boolean(keys.w?.isDown), down: Boolean(keys.s?.isDown),
@@ -171,7 +184,8 @@ export function createPhaserInputSource(scene: PhaserSceneInput): ArenaInputSour
       left: Boolean(keys.left?.isDown), right: Boolean(keys.right?.isDown), shift: Boolean(keys.shift?.isDown)
     }),
     reset: () => keyboard.resetKeys(),
-    dispose: releaseCaptures
+    dispose: releaseCaptures,
+    onSuspend
   };
 }
 

@@ -6,15 +6,19 @@ type Directions = 'up' | 'down' | 'left' | 'right';
 function source(): ArenaInputSource & {
   movementHeld: Record<Directions | 'dash', boolean>;
   attackHeld: Record<Directions | 'shift', boolean>;
+  suspend(): void;
 } {
   const movementHeld = { up: false, down: false, left: false, right: false, dash: false };
   const attackHeld = { up: false, down: false, left: false, right: false, shift: false };
+  const suspendListeners = new Set<() => void>();
   return {
     movementHeld, attackHeld,
     movement: () => ({ ...movementHeld }),
     attack: () => ({ ...attackHeld }),
     reset: vi.fn(),
-    dispose: vi.fn()
+    dispose: vi.fn(),
+    onSuspend(listener) { suspendListeners.add(listener); return () => suspendListeners.delete(listener); },
+    suspend() { for (const listener of suspendListeners) listener(); }
   };
 }
 
@@ -187,22 +191,54 @@ describe('ArenaInput', () => {
     expect(controls.dispose).toHaveBeenCalledOnce();
   });
 
+  it('gates input across scene suspension until raw keys release and unsubscribes on disposal', () => {
+    const controls = source();
+    const windowTarget = eventTarget();
+    const documentTarget = eventTarget() as EventTarget & { visibilityState: DocumentVisibilityState };
+    Object.defineProperty(documentTarget, 'visibilityState', { configurable: true, value: 'visible' });
+    const input = new ArenaInput(controls, { windowTarget, documentTarget, onShutdown: () => () => undefined });
+    controls.attackHeld.left = true;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'ArrowLeft' }));
+    controls.suspend();
+    controls.attackHeld.left = false;
+    controls.movementHeld.up = true;
+    windowTarget.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+    expect(input.sample(0, 0)).toMatchObject({ moveX: 0, moveY: 0, quick: false, heavy: false });
+    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'ArrowLeft' }));
+    expect(input.sample(1, 17)).toMatchObject({ moveX: 0, moveY: 0, quick: false, heavy: false });
+    controls.movementHeld.up = false;
+    windowTarget.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }));
+    input.sample(2, 34);
+    expect(controls.reset).toHaveBeenCalledOnce();
+    input.dispose();
+    controls.suspend();
+    expect(controls.reset).toHaveBeenCalledTimes(2);
+  });
+
   it('captures gameplay keys, samples WASD separately from arrow attacks, and releases only acquired captures', () => {
     const keys = Object.fromEntries(['w', 'a', 's', 'd', 'up', 'down', 'left', 'right', 'shift', 'dash'].map((key) => [key, { isDown: false }]));
     const captures = [65];
     const keyboard = {
-      manager: {}, addKeys: vi.fn(() => keys), getCaptures: vi.fn(() => [...captures]),
+      manager: {}, addKeys: vi.fn(() => keys), resetKeys: vi.fn(), getCaptures: vi.fn(() => [...captures]),
       addCapture: vi.fn((codes: number[]) => captures.push(...codes.filter((code) => !captures.includes(code)))),
       removeCapture: vi.fn((codes: number[]) => { for (const code of codes) captures.splice(captures.indexOf(code), 1); })
     };
-    const controls = createPhaserInputSource({ input: { keyboard } } as never);
+    const events = { on: vi.fn(), off: vi.fn() };
+    const controls = createPhaserInputSource({ input: { keyboard }, events } as never);
     keys.w.isDown = true;
     keys.right.isDown = true;
     expect(controls.movement()).toMatchObject({ up: true, right: false });
     expect(controls.attack()).toMatchObject({ right: true, up: false });
     expect(keyboard.addCapture).toHaveBeenCalledWith([87, 83, 68, 38, 40, 37, 39, 16, 32]);
-    controls.dispose?.();
+    const input = new ArenaInput(controls);
+    expect(events.on).toHaveBeenCalledTimes(2);
+    expect(events.on).toHaveBeenCalledWith('pause', expect.any(Function));
+    expect(events.on).toHaveBeenCalledWith('sleep', expect.any(Function));
+    input.dispose();
     expect(keyboard.removeCapture).toHaveBeenCalledWith([87, 83, 68, 38, 40, 37, 39, 16, 32]);
+    expect(events.off).toHaveBeenCalledTimes(2);
+    expect(events.off).toHaveBeenCalledWith('pause', expect.any(Function));
+    expect(events.off).toHaveBeenCalledWith('sleep', expect.any(Function));
     expect(captures).toEqual([65]);
   });
 
@@ -210,8 +246,8 @@ describe('ArenaInput', () => {
     const keys = Object.fromEntries(['w', 'a', 's', 'd', 'up', 'down', 'left', 'right', 'shift', 'dash'].map((key) => [key, { isDown: false }]));
     const captures: number[] = [];
     const keyboard = { manager: {}, addKeys: vi.fn(() => keys), getCaptures: () => [...captures], addCapture: vi.fn((codes: number[]) => captures.push(...codes)), removeCapture: vi.fn((codes: number[]) => { for (const code of codes) captures.splice(captures.indexOf(code), 1); }) };
-    const first = createPhaserInputSource({ input: { keyboard } } as never);
-    const second = createPhaserInputSource({ input: { keyboard } } as never);
+    const first = createPhaserInputSource({ input: { keyboard }, events: { on: vi.fn(), off: vi.fn() } } as never);
+    const second = createPhaserInputSource({ input: { keyboard }, events: { on: vi.fn(), off: vi.fn() } } as never);
     first.dispose?.();
     expect(captures).toHaveLength(10);
     expect(keyboard.removeCapture).not.toHaveBeenCalled();
