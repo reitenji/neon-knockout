@@ -13,12 +13,13 @@ export type E2eGame = Readonly<{
 }>;
 
 export const test = base.extend<{ game: E2eGame }>({
-  game: [async ({}, use) => {
+  game: [async ({ browser }, provideGame) => {
+    void browser;
     const server = createGameServer({ host: '127.0.0.1', port: 0, enableTestHarness: true });
     const { origin } = await server.start();
     if (!server.testHarness) throw new Error('E2E server requires its in-process test harness.');
     try {
-      await use({ origin, server, harness: server.testHarness });
+      await provideGame({ origin, server, harness: server.testHarness });
     } finally {
       await server.stop();
     }
