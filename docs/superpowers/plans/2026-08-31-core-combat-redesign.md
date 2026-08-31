@@ -16,7 +16,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 06:18Z) Recorded and received user approval for `docs/superpowers/specs/2026-08-31-core-combat-redesign-design.md`.
 - [x] (2026-08-31 06:28Z) Mapped client, server, presentation, and acceptance surfaces and wrote this self-contained ExecPlan.
 - [x] (2026-08-31 06:49Z) Task 0: repaired Vitest/Playwright suite separation; 39 Vitest files and 200 tests pass, with Playwright specs left to the Playwright runner (`df6fa6a`).
-- [ ] Task 1: add shared attack profiles and continuous geometry.
+- [x] (2026-08-31 06:59Z) Task 1: added immutable shared attack profiles and continuous swept-capsule geometry; 7 focused tests, typecheck, and targeted ESLint pass (`238fe4e`, `d61ed12`).
 - [ ] Task 2: replace pointer combat with keyboard-only input.
 - [ ] Task 3: extend authoritative state, snapshots, and events.
 - [ ] Task 4: replace sector hits with sweeps, clashes, and perfect dodge.
@@ -39,6 +39,8 @@ The result is visible by running `npm run lan`, opening the printed local addres
   Evidence: `npm test -- --maxWorkers=1` produced `2 failed | 39 passed` files and `200 passed` Vitest tests; both failures were “Playwright Test did not expect test() to be called here.” `npx vitest list --maxWorkers=1 --exclude 'tests/e2e/**'` exited zero, proving the missing runner exclusion is the boundary defect.
 - Observation: preserving `configDefaults.exclude` while adding the path-scoped `tests/e2e/**` exclusion restores a trustworthy baseline without moving or editing either Playwright spec.
   Evidence: commit `df6fa6a` passed 39 Vitest files / 200 tests, typecheck, targeted ESLint, and an independent spec-and-quality review with no findings.
+- Observation: geometry tests can appear continuous while still proving only endpoint overlap, and radial-distance invariance does not prove facing rotation.
+  Evidence: Task 1 review rejected the initial tests; fix `d61ed12` now uses exactly one 60 Hz slice, proves both endpoints miss before the capsule crosses, and asserts independently calculated x/y coordinates for all eight facings. The scoped re-review passed with no new findings.
 
 ## Decision Log
 
@@ -72,7 +74,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 
 ## Outcomes & Retrospective
 
-Implementation started with the test-runner boundary. Task 0 is accepted at `df6fa6a`: Vitest now excludes only `tests/e2e/**` in addition to its defaults, all 39 Vitest files / 200 tests pass, typecheck and targeted ESLint pass, and the isolated review found no specification or quality issues. The remaining implementation starts with shared combat profiles and continuous geometry in Task 1, followed by keyboard-only input in Task 2.
+Tasks 0 and 1 are accepted. The test-runner boundary at `df6fa6a` leaves Playwright specs to Playwright while 39 Vitest files / 200 tests pass. Shared combat profiles and swept-capsule geometry at `238fe4e` plus test hardening `d61ed12` define exact authored values, zero-length safety, continuous crossing, epsilon near misses, capsule clashes, and eight-direction rotation; 7 focused tests, typecheck, targeted ESLint, and the scoped re-review pass. The remaining implementation starts with keyboard-only input in Task 2.
 
 ## Context and Orientation
 
