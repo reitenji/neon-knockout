@@ -1,5 +1,5 @@
 import { ARENA, GAME } from '../../shared/constants.js';
-import { advanceKinematics, normalizeAxes, type KinematicState } from '../../shared/kinematics.js';
+import { advanceKinematics, normalizeAim, normalizeAxes, type KinematicState } from '../../shared/kinematics.js';
 import type { InputFrame, MatchAction, MatchPlayer, MatchSnapshot, Vec2 } from '../../shared/model.js';
 
 export const INTERPOLATION_DELAY_MS = 70;
@@ -26,6 +26,8 @@ type PredictionRuntime = KinematicState & {
   action: MatchAction;
   heavyChargeMs: number;
   heavyHeld: boolean;
+  heavyChargeLatched: boolean;
+  heavyAim: Vec2;
 };
 
 const NEUTRAL_ACTION_METADATA = {
@@ -116,10 +118,13 @@ function nearestOutwardNormal(point: Vec2, vertices: readonly Vec2[]): Vec2 {
 
 function runtimeOf(player: MatchPlayer): PredictionRuntime {
   const velocityDirection = normalize(player.velocity, player.facing);
+  const lockedHeavyFacing = player.action.kind === 'HEAVY' && player.action.lockedFacing
+    ? normalize(player.action.lockedFacing, player.facing)
+    : null;
   return {
     position: player.position,
     velocity: player.velocity,
-    facing: player.facing,
+    facing: lockedHeavyFacing ?? player.facing,
     dashRemainingMs: player.dashRemainingMs,
     dashCooldownRemainingMs: player.dashCooldownRemainingMs,
     dashDirection: player.dashRemainingMs > 0 ? velocityDirection : player.facing,
@@ -127,7 +132,9 @@ function runtimeOf(player: MatchPlayer): PredictionRuntime {
     respawnRemainingMs: player.respawnRemainingMs,
     action: player.action,
     heavyChargeMs: player.action.kind === null ? player.action.chargeMs : 0,
-    heavyHeld: player.action.kind === null && player.action.chargeMs > 0
+    heavyHeld: player.action.kind === null && player.action.chargeMs > 0,
+    heavyChargeLatched: player.action.charging,
+    heavyAim: lockedHeavyFacing ?? player.facing
   };
 }
 
@@ -168,9 +175,16 @@ function advanceRuntime(
   let commitsAction = false;
   let heavyChargeMs = runtime.heavyChargeMs;
   const heavyRelease = runtime.heavyHeld && !frame.heavy;
+  let heavyChargeLatched = runtime.heavyChargeLatched;
+  let heavyAim = runtime.heavyAim;
+
+  if (!committedAction && (frame.heavy || heavyRelease)) {
+    heavyAim = normalizeAim(frame.aimX, frame.aimY, heavyAim);
+  }
 
   if (frame.dash && canStartAction) {
     heavyChargeMs = 0;
+    heavyChargeLatched = false;
     if (dashCooldownRemainingMs <= 0) {
       dashDirectionValue = dashDirection(frame, runtime.facing);
       dashRemainingMs = GAME.dashDurationMs;
@@ -180,12 +194,15 @@ function advanceRuntime(
     }
   } else if (canStartAction && frame.heavy) {
     heavyChargeMs = Math.min(GAME.heavyMaxChargeMs, heavyChargeMs + elapsed);
+    heavyChargeLatched = heavyChargeMs >= GAME.heavyEnterChargeMs;
     actionStart = {
-      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs, ...NEUTRAL_ACTION_METADATA
+      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs,
+      ...NEUTRAL_ACTION_METADATA, charging: true
     };
-  } else if (canStartAction && heavyRelease && heavyChargeMs >= GAME.heavyEnterChargeMs) {
+  } else if (canStartAction && heavyRelease && heavyChargeLatched) {
     actionStart = {
-      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs, ...NEUTRAL_ACTION_METADATA
+      kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs,
+      ...NEUTRAL_ACTION_METADATA, lockedFacing: heavyAim
     };
     commitsAction = true;
   } else if (canStartAction && frame.quick && heavyChargeMs === 0) {
@@ -193,6 +210,7 @@ function advanceRuntime(
     commitsAction = true;
   } else if (!frame.heavy) {
     heavyChargeMs = 0;
+    heavyChargeLatched = false;
   }
 
   const vertices = platformVertices(platformProgress);
@@ -201,7 +219,12 @@ function advanceRuntime(
   const movementInput = hitstunRemainingMs > 0
     ? { ...frame, moveX: 0, moveY: 0 }
     : frame;
-  const next = advanceKinematics(runtime, movementInput, elapsed, {
+  const locksHeavyFacing = (runtime.action.kind === 'HEAVY' && !runtime.action.charging) ||
+    (commitsAction && actionStart?.kind === 'HEAVY' && !actionStart.charging);
+  const kinematicInput = locksHeavyFacing
+    ? { ...movementInput, aimX: heavyAim.x, aimY: heavyAim.y }
+    : movementInput;
+  const next = advanceKinematics(runtime, kinematicInput, elapsed, {
     dashVelocity: dashRemainingMs > 0
       ? { x: dashDirectionValue.x * GAME.dashSpeed, y: dashDirectionValue.y * GAME.dashSpeed }
       : null,
@@ -226,7 +249,9 @@ function advanceRuntime(
       respawnRemainingMs: runtime.respawnRemainingMs,
       action: commitsAction && actionStart ? actionStart : runtime.action,
       heavyChargeMs,
-      heavyHeld: frame.heavy
+      heavyHeld: frame.heavy,
+      heavyChargeLatched,
+      heavyAim
     },
     actionStart
   };
@@ -243,6 +268,7 @@ export class PredictionBuffer {
   private readonly pending: PendingInput[] = [];
   private runtime: PredictionRuntime | null = null;
   private actionStart: MatchAction | null = null;
+  private lastPresentedAttackId: number | null = null;
 
   constructor(readonly playerId: string) {}
 
@@ -285,7 +311,13 @@ export class PredictionBuffer {
     }
     const position = this.runtime ? blendPosition(this.runtime.position, replay.position) : replay.position;
     this.runtime = { ...replay, position };
-    this.actionStart = authoritativePlayer.action.kind === null ? replayedAction : null;
+    const authoritativeAttackId = authoritativePlayer.action.attackId;
+    if (authoritativeAttackId !== null && authoritativeAttackId !== this.lastPresentedAttackId) {
+      this.lastPresentedAttackId = authoritativeAttackId;
+      this.actionStart = authoritativePlayer.action;
+    } else {
+      this.actionStart = authoritativePlayer.action.kind === null ? replayedAction : null;
+    }
     return { position, velocity: replay.velocity, facing: replay.facing, actionStart: this.actionStart };
   }
 
@@ -297,6 +329,7 @@ export class PredictionBuffer {
     this.pending.length = 0;
     this.runtime = player ? runtimeOf(player) : null;
     this.actionStart = null;
+    this.lastPresentedAttackId = null;
   }
 }
 

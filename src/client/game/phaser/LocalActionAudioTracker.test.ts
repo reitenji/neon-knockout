@@ -14,12 +14,20 @@ const quick = (kind: 'QUICK_1' | 'QUICK_2' | 'QUICK_3' = 'QUICK_1'): MatchAction
   ...neutralMetadata
 });
 
-const heavy = (chargeMs: number): MatchAction => ({
+const heavy = (
+  chargeMs: number,
+  charging = true,
+  attackId: number | null = null
+): MatchAction => ({
   kind: 'HEAVY',
   phase: 'WINDUP',
   comboStep: 0,
   chargeMs,
-  ...neutralMetadata
+  ...neutralMetadata,
+  charging,
+  attackId,
+  profileId: attackId === null ? null : 'heavy-melee',
+  lockedFacing: attackId === null ? null : { x: 1, y: 0 }
 });
 
 const dash: MatchAction = {
@@ -48,10 +56,46 @@ describe('LocalActionAudioTracker', () => {
 
     expect(tracker.consume(heavy(16))).toEqual(['heavy-charge']);
     expect(tracker.consume(heavy(180))).toEqual([]);
-    expect(tracker.consume(heavy(900))).toEqual([]);
-    expect(tracker.consume(heavy(900))).toEqual([]);
-    expect(tracker.consume(null)).toEqual(['heavy-release']);
+    expect(tracker.consume(heavy(699))).toEqual([]);
+    expect(tracker.consume(heavy(699, false))).toEqual(['heavy-release']);
+    expect(tracker.consume(heavy(699, false))).toEqual([]);
     expect(tracker.consume(null)).toEqual([]);
+  });
+
+  it('binds one predicted cue to its authoritative attack ID without replaying it', () => {
+    const tracker = new LocalActionAudioTracker();
+
+    expect(tracker.consume(quick())).toEqual(['quick']);
+    expect(tracker.consume(null)).toEqual([]);
+    expect(tracker.consume({
+      ...quick(), attackId: 12, profileId: 'quick-1', lockedFacing: { x: 1, y: 0 }
+    })).toEqual([]);
+    expect(tracker.consume(null)).toEqual([]);
+    expect(tracker.consume({
+      ...quick(), phase: 'ACTIVE', attackId: 12, profileId: 'quick-1', lockedFacing: { x: 1, y: 0 }
+    })).toEqual([]);
+  });
+
+  it('emits a new cue for a new authoritative attack ID of the same kind', () => {
+    const tracker = new LocalActionAudioTracker();
+    const first = { ...quick(), attackId: 20, profileId: 'quick-1' as const, lockedFacing: { x: 1, y: 0 } };
+    const second = { ...first, attackId: 21 };
+
+    expect(tracker.consume(first)).toEqual(['quick']);
+    expect(tracker.consume(null)).toEqual([]);
+    expect(tracker.consume(first)).toEqual([]);
+    expect(tracker.consume(null)).toEqual([]);
+    expect(tracker.consume(second)).toEqual(['quick']);
+  });
+
+  it('does not replay charge or release when a predicted heavy receives its attack ID', () => {
+    const tracker = new LocalActionAudioTracker();
+
+    expect(tracker.consume(heavy(350))).toEqual(['heavy-charge']);
+    expect(tracker.consume(heavy(350, false))).toEqual(['heavy-release']);
+    expect(tracker.consume(heavy(350, false, 30))).toEqual([]);
+    expect(tracker.consume(null)).toEqual([]);
+    expect(tracker.consume(heavy(350, false, 30))).toEqual([]);
   });
 
   it('does not emit release for a tap or a charge cancelled into dash', () => {

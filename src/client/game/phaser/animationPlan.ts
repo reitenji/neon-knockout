@@ -1,3 +1,6 @@
+import { GAME } from '../../../shared/constants.js';
+import { profileForAttack } from '../../../shared/combat/profiles.js';
+
 export type FighterAnimationName =
   | 'idle'
   | 'move'
@@ -49,6 +52,11 @@ const NEUTRAL: FighterPose = Object.freeze({
   artAlpha: 1
 });
 
+const QUICK_1_PROFILE = profileForAttack('QUICK_1');
+const QUICK_2_PROFILE = profileForAttack('QUICK_2');
+const QUICK_3_PROFILE = profileForAttack('QUICK_3');
+const HEAVY_PROFILE = profileForAttack('HEAVY');
+
 function pose(overrides: Partial<FighterPose> = {}): FighterPose {
   return Object.freeze({ ...NEUTRAL, ...overrides });
 }
@@ -82,34 +90,34 @@ const REGULAR_PLANS: Readonly<Record<FighterAnimationName, FighterAnimationPlan>
     frame(315, { bodyX: 2.1, bodyY: -1.4, bodyRotation: 0.045, bodyScale: 1.02, leftArmAngle: -0.17, rightArmAngle: 0.2, coreScale: 1.06, trailIntensity: 0.34 }),
     frame(420, { bodyX: 0, bodyY: 0, bodyRotation: 0.02, leftArmAngle: -0.2, rightArmAngle: 0.17, trailIntensity: 0.18 })
   ]),
-  'quick-1': plan('quick-1', 230, false, 0, [
+  'quick-1': plan('quick-1', QUICK_1_PROFILE.windupMs + QUICK_1_PROFILE.activeMs + QUICK_1_PROFILE.recoveryMs, false, 0, [
     frame(0, { bodyX: -2, bodyRotation: -0.08, leftArmAngle: -0.56, rightArmAngle: 0.22, coreScale: 1.12 }),
-    frame(70, { bodyX: 4.5, bodyRotation: 0.12, bodyScale: 1.04, leftArmAngle: 0.72, rightArmAngle: -0.1, coreScale: 1.28, trailIntensity: 0.72 }),
-    frame(130, { bodyX: 2, bodyRotation: 0.06, leftArmAngle: 0.42, rightArmAngle: -0.04, trailIntensity: 0.34 }),
-    frame(230, { bodyX: -1.2, bodyRotation: -0.045, leftArmAngle: -0.32, rightArmAngle: 0.18, coreScale: 1.04 })
+    frame(QUICK_1_PROFILE.windupMs, { bodyX: 4.5, bodyRotation: 0.12, bodyScale: 1.04, leftArmAngle: 0.72, rightArmAngle: -0.1, coreScale: 1.28, trailIntensity: 0.72 }),
+    frame(QUICK_1_PROFILE.windupMs + QUICK_1_PROFILE.activeMs, { bodyX: 2, bodyRotation: 0.06, leftArmAngle: 0.42, rightArmAngle: -0.04, trailIntensity: 0.34 }),
+    frame(QUICK_1_PROFILE.windupMs + QUICK_1_PROFILE.activeMs + QUICK_1_PROFILE.recoveryMs, { bodyX: -1.2, bodyRotation: -0.045, leftArmAngle: -0.32, rightArmAngle: 0.18, coreScale: 1.04 })
   ]),
-  'quick-2': plan('quick-2', 250, false, 0, [
+  'quick-2': plan('quick-2', QUICK_2_PROFILE.windupMs + QUICK_2_PROFILE.activeMs + QUICK_2_PROFILE.recoveryMs, false, 0, [
     frame(0, { bodyX: -1.2, bodyRotation: -0.045, leftArmAngle: -0.3, rightArmAngle: 0.28, coreScale: 1.04 }),
-    frame(65, { bodyX: 4.8, bodyRotation: -0.13, bodyScale: 1.045, leftArmAngle: 0.08, rightArmAngle: -0.74, coreScale: 1.32, trailIntensity: 0.78 }),
-    frame(130, { bodyX: 2.2, bodyRotation: -0.07, leftArmAngle: 0.02, rightArmAngle: -0.4, trailIntensity: 0.36 }),
-    frame(250, { bodyX: -1.5, bodyRotation: 0.06, leftArmAngle: -0.38, rightArmAngle: 0.34, coreScale: 1.07 })
+    frame(QUICK_2_PROFILE.windupMs, { bodyX: 4.8, bodyRotation: -0.13, bodyScale: 1.045, leftArmAngle: 0.08, rightArmAngle: -0.74, coreScale: 1.32, trailIntensity: 0.78 }),
+    frame(QUICK_2_PROFILE.windupMs + QUICK_2_PROFILE.activeMs, { bodyX: 2.2, bodyRotation: -0.07, leftArmAngle: 0.02, rightArmAngle: -0.4, trailIntensity: 0.36 }),
+    frame(QUICK_2_PROFILE.windupMs + QUICK_2_PROFILE.activeMs + QUICK_2_PROFILE.recoveryMs, { bodyX: -1.5, bodyRotation: 0.06, leftArmAngle: -0.38, rightArmAngle: 0.34, coreScale: 1.07 })
   ]),
-  'quick-3': plan('quick-3', 390, false, 0, [
+  'quick-3': plan('quick-3', QUICK_3_PROFILE.windupMs + QUICK_3_PROFILE.activeMs + QUICK_3_PROFILE.recoveryMs, false, 0, [
     frame(0, { bodyX: -2.5, bodyY: 1, bodyRotation: 0.08, bodyScale: 0.97, leftArmAngle: -0.56, rightArmAngle: 0.5, coreScale: 1.2 }),
-    frame(115, { bodyX: 6.5, bodyY: -2, bodyRotation: 0.2, bodyScale: 1.08, leftArmAngle: 0.9, rightArmAngle: -0.82, coreScale: 1.46, coreAlpha: 1, trailIntensity: 1 }),
-    frame(185, { bodyX: 4, bodyRotation: -0.11, leftArmAngle: 0.58, rightArmAngle: -0.5, trailIntensity: 0.62 }),
-    frame(390, { bodyX: -1.4, bodyRotation: -0.05, leftArmAngle: -0.28, rightArmAngle: 0.26, coreScale: 1.08 })
+    frame(QUICK_3_PROFILE.windupMs, { bodyX: 6.5, bodyY: -2, bodyRotation: 0.2, bodyScale: 1.08, leftArmAngle: 0.9, rightArmAngle: -0.82, coreScale: 1.46, coreAlpha: 1, trailIntensity: 1 }),
+    frame(QUICK_3_PROFILE.windupMs + QUICK_3_PROFILE.activeMs, { bodyX: 4, bodyRotation: -0.11, leftArmAngle: 0.58, rightArmAngle: -0.5, trailIntensity: 0.62 }),
+    frame(QUICK_3_PROFILE.windupMs + QUICK_3_PROFILE.activeMs + QUICK_3_PROFILE.recoveryMs, { bodyX: -1.4, bodyRotation: -0.05, leftArmAngle: -0.28, rightArmAngle: 0.26, coreScale: 1.08 })
   ]),
-  'heavy-charge': plan('heavy-charge', 700, false, 0, [
+  'heavy-charge': plan('heavy-charge', GAME.heavyMaxChargeMs, false, 0, [
     frame(0, { bodyX: -2, bodyScale: 0.98, leftArmAngle: -0.34, rightArmAngle: 0.34, coreScale: 1.1, coreAlpha: 0.78 }),
     frame(350, { bodyX: -4, bodyY: 1.5, bodyRotation: -0.025, bodyScale: 0.94, leftArmAngle: -0.66, rightArmAngle: 0.64, coreScale: 1.55, coreAlpha: 1, trailIntensity: 0.14 }),
-    frame(700, { bodyX: -5, bodyY: -1, bodyRotation: 0.025, bodyScale: 0.92, leftArmAngle: -0.78, rightArmAngle: 0.76, coreScale: 1.9, coreAlpha: 1, trailIntensity: 0.22 })
+    frame(GAME.heavyMaxChargeMs, { bodyX: -5, bodyY: -1, bodyRotation: 0.025, bodyScale: 0.92, leftArmAngle: -0.78, rightArmAngle: 0.76, coreScale: 1.9, coreAlpha: 1, trailIntensity: 0.22 })
   ]),
-  'heavy-release': plan('heavy-release', 520, false, 0, [
+  'heavy-release': plan('heavy-release', HEAVY_PROFILE.windupMs + HEAVY_PROFILE.activeMs + HEAVY_PROFILE.recoveryMs, false, 0, [
     frame(0, { bodyX: -5, bodyScale: 0.92, leftArmAngle: -0.78, rightArmAngle: 0.76, coreScale: 1.9, coreAlpha: 1, trailIntensity: 0.18 }),
-    frame(70, { bodyX: 8, bodyY: -1, bodyRotation: 0.16, bodyScale: 1.12, leftArmAngle: 1.02, rightArmAngle: -1.02, coreScale: 1.25, trailIntensity: 1 }),
-    frame(160, { bodyX: 5, bodyRotation: -0.08, leftArmAngle: 0.72, rightArmAngle: -0.66, coreScale: 0.92, trailIntensity: 0.7 }),
-    frame(520, { bodyX: 0, bodyRotation: 0, leftArmAngle: -0.08, rightArmAngle: 0.08, coreScale: 1 })
+    frame(HEAVY_PROFILE.windupMs, { bodyX: 8, bodyY: -1, bodyRotation: 0.16, bodyScale: 1.12, leftArmAngle: 1.02, rightArmAngle: -1.02, coreScale: 1.25, trailIntensity: 1 }),
+    frame(HEAVY_PROFILE.windupMs + HEAVY_PROFILE.activeMs, { bodyX: 5, bodyRotation: -0.08, leftArmAngle: 0.72, rightArmAngle: -0.66, coreScale: 0.92, trailIntensity: 0.7 }),
+    frame(HEAVY_PROFILE.windupMs + HEAVY_PROFILE.activeMs + HEAVY_PROFILE.recoveryMs, { bodyX: 0, bodyRotation: 0, leftArmAngle: -0.08, rightArmAngle: 0.08, coreScale: 1 })
   ]),
   dash: plan('dash', 140, false, 0, [
     frame(0, { bodyX: -4, bodyRotation: -0.08, bodyScale: 0.94, leftArmAngle: -0.48, rightArmAngle: 0.48, trailIntensity: 0.42 }),
@@ -207,4 +215,18 @@ export function poseAt(plan: FighterAnimationPlan, elapsedMs: number): FighterPo
     return blendPoses(previous.pose, next.pose, (boundedElapsed - previous.atMs) / span);
   }
   return last.pose;
+}
+
+export function chargePoseAt(chargeMs: number, reducedMotion: boolean): FighterPose {
+  const plan = animationPlanFor('heavy-charge', reducedMotion);
+  return poseAt(plan, Math.max(0, Math.min(GAME.heavyMaxChargeMs, chargeMs)));
+}
+
+export function heavyReleasePlanFrom(
+  chargeMs: number,
+  reducedMotion: boolean
+): FighterAnimationPlan {
+  const release = animationPlanFor('heavy-release', reducedMotion);
+  const first = { atMs: 0, pose: chargePoseAt(chargeMs, reducedMotion) };
+  return { ...release, transitionMs: 45, keyframes: [first, ...release.keyframes.slice(1)] };
 }

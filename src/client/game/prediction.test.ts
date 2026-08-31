@@ -62,6 +62,11 @@ describe('PredictionBuffer', () => {
     expect(presentation).not.toHaveProperty('scores');
     expect(presentation).not.toHaveProperty('overload');
     expect(presentation).not.toHaveProperty('hit');
+    expect(presentation).not.toHaveProperty('pulse');
+    expect(presentation).not.toHaveProperty('pulses');
+    expect(presentation).not.toHaveProperty('clash');
+    expect(presentation).not.toHaveProperty('perfectDodge');
+    expect(presentation).not.toHaveProperty('events');
     expect(presentation).not.toHaveProperty('knockout');
   });
 
@@ -69,10 +74,46 @@ describe('PredictionBuffer', () => {
     const prediction = new PredictionBuffer('p-1');
     const presentation = prediction.predict(frame(0, { heavy: true }), player(), 100);
     expect(presentation.actionStart).toEqual({
-      ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 100
+      ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 100, charging: true
     });
     expect(presentation).not.toHaveProperty('scores');
     expect(presentation).not.toHaveProperty('hit');
+  });
+
+  it('steers a held charge through all eight aim directions', () => {
+    const directions = [
+      { input: [1, 0], expected: { x: 1, y: 0 } },
+      { input: [1, 1], expected: { x: Math.SQRT1_2, y: Math.SQRT1_2 } },
+      { input: [0, 1], expected: { x: 0, y: 1 } },
+      { input: [-1, 1], expected: { x: -Math.SQRT1_2, y: Math.SQRT1_2 } },
+      { input: [-1, 0], expected: { x: -1, y: 0 } },
+      { input: [-1, -1], expected: { x: -Math.SQRT1_2, y: -Math.SQRT1_2 } },
+      { input: [0, -1], expected: { x: 0, y: -1 } },
+      { input: [1, -1], expected: { x: Math.SQRT1_2, y: -Math.SQRT1_2 } }
+    ] as const;
+
+    for (const [index, direction] of directions.entries()) {
+      const prediction = new PredictionBuffer('p-1');
+      const presentation = prediction.predict(frame(index, {
+        heavy: true,
+        aimX: direction.input[0],
+        aimY: direction.input[1]
+      }), player(), 180);
+
+      expect(presentation.facing.x, `${direction.input[0]},${direction.input[1]} x`)
+        .toBeCloseTo(direction.expected.x, 10);
+      expect(presentation.facing.y, `${direction.input[0]},${direction.input[1]} y`)
+        .toBeCloseTo(direction.expected.y, 10);
+    }
+  });
+
+  it('retains the last valid charge aim when a later aim sample is neutral', () => {
+    const prediction = new PredictionBuffer('p-1');
+
+    prediction.predict(frame(0, { heavy: true, aimX: 0, aimY: -1 }), player(), 180);
+    const retained = prediction.predict(frame(1, { heavy: true, aimX: 0, aimY: 0 }), player(), 16);
+
+    expect(retained.facing).toEqual({ x: 0, y: -1 });
   });
 
   it('keeps a predicted quick committed so a following dash is not predicted', () => {
@@ -108,7 +149,7 @@ describe('PredictionBuffer', () => {
 
     expect(dash.actionStart?.kind).toBe('DASH');
     expect(restartedCharge.actionStart).toEqual({
-      ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 140
+      ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 140, charging: true
     });
   });
 
@@ -122,10 +163,59 @@ describe('PredictionBuffer', () => {
     const afterRelease = prediction.predict(frame(3, { dash: true }), canonical, 16);
 
     expect(release.actionStart).toEqual({
-      ...idleAction, kind: 'HEAVY', phase: 'WINDUP', chargeMs: 180
+      ...idleAction,
+      kind: 'HEAVY',
+      phase: 'WINDUP',
+      chargeMs: 180,
+      lockedFacing: { x: 1, y: 0 }
     });
     expect(afterRelease.actionStart).toBeNull();
     expect(afterRelease.velocity.x).not.toBe(760);
+  });
+
+  it('locks release facing to the last valid charge aim while later input turns elsewhere', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+
+    prediction.predict(frame(0, { heavy: true, aimX: 0, aimY: -1 }), canonical, 180);
+    const release = prediction.predict(frame(1, { aimX: 0, aimY: 0 }), canonical, 16);
+    const afterRelease = prediction.predict(frame(2, { aimX: -1, aimY: 0 }), canonical, 16);
+
+    expect(release.facing).toEqual({ x: 0, y: -1 });
+    expect(release.actionStart?.lockedFacing).toEqual({ x: 0, y: -1 });
+    expect(afterRelease.facing).toEqual({ x: 0, y: -1 });
+    expect(afterRelease.actionStart).toBeNull();
+  });
+
+  it('cancels an early release without latching an attack or release facing', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+
+    prediction.predict(frame(0, { heavy: true, aimX: 0, aimY: -1 }), canonical, 179);
+    const cancelled = prediction.predict(frame(1, { aimX: 1, aimY: 0 }), canonical, 16);
+    const quick = prediction.predict(frame(2, { quick: true, aimX: 1, aimY: 0 }), canonical, 16);
+
+    expect(cancelled.actionStart).toBeNull();
+    expect(cancelled.facing).toEqual({ x: 1, y: 0 });
+    expect(quick.actionStart?.kind).toBe('QUICK_1');
+  });
+
+  it('presents one authoritative attack ID once across unchanged reconciliation snapshots', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const committed = player({
+      action: {
+        ...idleAction,
+        kind: 'QUICK_1',
+        phase: 'WINDUP',
+        comboStep: 1,
+        attackId: 41,
+        profileId: 'quick-1',
+        lockedFacing: { x: 1, y: 0 }
+      }
+    });
+
+    expect(prediction.reconcile(committed, 16).actionStart?.attackId).toBe(41);
+    expect(prediction.reconcile(committed, 16).actionStart).toBeNull();
   });
 
   it('does not predict dash or attack starts while canonical state forbids acting', () => {

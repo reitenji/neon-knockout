@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { GAME } from '../../../shared/constants.js';
 import type { MatchAction, MatchPlayer } from '../../../shared/model.js';
 import { AnimationDirector, type FighterAnimationTarget } from './AnimationDirector.js';
-import type { FighterAnimationName, FighterPose } from './animationPlan.js';
+import { chargePoseAt, type FighterAnimationName, type FighterPose } from './animationPlan.js';
 
 const idleAction: MatchAction = {
   kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
@@ -79,6 +79,75 @@ describe('AnimationDirector', () => {
 
     expect(state).toBe('quick-1');
     expect(target.states).toEqual(['idle', 'quick-1']);
+  });
+
+  it('samples authoritative charge poses from chargeMs instead of elapsed wall time', () => {
+    const director = new AnimationDirector(false);
+    const target = new RecordingTarget();
+
+    expect(director.apply(player({
+      action: action({ charging: true, chargeMs: 180 })
+    }), target, 1_000)).toBe('heavy-charge');
+    expect(target.poses.at(-1)).toEqual(chargePoseAt(180, false));
+
+    expect(director.apply(player({
+      action: action({ charging: true, chargeMs: 350 })
+    }), target, 9_000)).toBe('heavy-charge');
+    expect(target.poses.at(-1)).toEqual(chargePoseAt(350, false));
+  });
+
+  it('starts a committed heavy release from its preserved partial-charge pose', () => {
+    const director = new AnimationDirector(false);
+    const target = new RecordingTarget();
+    const release = player({
+      action: action({
+        kind: 'HEAVY',
+        phase: 'WINDUP',
+        chargeMs: 350,
+        attackId: 7,
+        profileId: 'heavy-melee',
+        lockedFacing: { x: 0, y: -1 }
+      })
+    });
+
+    expect(director.apply(release, target, 500)).toBe('heavy-release');
+    expect(target.poses.at(-1)).toEqual(chargePoseAt(350, false));
+  });
+
+  it('keeps a predicted release continuous while the latest server snapshot still shows charging', () => {
+    const director = new AnimationDirector(false);
+    const target = new RecordingTarget();
+    const charging = player({ action: action({ charging: true, chargeMs: 350 }) });
+
+    expect(director.apply(
+      charging,
+      target,
+      0,
+      action({ kind: 'HEAVY', phase: 'WINDUP', chargeMs: 350, lockedFacing: { x: 0, y: -1 } })
+    )).toBe('heavy-release');
+    expect(director.apply(charging, target, 16)).toBe('heavy-release');
+  });
+
+  it('does not restart one authoritative attack when its phase snapshot changes', () => {
+    const director = new AnimationDirector(false);
+    const target = new RecordingTarget();
+    const windup = player({
+      action: action({
+        kind: 'HEAVY', phase: 'WINDUP', chargeMs: 350, attackId: 9,
+        profileId: 'heavy-melee', lockedFacing: { x: 1, y: 0 }
+      })
+    });
+    const active = player({
+      action: action({
+        kind: 'HEAVY', phase: 'ACTIVE', chargeMs: 350, attackId: 9,
+        profileId: 'heavy-melee', lockedFacing: { x: 1, y: 0 }, activeProgress: 0.5
+      })
+    });
+
+    director.apply(windup, target, 0);
+    director.apply(active, target, 100);
+
+    expect(target.poses.at(-1)?.bodyX).toBeGreaterThan(6);
   });
 
   it('returns from knockout to an authored respawn and then control within 600ms', () => {

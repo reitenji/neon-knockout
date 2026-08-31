@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { GAME } from '../../../shared/constants.js';
+import { profileForAttack } from '../../../shared/combat/profiles.js';
 import {
   animationPlanFor,
+  chargePoseAt,
+  heavyReleasePlanFrom,
   poseAt,
   type FighterAnimationName
 } from './animationPlan.js';
@@ -41,6 +44,31 @@ describe('animationPlanFor', () => {
 
     expect(knockout.durationMs + respawn.durationMs).toBe(GAME.knockoutToControlMs);
     expect(animationPlanFor('reconnect', false).durationMs).toBe(GAME.reconnectWarpMs);
+  });
+
+  it.each([180, 350, 699])('starts a %ims heavy release at the exact sampled charge pose', (chargeMs) => {
+    const release = heavyReleasePlanFrom(chargeMs, false);
+
+    expect(release.transitionMs).toBe(45);
+    expect(poseAt(release, 0)).toEqual(chargePoseAt(chargeMs, false));
+  });
+
+  it('derives quick and heavy windup, active, recovery timing from shared profiles', () => {
+    const attacks = [
+      ['QUICK_1', 'quick-1'],
+      ['QUICK_2', 'quick-2'],
+      ['QUICK_3', 'quick-3'],
+      ['HEAVY', 'heavy-release']
+    ] as const;
+
+    for (const [attack, animation] of attacks) {
+      const profile = profileForAttack(attack);
+      const plan = animationPlanFor(animation, false);
+
+      expect(plan.durationMs, attack).toBe(profile.windupMs + profile.activeMs + profile.recoveryMs);
+      expect(plan.keyframes[1]?.atMs, `${attack} active start`).toBe(profile.windupMs);
+      expect(plan.keyframes[2]?.atMs, `${attack} recovery start`).toBe(profile.windupMs + profile.activeMs);
+    }
   });
 
   it('removes looping bob and shortens trails when reduced motion is enabled', () => {
