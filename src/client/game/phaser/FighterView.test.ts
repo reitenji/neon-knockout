@@ -208,6 +208,67 @@ describe('FighterView real graphics presentation', () => {
     expect(localCommands.map((command) => command.kind)).toEqual(remoteCommands.map((command) => command.kind));
   });
 
+  it('renders the distinct local-predicted and remote-authoritative charge state shapes selected by the scene', () => {
+    const localHarness = sceneHarness();
+    const remoteHarness = sceneHarness();
+    const staleLocalPlayer = player({
+      facing: { x: 1, y: 0 },
+      action: { ...idleAction, chargeMs: 175, charging: true }
+    });
+    const predictedLocalAction = { ...idleAction, chargeMs: 525, charging: true } satisfies MatchAction;
+    const remotePlayer = player({
+      playerId: 'p2',
+      facing: { x: -1, y: 0 },
+      action: { ...idleAction, chargeMs: 700, charging: true }
+    });
+    const localView = createFighterView(localHarness.scene as never, staleLocalPlayer, true, { reducedMotion: true });
+    const remoteView = createFighterView(remoteHarness.scene as never, remotePlayer, false, { reducedMotion: true });
+
+    localView.apply(
+      staleLocalPlayer,
+      { x: 312, y: 348 },
+      { x: 0, y: -1 },
+      predictedLocalAction,
+      null,
+      { facing: { x: 0, y: -1 }, progress: 0.75, pulseReady: false }
+    );
+    remoteView.apply(
+      remotePlayer,
+      remotePlayer.position,
+      remotePlayer.facing,
+      null,
+      null,
+      { facing: { x: -1, y: 0 }, progress: 1, pulseReady: true }
+    );
+
+    const localCommands = frameCommands(localHarness.graphics[5]!);
+    const remoteCommands = frameCommands(remoteHarness.graphics[5]!);
+    const localSelected = localCommands.find(
+      (command) => command.kind === 'line' && command.style.width === 3.4
+    );
+    const remoteSelected = remoteCommands.find(
+      (command) => command.kind === 'line' && command.style.width === 2.6
+    );
+    expect(localSelected).toEqual(expect.objectContaining({
+      from: { x: expect.closeTo(0), y: -42 },
+      to: { x: expect.closeTo(0), y: -56 }
+    }));
+    expect(remoteSelected).toEqual(expect.objectContaining({
+      from: { x: -40, y: expect.closeTo(0) },
+      to: { x: -53, y: expect.closeTo(0) }
+    }));
+    expect(localCommands.find((command) => command.kind === 'arc')).toEqual(expect.objectContaining({
+      radius: 59, end: Math.PI
+    }));
+    expect(remoteCommands.find((command) => command.kind === 'arc')).toEqual(expect.objectContaining({
+      radius: 56, end: Math.PI * 1.5
+    }));
+    expect(localCommands.some((command) => command.kind === 'circle')).toBe(false);
+    expect(remoteCommands.find((command) => command.kind === 'circle')).toEqual(expect.objectContaining({
+      x: -56, y: expect.closeTo(0), radius: 3
+    }));
+  });
+
   it('keeps a released charge indicator on its locked facing instead of the current presentation facing', () => {
     const harness = sceneHarness();
     const currentPlayer = player({

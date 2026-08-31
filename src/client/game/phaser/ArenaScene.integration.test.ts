@@ -293,6 +293,46 @@ describe('ArenaScene live presentation integration', () => {
     );
   });
 
+  it('selects predicted local charge and facing while remote charge remains authoritative', () => {
+    const bridge = new Bridge();
+    const staleLocalAction = { ...idleAction, chargeMs: 175, charging: true } as const;
+    const remoteAction = { ...idleAction, chargeMs: 700, charging: true } as const;
+    const predictedLocalAction = { ...idleAction, chargeMs: 525, charging: true } as const;
+    bridge.current = snapshot({
+      players: [
+        player({ facing: { x: 1, y: 0 }, action: staleLocalAction }),
+        player({ playerId: 'p2', facing: { x: -1, y: 0 }, action: remoteAction })
+      ]
+    });
+    probes.sessionPresentation.mockReturnValue({
+      position: { x: 312, y: 348 },
+      velocity: { x: 12, y: -8 },
+      facing: { x: 0, y: -1 },
+      actionStart: predictedLocalAction
+    });
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+
+    scene.create();
+    scene.update();
+
+    expect(probes.fighterApply).toHaveBeenCalledWith(
+      expect.objectContaining({ playerId: 'p1', action: staleLocalAction }),
+      { x: 312, y: 348 },
+      { x: 0, y: -1 },
+      predictedLocalAction,
+      null,
+      { facing: { x: 0, y: -1 }, progress: 0.75, pulseReady: false }
+    );
+    expect(probes.fighterApply).toHaveBeenCalledWith(
+      expect.objectContaining({ playerId: 'p2', action: remoteAction }),
+      expect.any(Object),
+      { x: -1, y: 0 },
+      null,
+      null,
+      { facing: { x: -1, y: 0 }, progress: 1, pulseReady: true }
+    );
+  });
+
   it('reconciles authoritative pulse views by projectile ID without duplicates and clears them on removal or result', () => {
     const bridge = new Bridge();
     const authoritativePulse = {
