@@ -22,7 +22,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 07:51Z) Task 3: exposed required authoritative action/pulse state and event contracts with deterministic serialization; 37 final focused tests, full lint, and typecheck pass (`420df3a`).
 - [x] (2026-08-31 08:23Z) Task 4: replaced sector hits with shared swept capsules, deterministic clash priorities, and one-per-dash perfect dodge; 63 focused and 239 full tests pass (`4fdb113`, `746655d`, `355cb62`).
 - [x] (2026-08-31 08:50Z) Task 5: added authoritative Neon Pulse, continuous final-segment collision, deterministic cleanup, and final match pacing; 68 focused and 257 full tests pass (`67a2c21`, `3587a91`).
-- [ ] Task 6: make prediction and charge/release animation continuous.
+- [x] (2026-08-31 09:18Z) Task 6: made charge steering, partial release, reconciliation, and local audio continuous without predicting server outcomes; 46 focused and 278 full tests pass (`80fbe07`, `f3d417f`).
 - [ ] Task 7: render shared sweeps, pulses, charge direction, FX, audio, and HUD feedback.
 - [ ] Task 8: complete integration, E2E, load, performance, live LAN, review, merge, and public GitHub proof.
 
@@ -60,6 +60,8 @@ The result is visible by running `npm run lan`, opening the printed local addres
   Evidence: full regression stays red only at the exported-constant assertion in `protocol.test.ts` and the knockout-plus-respawn animation plan that still totals 700 ms. Task 5 now owns only those pacing alignments; Task 6 retains attack-animation ownership.
 - Observation: deleting a Pulse as soon as its remaining lifetime reaches zero drops a valid collision on its final clamped movement segment.
   Evidence: Task 5 review reproduced a 10 ms Pulse moving from x=600 to x=609 into a target without emitting a hit. Fix `3587a91` retains the zero-lifetime capsule through clash/contact resolution, then purges it; final-segment hit and unconsumed-expiry regressions pass and the scoped re-review is clean.
+- Observation: animation continuity also requires a distinct provisional action identity; matching only action kind cannot distinguish two same-kind attacks before acknowledgement.
+  Evidence: Task 6 review reproduced sub-threshold charge commitment, quick→idle→quick replay through one stale snapshot, and suppression of the second unacknowledged QUICK_1 cue. Fix `f3d417f` derives the charge latch from the 180 ms threshold, preserves provisional attacks through stale ambient states, and assigns monotonic prediction tokens that bind ordered acknowledgements without replay; scoped re-review passed all three findings.
 
 ## Decision Log
 
@@ -96,7 +98,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 
 ## Outcomes & Retrospective
 
-Tasks 0–5 and Prerequisite L are accepted. Runner and lint boundaries are clean; keyboard-only input is lifecycle-safe; the authoritative state/event contract is deterministic. Melee now uses the shared swept weapon path instead of center sectors, resolves attack clashes before hurtboxes, applies exact heavy/quick priorities and recoil, preserves terminal active slices, rejects stale shapes, and grants one 550 ms perfect-dodge refund per dash. Full-charge heavies now emit one short Neon Pulse with continuous final-segment collision and deterministic end-of-tick cleanup. Match pacing is 120 seconds or five knockouts, with 78/75/40-second contraction milestones, 600 ms control return, and next-KO sudden death after a regulation tie. Task 5 finishes with 68 focused tests, 257 full tests, typecheck, lint, and clean scoped re-review.
+Tasks 0–6 and Prerequisite L are accepted. Runner and lint boundaries are clean; keyboard-only input is lifecycle-safe; the authoritative state/event contract is deterministic. Melee now uses the shared swept weapon path instead of center sectors, resolves attack clashes before hurtboxes, applies exact heavy/quick priorities and recoil, preserves terminal active slices, rejects stale shapes, and grants one 550 ms perfect-dodge refund per dash. Full-charge heavies emit one short Neon Pulse with continuous final-segment collision and deterministic end-of-tick cleanup. Match pacing is 120 seconds or five knockouts, with 78/75/40-second contraction milestones, 600 ms control return, and next-KO sudden death after a regulation tie. Charge steering is immediate, 180/350/699 ms releases begin from their exact visible charge poses, release facing locks, and repeated reconciliation snapshots cannot restart one animation or local cue. Task 6 finishes with 46 focused tests, 278 full tests, typecheck, lint, and clean scoped re-review.
 
 ## Context and Orientation
 
