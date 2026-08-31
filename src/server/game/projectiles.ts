@@ -69,7 +69,6 @@ export function advancePulses(state: MatchState, stepMs: number): void {
       y: pulse.position.y + pulse.velocity.y * travelMs / 1_000
     };
     pulse.remainingMs = Math.max(0, pulse.remainingMs - elapsedMs);
-    if (pulse.remainingMs === 0) removePulse(state, projectileId);
   }
 }
 

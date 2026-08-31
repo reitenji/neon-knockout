@@ -304,6 +304,45 @@ describe('authoritative match simulation', () => {
     expect(state.pulses).toEqual({});
   });
 
+  it('resolves one contact on the final lifetime-clamped pulse segment before expiry cleanup', () => {
+    const state = regulationState();
+    state.players.p1.position = { x: 300, y: 360 };
+    state.players.p2.position = { x: 650, y: 360 };
+    const attack = activeAttack(state, 'p1', 1, 'HEAVY', { x: 1, y: 0 });
+    const pulse = spawnNeonPulse(state, state.players.p1, attack)!.pulse;
+    pulse.position = { x: 600, y: 360 };
+    pulse.previousPosition = { x: 600, y: 360 };
+    pulse.velocity = { x: 900, y: 0 };
+    pulse.remainingMs = 10;
+
+    const expiryEvents = stepMatch(state, new Map(), 10);
+    const nextEvents = stepMatch(state, new Map(), 10);
+
+    expect(expiryEvents).toEqual([expect.objectContaining({
+      type: 'HIT', attackerId: 'p1', targetId: 'p2', attack: 'NEON_PULSE'
+    })]);
+    expect(nextEvents.some((event) => event.type === 'HIT')).toBe(false);
+    expect(state.players.p2.overload).toBe(14);
+    expect(state.pulses).toEqual({});
+  });
+
+  it('purges an expired pulse after its final segment finds no contact', () => {
+    const state = regulationState();
+    state.players.p1.position = { x: 300, y: 360 };
+    state.players.p2.position = { x: 900, y: 360 };
+    const attack = activeAttack(state, 'p1', 1, 'HEAVY', { x: 1, y: 0 });
+    const pulse = spawnNeonPulse(state, state.players.p1, attack)!.pulse;
+    pulse.position = { x: 600, y: 360 };
+    pulse.previousPosition = { x: 600, y: 360 };
+    pulse.velocity = { x: 900, y: 0 };
+    pulse.remainingMs = 10;
+
+    expect(stepMatch(state, new Map(), 10)).toEqual([]);
+    expect(pulse.position).toEqual({ x: 609, y: 360 });
+    expect(pulse.remainingMs).toBe(0);
+    expect(state.pulses).toEqual({});
+  });
+
   it('emits CLASH, PULSE_BREAK, PERFECT_DODGE, HIT, KNOCKOUT, RESULT in phase order with stable IDs', () => {
     const playerIds = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9', 'p10'];
     const state = createMatchState(playerIds.map((playerId, index) => ({

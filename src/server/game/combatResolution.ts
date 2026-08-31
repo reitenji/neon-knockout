@@ -430,6 +430,10 @@ export function resolveSurvivingContacts(
     );
   }
 
+  for (const pulse of Object.values(state.pulses)) {
+    if (pulse.remainingMs === 0) removePulse(state, pulse.projectileId);
+  }
+
   return [
     ...dodges.map((event) => ({ ...event, eventId: state.nextEventId++, tick: state.tick })),
     ...hits.map((event) => ({ ...event, eventId: state.nextEventId++, tick: state.tick }))

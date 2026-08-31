@@ -9,6 +9,7 @@ import {
   removePulsesOwnedBy,
   spawnNeonPulse
 } from './projectiles.js';
+import { resolveSurvivingContacts } from './combatResolution.js';
 import { createMatchState, type AttackRuntime, type MatchState } from './state.js';
 
 function state(): MatchState {
@@ -77,7 +78,7 @@ describe('authoritative Neon Pulse lifecycle', () => {
     expect(Object.keys(match.pulses)).toEqual(['1', '2']);
   });
 
-  it('travels continuously at 900 units per second and expires at 400 ms after at most 360 units', () => {
+  it('travels at most 360 units and retains the final capsule until post-contact expiry cleanup', () => {
     const match = state();
     const pulse = spawnNeonPulse(match, match.players.p1, heavy(1))!.pulse;
 
@@ -89,6 +90,9 @@ describe('authoritative Neon Pulse lifecycle', () => {
     advancePulses(match, 1_000);
     expect(pulse.position).toEqual({ x: 100, y: 634 });
     expect(pulse.remainingMs).toBe(0);
+    expect(match.pulses[1]).toBe(pulse);
+
+    expect(resolveSurvivingContacts(match, [])).toEqual([]);
     expect(match.pulses).toEqual({});
   });
 
