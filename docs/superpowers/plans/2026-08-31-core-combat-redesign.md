@@ -17,7 +17,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 06:28Z) Mapped client, server, presentation, and acceptance surfaces and wrote this self-contained ExecPlan.
 - [x] (2026-08-31 06:49Z) Task 0: repaired Vitest/Playwright suite separation; 39 Vitest files and 200 tests pass, with Playwright specs left to the Playwright runner (`df6fa6a`).
 - [x] (2026-08-31 06:59Z) Task 1: added immutable shared attack profiles and continuous swept-capsule geometry; 7 focused tests, typecheck, and targeted ESLint pass (`238fe4e`, `d61ed12`).
-- [ ] Task 2: replace pointer combat with keyboard-only input.
+- [x] (2026-08-31 07:34Z) Task 2: replaced pointer combat with keyboard-only input, physical release gating, and ownership-safe Phaser capture leases; 21 focused tests, typecheck, and targeted ESLint pass (`994cdb9`, `d68b2f5`, `9a4dbaa`, `e206f3e`).
 - [ ] Task 3: extend authoritative state, snapshots, and events.
 - [ ] Task 4: replace sector hits with sweeps, clashes, and perfect dodge.
 - [ ] Task 5: add Neon Pulse and align match pacing.
@@ -41,6 +41,8 @@ The result is visible by running `npm run lan`, opening the printed local addres
   Evidence: commit `df6fa6a` passed 39 Vitest files / 200 tests, typecheck, targeted ESLint, and an independent spec-and-quality review with no findings.
 - Observation: geometry tests can appear continuous while still proving only endpoint overlap, and radial-distance invariance does not prove facing rotation.
   Evidence: Task 1 review rejected the initial tests; fix `d61ed12` now uses exactly one 60 Hz slice, proves both endpoints miss before the capsule crosses, and asserts independently calculated x/y coordinates for all eight facings. The scoped re-review passed with no new findings.
+- Observation: Phaser resets `Key.isDown` on blur, pause, and sleep, and keyboard captures are global rather than scene-owned.
+  Evidence: Task 2 review reproduced ghost input after synthetic reset and cross-scene capture removal. Commits `9a4dbaa` and `e206f3e` add raw keyup release gating across browser and scene suspension plus manager-scoped capture leases that preserve pre-existing owners; the final review passed 21 focused tests with no findings.
 
 ## Decision Log
 
@@ -74,7 +76,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 
 ## Outcomes & Retrospective
 
-Tasks 0 and 1 are accepted. The test-runner boundary at `df6fa6a` leaves Playwright specs to Playwright while 39 Vitest files / 200 tests pass. Shared combat profiles and swept-capsule geometry at `238fe4e` plus test hardening `d61ed12` define exact authored values, zero-length safety, continuous crossing, epsilon near misses, capsule clashes, and eight-direction rotation; 7 focused tests, typecheck, targeted ESLint, and the scoped re-review pass. The remaining implementation starts with keyboard-only input in Task 2.
+Tasks 0–2 are accepted. The test-runner boundary leaves Playwright specs to Playwright while 39 Vitest files / 200 tests pass. Shared profiles and swept-capsule geometry define the exact authored values and continuous eight-direction contact math. Keyboard-only input now separates WASD movement from arrow attacks, supports steerable heavy charge and safe release, removes pointer gameplay, prevents held/repeated ghost input across disconnect and every browser/Phaser suspension path, and releases only its own global captures. Task 2 finishes with 21 focused tests, typecheck, targeted ESLint, and clean final review; Task 3 now freezes the authoritative runtime/snapshot/event contract.
 
 ## Context and Orientation
 
