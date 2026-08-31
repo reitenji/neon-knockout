@@ -3,6 +3,7 @@ import type { Ack, GameEvent, MatchSnapshot, RoomState } from './model.js';
 import * as protocol from './protocol.js';
 import type { ClientToServerEvents } from './protocol.js';
 import { ACCENTS, ARENA, CHASSIS, GAME } from './constants.js';
+import { DEFAULT_ROOM_SETTINGS } from './roomSettings.js';
 import { snapshotMatch } from '../server/game/simulation.js';
 import { createMatchState } from '../server/game/state.js';
 
@@ -159,6 +160,7 @@ describe('shared input boundary protocol', () => {
       hostPlayerId: 'p1',
       pauseRemainingMs: null,
       result: null,
+      settings: DEFAULT_ROOM_SETTINGS,
       players: [
         {
           playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0, ready: true, connected: true,
@@ -172,6 +174,7 @@ describe('shared input boundary protocol', () => {
       phase: 'REGULATION',
       remainingMs: GAME.regulationMs,
       platformProgress: 0,
+      settings: DEFAULT_ROOM_SETTINGS,
       scores: { p1: 1 },
       players: [
         {
@@ -201,7 +204,7 @@ describe('shared input boundary protocol', () => {
     const state = createMatchState([
       { playerId: 'p1', name: 'Ada', accent: 0, chassis: 'RIFT' },
       { playerId: 'p2', name: 'Linus', accent: 1, chassis: 'BASTION' }
-    ], 0);
+    ], 0, DEFAULT_ROOM_SETTINGS);
     state.players.p1.attack = {
       attackId: 17,
       kind: 'HEAVY',

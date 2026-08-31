@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   Ack, Chassis, GameEvent, InputFrame, MatchSnapshot, RoomPlayer, RoomState, ServerError, SessionWelcome
 } from '../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import type { GameClient, GameClientConnectionState, GameClientEvents } from '../network/GameClient.js';
 import { createArenaBridge, createGameStore } from './gameStore.js';
 
@@ -64,12 +65,14 @@ function player(overrides: Partial<RoomPlayer> = {}): RoomPlayer {
 function roomState(overrides: Partial<RoomState> = {}): RoomState {
   return {
     roomCode: 'AB2Z', phase: 'LOBBY', hostPlayerId: 'player-1', pauseRemainingMs: null, result: null,
+    settings: DEFAULT_ROOM_SETTINGS,
     players: [player()], ...overrides
   };
 }
 function matchSnapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
   return {
     tick: 12, phase: 'REGULATION', remainingMs: 115_000, platformProgress: 0,
+    settings: DEFAULT_ROOM_SETTINGS,
     scores: { 'player-1': 0 }, players: [], pulses: [], winnerPlayerId: null, resultReason: null, ...overrides
   };
 }

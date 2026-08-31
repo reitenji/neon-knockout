@@ -2,6 +2,7 @@ import '@testing-library/jest-dom/vitest';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MatchPlayer, MatchSnapshot } from '../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../game/GamePresentationBridge.js';
 import { PhaserArena } from '../game/PhaserArena.js';
 import { MatchHud } from './MatchHud.js';
@@ -49,6 +50,7 @@ function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
     phase: 'COUNTDOWN',
     remainingMs: 2_200,
     platformProgress: 0,
+    settings: DEFAULT_ROOM_SETTINGS,
     scores: { 'p-local': 2, 'p-rival': 4 },
     players: [local, rival],
     pulses: [],

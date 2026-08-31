@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GameEvent, MatchPlayer, MatchSnapshot, Vec2 } from '../../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../../shared/roomSettings.js';
 import { ImpactFx, type ImpactFxAdapter } from './ImpactFx.js';
 
 const idleAction = {
@@ -19,6 +20,7 @@ function player(playerId: string, name: string, position: Vec2): MatchPlayer {
 function snapshot(): MatchSnapshot {
   return {
     tick: 30, phase: 'REGULATION', remainingMs: 90_000, platformProgress: 0,
+    settings: DEFAULT_ROOM_SETTINGS,
     scores: { attacker: 2, target: 0 },
     players: [player('attacker', 'Ada', { x: 200, y: 360 }), player('target', 'Bora', { x: 300, y: 360 })],
     pulses: [],

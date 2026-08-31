@@ -1,6 +1,7 @@
 import { GAME } from '../../shared/constants.js';
 import { profileForAttack } from '../../shared/combat/profiles.js';
 import { normalizeAim, normalizeAxes } from '../../shared/kinematics.js';
+import { matchTimingFor } from '../../shared/roomSettings.js';
 import type { GameEvent, InputFrame, MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import { advanceCombatTimers, startActions } from './combat.js';
 import {
@@ -109,9 +110,10 @@ function updateContraction(state: MatchState): void {
     state.contraction = 1;
     return;
   }
+  const timing = matchTimingFor(state.settings.durationMs);
   state.contraction = clamp(
-    (GAME.contractionStartRemainingMs - state.remainingMs) /
-      (GAME.contractionStartRemainingMs - GAME.contractionMinimumRemainingMs),
+    (timing.contractionStartRemainingMs - state.remainingMs) /
+      (timing.contractionStartRemainingMs - timing.contractionMinimumRemainingMs),
     0,
     1
   );
@@ -220,7 +222,7 @@ function uniqueLeader(state: MatchState): string | null {
 function evaluateScoringResult(state: MatchState): readonly GameEvent[] {
   if (state.phase === 'FINISHED') return [];
   const targetWinner = Object.keys(state.scores)
-    .filter((playerId) => state.scores[playerId] >= GAME.targetScore)
+    .filter((playerId) => state.scores[playerId] >= state.settings.knockoutTarget)
     .sort((left, right) => state.scores[right] - state.scores[left] || compareStableIds(left, right))[0];
   if (targetWinner) return [finishMatch(state, targetWinner, 'TARGET_SCORE')];
   if (state.phase === 'SUDDEN_DEATH') {
@@ -329,6 +331,7 @@ export function snapshotMatch(state: MatchState): MatchSnapshot {
     phase: state.phase,
     remainingMs: phaseRemaining(state),
     platformProgress: state.contraction,
+    settings: { ...state.settings },
     scores: { ...state.scores },
     players: Object.keys(state.players)
       .filter((playerId) => state.players[playerId].connected)

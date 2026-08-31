@@ -1,4 +1,5 @@
 import type { AttackProfileId } from './combat/profiles.js';
+import type { RoomSettings } from './roomSettings.js';
 
 export const CHASSIS = ['RIFT', 'BASTION', 'PULSE', 'WRAITH'] as const;
 
@@ -57,6 +58,7 @@ export type RoomState = Readonly<{
   hostPlayerId: string;
   pauseRemainingMs: number | null;
   result: Readonly<{ winnerPlayerId: string | null; reason: MatchResultReason }> | null;
+  settings: RoomSettings;
   players: readonly RoomPlayer[];
 }>;
 
@@ -108,6 +110,7 @@ export type MatchSnapshot = Readonly<{
   phase: MatchPhase;
   remainingMs: number;
   platformProgress: number;
+  settings: RoomSettings;
   scores: Readonly<Record<string, number>>;
   players: readonly MatchPlayer[];
   pulses: readonly MatchPulse[];

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NeonGameFactory } from './game/GamePresentationBridge.js';
 import type { ClientState, GameStore } from './state/gameStore.js';
 import type { MatchPlayer, MatchSnapshot } from '../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../shared/roomSettings.js';
 import { App } from './App.js';
 
 const gameFactory = vi.fn<NeonGameFactory>(() => ({ destroy() {} }));
@@ -66,6 +67,7 @@ function matchPlayer(): MatchPlayer {
 function matchSnapshot(): MatchSnapshot {
   return {
     tick: 180, phase: 'REGULATION', remainingMs: 120_000, platformProgress: 0,
+    settings: DEFAULT_ROOM_SETTINGS,
     scores: { 'p-local': 0 }, players: [matchPlayer()], pulses: [], winnerPlayerId: null, resultReason: null
   };
 }
@@ -175,6 +177,7 @@ describe('App', () => {
       room: {
         roomCode: 'AB2Z', phase: 'RESULT', hostPlayerId: 'p-1', pauseRemainingMs: null,
         result: { winnerPlayerId: 'p-1', reason: 'TARGET_SCORE' },
+        settings: DEFAULT_ROOM_SETTINGS,
         players: [{
           playerId: 'p-1', name: 'Ada', chassis: 'RIFT', accent: 0, ready: false, connected: true,
           reconnectRemainingMs: null, stats: { knockouts: 5, falls: 1, landedHits: 8, completedAttacks: 10 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { GameEvent, InputFrame, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
 import { ArenaInput, type ArenaInputSource } from './ArenaInput.js';
 import { ArenaSession } from './ArenaSession.js';
@@ -14,7 +15,7 @@ function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
 }
 
 function snapshot(local = player()): MatchSnapshot {
-  return { tick: 1, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0, scores: { 'p-local': 0 }, players: [local], pulses: [], winnerPlayerId: null, resultReason: null };
+  return { tick: 1, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0, settings: DEFAULT_ROOM_SETTINGS, scores: { 'p-local': 0 }, players: [local], pulses: [], winnerPlayerId: null, resultReason: null };
 }
 
 class Bridge implements GamePresentationBridge {

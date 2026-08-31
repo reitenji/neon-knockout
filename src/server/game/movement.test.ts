@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ARENA, GAME } from '../../shared/constants.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import { advancePlayers, chooseSafestSpawn, separateActivePlayers } from './movement.js';
 import { createMatchState } from './state.js';
 
@@ -10,7 +11,8 @@ function createState() {
       { playerId: 'p2', name: 'Linus', chassis: 'BASTION', accent: 1 },
       { playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0 }
     ],
-    0
+    0,
+    DEFAULT_ROOM_SETTINGS
   );
   state.phase = 'REGULATION';
   return state;
@@ -142,7 +144,8 @@ describe('authoritative movement', () => {
         { playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0 },
         { playerId: 'p2', name: 'Linus', chassis: 'BASTION', accent: 1 }
       ],
-      0
+      0,
+      DEFAULT_ROOM_SETTINGS
     );
     state.phase = 'REGULATION';
     for (const player of Object.values(state.players)) player.position = { x: 640, y: 360 };

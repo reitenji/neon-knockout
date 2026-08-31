@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { GAME } from '../../shared/constants.js';
 import { profileForAttack } from '../../shared/combat/profiles.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import {
   advancePulses,
   clearPulses,
@@ -16,7 +17,7 @@ function state(): MatchState {
   const match = createMatchState([
     { playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0 },
     { playerId: 'p2', name: 'Linus', chassis: 'BASTION', accent: 1 }
-  ], 7);
+  ], 7, DEFAULT_ROOM_SETTINGS);
   match.phase = 'REGULATION';
   match.players.p1.position = { x: 100, y: 200 };
   return match;

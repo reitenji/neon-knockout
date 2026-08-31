@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { GAME } from '../../shared/constants.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import { buildActiveAttackShapes, resolveMeleeInteractions } from './combatResolution.js';
 import { advanceCombatTimers, startActions } from './combat.js';
 import { createMatchState, type MatchState, type MutableMatchPlayer } from './state.js';
@@ -14,7 +15,7 @@ function createState(): MatchState {
     { playerId: 'p3', name: 'Grace', chassis: 'PULSE', accent: 2 },
     { playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0 },
     { playerId: 'p2', name: 'Linus', chassis: 'BASTION', accent: 1 }
-  ], 7);
+  ], 7, DEFAULT_ROOM_SETTINGS);
   state.phase = 'REGULATION';
   state.players.p1.position = { x: 600, y: 360 };
   state.players.p2.position = { x: 650, y: 360 };

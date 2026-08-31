@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GameEvent, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
 import type { PlayerPresentation } from '../prediction.js';
 
@@ -147,6 +148,7 @@ function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
 function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
   return {
     tick: 10, phase: 'REGULATION', remainingMs: 82_000, platformProgress: 0.35,
+    settings: DEFAULT_ROOM_SETTINGS,
     scores: { p1: 0 }, players: [player()], pulses: [], winnerPlayerId: null, resultReason: null,
     ...overrides
   };

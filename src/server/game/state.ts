@@ -9,6 +9,7 @@ import type {
   PlayerAccent,
   Vec2
 } from '../../shared/model.js';
+import type { RoomSettings } from '../../shared/roomSettings.js';
 import type { AttackProfileId } from '../../shared/combat/profiles.js';
 
 const compareStableIds = (left: string, right: string): number => (left < right ? -1 : left > right ? 1 : 0);
@@ -101,6 +102,7 @@ export type MatchState = {
   remainingMs: number;
   pauseRemainingMs: number | null;
   contraction: number;
+  readonly settings: RoomSettings;
   scores: Record<string, number>;
   winnerPlayerId: string | null;
   resultReason: MatchResultReason | null;
@@ -130,7 +132,11 @@ export function createPlayerStats(): MutablePlayerStats {
   };
 }
 
-export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: number): MatchState {
+export function createMatchState(
+  playerSeeds: readonly MatchPlayerSeed[],
+  seed: number,
+  settings: RoomSettings
+): MatchState {
   const sortedSeeds = [...playerSeeds].sort((left, right) => compareStableIds(left.playerId, right.playerId));
   const players: Record<string, MutableMatchPlayer> = {};
   const scores: Record<string, number> = {};
@@ -183,9 +189,10 @@ export function createMatchState(playerSeeds: readonly MatchPlayerSeed[], seed: 
     phase: 'COUNTDOWN',
     pausedPhase: null,
     countdownRemainingMs: GAME.countdownMs,
-    remainingMs: GAME.regulationMs,
+    remainingMs: settings.durationMs,
     pauseRemainingMs: null,
     contraction: 0,
+    settings: Object.freeze({ ...settings }),
     scores,
     winnerPlayerId: null,
     resultReason: null,

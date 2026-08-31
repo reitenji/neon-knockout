@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ARENA, GAME } from '../../shared/constants.js';
 import { profileForAttack } from '../../shared/combat/profiles.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
+import type { RoomSettings } from '../../shared/roomSettings.js';
 import type { AttackKind, InputFrame, Vec2 } from '../../shared/model.js';
 import { advanceCombatTimers } from './combat.js';
 import { spawnNeonPulse } from './projectiles.js';
@@ -14,8 +16,8 @@ const seeds = () => [
   { playerId: 'p1', name: 'Ada', accent: 0 as const, chassis: 'RIFT' as const },
   { playerId: 'p2', name: 'Linus', accent: 1 as const, chassis: 'BASTION' as const }
 ];
-function regulationState(): MatchState {
-  const state = createMatchState(seeds(), 0);
+function regulationState(settings: RoomSettings = DEFAULT_ROOM_SETTINGS): MatchState {
+  const state = createMatchState(seeds(), 0, settings);
   state.phase = 'REGULATION';
   return state;
 }
@@ -47,13 +49,29 @@ function activeAttack(
 
 describe('authoritative match simulation', () => {
   it('snapshots scores as a record and connected players in stable order', () => {
-    const snapshot = snapshotMatch(createMatchState(seeds().reverse(), 0));
+    const snapshot = snapshotMatch(createMatchState(seeds().reverse(), 0, DEFAULT_ROOM_SETTINGS));
     expect(snapshot).toMatchObject({ tick: 0, phase: 'COUNTDOWN', remainingMs: GAME.countdownMs, scores: { p1: 0, p2: 0 } });
     expect(snapshot.players.map((player) => player.playerId)).toEqual(['p1', 'p2']);
+    expect(snapshot.settings).toEqual(DEFAULT_ROOM_SETTINGS);
+  });
+
+  it('freezes the match-owned settings copy and isolates caller and snapshot mutations', () => {
+    let callerSettings: RoomSettings = { durationMs: 90_000, knockoutTarget: 3 };
+    const originalCallerSettings = callerSettings;
+    const state = createMatchState(seeds(), 0, callerSettings);
+    const snapshot = snapshotMatch(state);
+
+    callerSettings = { durationMs: 180_000, knockoutTarget: 10 };
+    (originalCallerSettings as { durationMs: number }).durationMs = 120_000;
+    (snapshot.settings as { knockoutTarget: number }).knockoutTarget = 10;
+
+    expect(callerSettings).toEqual({ durationMs: 180_000, knockoutTarget: 10 });
+    expect(Object.isFrozen(state.settings)).toBe(true);
+    expect(state.settings).toEqual({ durationMs: 90_000, knockoutTarget: 3 });
   });
 
   it('unlocks regulation after countdown without applying gameplay in that countdown step', () => {
-    const state = createMatchState(seeds(), 0);
+    const state = createMatchState(seeds(), 0, DEFAULT_ROOM_SETTINGS);
     const original = state.players.p1.position;
     const events = stepMatch(state, new Map([['p1', idle(0, { moveX: 1 })]]), GAME.countdownMs);
     expect(state.phase).toBe('REGULATION');
@@ -158,7 +176,7 @@ describe('authoritative match simulation', () => {
       { playerId: 'p2', name: 'Linus', accent: 1, chassis: 'BASTION' },
       { playerId: 'a-scorer', name: 'Ada', accent: 0, chassis: 'RIFT' },
       { playerId: 'p1', name: 'Grace', accent: 2, chassis: 'PULSE' }
-    ], 0);
+    ], 0, DEFAULT_ROOM_SETTINGS);
     state.phase = 'REGULATION';
     state.scores['z-scorer'] = GAME.targetScore - 1;
     state.scores['a-scorer'] = GAME.targetScore - 1;
@@ -223,20 +241,42 @@ describe('authoritative match simulation', () => {
     expect(stepMatch(state, new Map(), 1)).toContainEqual(expect.objectContaining({ type: 'RESPAWN', playerId: 'p2' }));
   });
 
-  it('warns at 78 seconds, contracts from 75 to 40 seconds, and stays at minimum size', () => {
-    const state = regulationState();
-    state.remainingMs = 78_001;
-    stepMatch(state, new Map(), 1);
-    expect(state.contraction).toBe(0);
-    state.remainingMs = 75_000;
-    stepMatch(state, new Map(), 0);
-    expect(state.contraction).toBe(0);
-    state.remainingMs = 57_500;
-    stepMatch(state, new Map(), 0);
-    expect(state.contraction).toBeCloseTo(0.5, 8);
-    state.remainingMs = 40_000;
-    stepMatch(state, new Map(), 0);
-    expect(state.contraction).toBe(1);
+  it.each([
+    [90_000, 58_500, 56_250, 30_000],
+    [120_000, 78_000, 75_000, 40_000],
+    [180_000, 117_000, 112_500, 60_000]
+  ] as const)(
+    'seeds %i ms regulation and contracts at its warning, start, and minimum milestones',
+    (durationMs, warningAt, startsAt, minimumAt) => {
+      const state = createMatchState(seeds(), 0, { durationMs, knockoutTarget: 5 });
+      state.phase = 'REGULATION';
+      expect(state.remainingMs).toBe(durationMs);
+      expect(snapshotMatch(state).settings).toEqual({ durationMs, knockoutTarget: 5 });
+
+      state.remainingMs = warningAt;
+      stepMatch(state, new Map(), 0);
+      expect(state.contraction).toBe(0);
+      state.remainingMs = startsAt;
+      stepMatch(state, new Map(), 0);
+      expect(state.contraction).toBe(0);
+      state.remainingMs = (startsAt + minimumAt) / 2;
+      stepMatch(state, new Map(), 0);
+      expect(state.contraction).toBeCloseTo(0.5, 8);
+      state.remainingMs = minimumAt;
+      stepMatch(state, new Map(), 0);
+      expect(state.contraction).toBe(1);
+    }
+  );
+
+  it.each([3, 5, 7, 10] as const)('finishes exactly at the configured knockout target %i', (knockoutTarget) => {
+    const state = regulationState({ durationMs: DEFAULT_ROOM_SETTINGS.durationMs, knockoutTarget });
+    state.scores.p1 = knockoutTarget - 1;
+    expect(stepMatch(state, new Map(), 0).some((event) => event.type === 'RESULT')).toBe(false);
+
+    const events = forceKnockout(state, 'p1', 'p2');
+
+    expect(events.map((event) => event.type)).toEqual(['KNOCKOUT', 'RESULT']);
+    expect(events.at(-1)).toMatchObject({ type: 'RESULT', winnerPlayerId: 'p1', reason: 'TARGET_SCORE' });
   });
 
   it('finishes regulation for a unique timed leader', () => {
@@ -347,7 +387,7 @@ describe('authoritative match simulation', () => {
     const playerIds = ['p1', 'p2', 'p3', 'p4', 'p5', 'p6', 'p7', 'p8', 'p9', 'p10'];
     const state = createMatchState(playerIds.map((playerId, index) => ({
       playerId, name: playerId, chassis: 'RIFT' as const, accent: (index % 8) as 0
-    })), 0);
+    })), 0, DEFAULT_ROOM_SETTINGS);
     state.phase = 'REGULATION';
     for (const player of Object.values(state.players)) player.position = { x: 1_000, y: 600 };
 

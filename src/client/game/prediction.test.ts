@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { InputFrame, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import {
   INTERPOLATION_DELAY_MS,
   REMOTE_SNAP_DISTANCE,
@@ -31,6 +32,7 @@ function frame(seq: number, overrides: Partial<InputFrame> = {}): InputFrame {
 function snapshot(tick: number, players: readonly MatchPlayer[]): MatchSnapshot {
   return {
     tick, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0,
+    settings: DEFAULT_ROOM_SETTINGS,
     scores: Object.fromEntries(players.map((value) => [value.playerId, 0])), players, pulses: [],
     winnerPlayerId: null, resultReason: null
   };
