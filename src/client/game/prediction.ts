@@ -133,7 +133,7 @@ function runtimeOf(player: MatchPlayer): PredictionRuntime {
     action: player.action,
     heavyChargeMs: player.action.kind === null ? player.action.chargeMs : 0,
     heavyHeld: player.action.kind === null && player.action.chargeMs > 0,
-    heavyChargeLatched: player.action.charging,
+    heavyChargeLatched: player.action.chargeMs >= GAME.heavyEnterChargeMs,
     heavyAim: lockedHeavyFacing ?? player.facing
   };
 }

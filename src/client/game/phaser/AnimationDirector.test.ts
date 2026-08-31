@@ -81,6 +81,25 @@ describe('AnimationDirector', () => {
     expect(target.states).toEqual(['idle', 'quick-1']);
   });
 
+  it('keeps one predicted quick start through stale idle and its authoritative acknowledgement', () => {
+    const director = new AnimationDirector(false);
+    const target = new RecordingTarget();
+    const predicted = action({ kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1 });
+    const acknowledged = player({
+      action: action({
+        kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1, attackId: 6,
+        profileId: 'quick-1', lockedFacing: { x: 1, y: 0 }
+      })
+    });
+
+    director.apply(player(), target, 0, predicted);
+    director.apply(player(), target, 16);
+    director.apply(acknowledged, target, 32, acknowledged.action);
+
+    expect(target.states).toEqual(['quick-1', 'quick-1', 'quick-1']);
+    expect(target.poses[2]).not.toEqual(target.poses[0]);
+  });
+
   it('samples authoritative charge poses from chargeMs instead of elapsed wall time', () => {
     const director = new AnimationDirector(false);
     const target = new RecordingTarget();

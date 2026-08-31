@@ -4,7 +4,7 @@ import type { GameAudioCue } from './GameAudio.js';
 
 type ActionKind = Exclude<MatchAction['kind'], null>;
 type PendingPrediction = {
-  key: string;
+  token: number;
   kind: ActionKind;
   chargeMs: number;
   heavyReleased: boolean;
@@ -15,9 +15,10 @@ function isQuick(kind: MatchAction['kind']): kind is 'QUICK_1' | 'QUICK_2' | 'QU
 }
 
 export class LocalActionAudioTracker {
-  private nextPredictionSequence = 1;
-  private pendingPrediction: PendingPrediction | null = null;
-  private readonly presentedActionKeys = new Set<string>();
+  private nextPredictionToken = 1;
+  private currentPrediction: PendingPrediction | null = null;
+  private readonly pendingPredictions: PendingPrediction[] = [];
+  private lastPresentedAttackId: number | null = null;
 
   private startCue(kind: ActionKind): GameAudioCue | null {
     if (isQuick(kind)) return 'quick';
@@ -32,63 +33,72 @@ export class LocalActionAudioTracker {
     const attackId = action?.attackId ?? null;
 
     if (attackId !== null) {
-      const key = `attack:${attackId}`;
-      if (this.presentedActionKeys.has(key)) return cues;
-      this.presentedActionKeys.add(key);
+      if (attackId === this.lastPresentedAttackId) return cues;
+      this.lastPresentedAttackId = attackId;
 
-      const matchesPrediction = this.pendingPrediction?.kind === kind;
-      if (!matchesPrediction && kind !== null) {
+      const pendingIndex = this.pendingPredictions.findIndex((prediction) => prediction.kind === kind);
+      const pending = pendingIndex >= 0
+        ? this.pendingPredictions.splice(pendingIndex, 1)[0] ?? null
+        : null;
+      if (!pending && kind !== null) {
         const cue = kind === 'HEAVY' && !action?.charging ? 'heavy-release' : this.startCue(kind);
         if (cue) cues.push(cue);
       } else if (
         kind === 'HEAVY' &&
         !action?.charging &&
-        this.pendingPrediction &&
-        !this.pendingPrediction.heavyReleased
+        pending &&
+        !pending.heavyReleased
       ) {
         cues.push('heavy-release');
       }
-      this.pendingPrediction = null;
+      if (pending && this.currentPrediction?.token === pending.token) this.currentPrediction = null;
       return cues;
     }
 
     if (kind === null) {
-      if (
-        this.pendingPrediction?.kind === 'HEAVY' &&
-        this.pendingPrediction.chargeMs < GAME.heavyEnterChargeMs
-      ) this.pendingPrediction = null;
+      if (this.currentPrediction?.kind === 'HEAVY' && !this.currentPrediction.heavyReleased) {
+        const index = this.pendingPredictions.findIndex(
+          (prediction) => prediction.token === this.currentPrediction?.token
+        );
+        if (index >= 0) this.pendingPredictions.splice(index, 1);
+      }
+      this.currentPrediction = null;
       return cues;
     }
 
-    if (!this.pendingPrediction || this.pendingPrediction.kind !== kind) {
-      const sequence = this.nextPredictionSequence++;
-      this.pendingPrediction = {
-        key: `prediction:${sequence}`,
+    if (!this.currentPrediction || this.currentPrediction.kind !== kind) {
+      if (this.currentPrediction?.kind === 'HEAVY' && !this.currentPrediction.heavyReleased) {
+        const index = this.pendingPredictions.findIndex(
+          (prediction) => prediction.token === this.currentPrediction?.token
+        );
+        if (index >= 0) this.pendingPredictions.splice(index, 1);
+      }
+      this.currentPrediction = {
+        token: this.nextPredictionToken++,
         kind,
         chargeMs: action?.chargeMs ?? 0,
         heavyReleased: false
       };
-      if (!this.presentedActionKeys.has(this.pendingPrediction.key)) {
-        this.presentedActionKeys.add(this.pendingPrediction.key);
-        const cue = this.startCue(kind);
-        if (cue) cues.push(cue);
-      }
+      if (isQuick(kind) || kind === 'HEAVY') this.pendingPredictions.push(this.currentPrediction);
+      const cue = this.startCue(kind);
+      if (cue) cues.push(cue);
     }
 
-    if (kind === 'HEAVY' && this.pendingPrediction) {
-      this.pendingPrediction.chargeMs = Math.max(this.pendingPrediction.chargeMs, action?.chargeMs ?? 0);
-      if (!action?.charging && !this.pendingPrediction.heavyReleased &&
-        this.pendingPrediction.chargeMs >= GAME.heavyEnterChargeMs) {
+    if (kind === 'HEAVY' && this.currentPrediction) {
+      this.currentPrediction.chargeMs = Math.max(this.currentPrediction.chargeMs, action?.chargeMs ?? 0);
+      if (!action?.charging && !this.currentPrediction.heavyReleased &&
+        this.currentPrediction.chargeMs >= GAME.heavyEnterChargeMs) {
         cues.push('heavy-release');
-        this.pendingPrediction.heavyReleased = true;
+        this.currentPrediction.heavyReleased = true;
       }
     }
     return cues;
   }
 
   reset(): void {
-    this.nextPredictionSequence = 1;
-    this.pendingPrediction = null;
-    this.presentedActionKeys.clear();
+    this.nextPredictionToken = 1;
+    this.currentPrediction = null;
+    this.pendingPredictions.length = 0;
+    this.lastPresentedAttackId = null;
   }
 }

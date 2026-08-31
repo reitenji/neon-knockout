@@ -200,6 +200,21 @@ describe('PredictionBuffer', () => {
     expect(quick.actionStart?.kind).toBe('QUICK_1');
   });
 
+  it('cancels an early release after reconciling a sub-threshold authoritative charge', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const charging = player({
+      position: { x: 640, y: 360 },
+      action: { ...idleAction, chargeMs: 100, charging: true }
+    });
+
+    prediction.reconcile(charging, 16);
+    const cancelled = prediction.predict(frame(0), charging, 16);
+    const quick = prediction.predict(frame(1, { quick: true }), charging, 16);
+
+    expect(cancelled.actionStart).toBeNull();
+    expect(quick.actionStart?.kind).toBe('QUICK_1');
+  });
+
   it('presents one authoritative attack ID once across unchanged reconciliation snapshots', () => {
     const prediction = new PredictionBuffer('p-1');
     const committed = player({

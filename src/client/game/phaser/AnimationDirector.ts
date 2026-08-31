@@ -72,6 +72,14 @@ function planFor(
     : animationPlanFor(state, reducedMotion);
 }
 
+function isProvisionalAttack(state: FighterAnimationName): boolean {
+  return state === 'quick-1' || state === 'quick-2' || state === 'quick-3' || state === 'heavy-release';
+}
+
+function canBeStaleBeforeAcknowledgement(state: FighterAnimationName): boolean {
+  return state === 'heavy-charge' || state === 'idle' || state === 'move' || state === 'protected';
+}
+
 export class AnimationDirector {
   private readonly runtimes = new WeakMap<FighterAnimationTarget, AnimationRuntime>();
 
@@ -90,12 +98,13 @@ export class AnimationDirector {
     let state = animationStateFor(player, predictedAction, reconnectWarp);
     const action = predictedAction ?? player.action;
     const attackId = attackIdFor(action);
-    const keepsPredictedRelease = runtime?.state === 'heavy-release' &&
+    const keepsProvisionalAttack = runtime !== undefined &&
+      isProvisionalAttack(runtime.state) &&
       runtime.attackId === null &&
       predictedAction === null &&
       nowMs - runtime.startedAtMs < runtime.plan.durationMs &&
-      (state === 'heavy-charge' || state === 'idle' || state === 'move' || state === 'protected');
-    if (keepsPredictedRelease) state = 'heavy-release';
+      canBeStaleBeforeAcknowledgement(state);
+    if (keepsProvisionalAttack && runtime) state = runtime.state;
 
     if (!runtime) {
       const plan = planFor(state, action, this.reducedMotion);

@@ -76,6 +76,22 @@ describe('LocalActionAudioTracker', () => {
     })).toEqual([]);
   });
 
+  it('cues distinct same-kind predictions once and binds both acknowledgements without replay', () => {
+    const tracker = new LocalActionAudioTracker();
+    const firstAcknowledgement = {
+      ...quick(), attackId: 14, profileId: 'quick-1' as const, lockedFacing: { x: 1, y: 0 }
+    };
+    const secondAcknowledgement = { ...firstAcknowledgement, attackId: 15 };
+
+    expect(tracker.consume(quick())).toEqual(['quick']);
+    expect(tracker.consume(null)).toEqual([]);
+    expect(tracker.consume(quick())).toEqual(['quick']);
+    expect(tracker.consume(null)).toEqual([]);
+    expect(tracker.consume(firstAcknowledgement)).toEqual([]);
+    expect(tracker.consume(null)).toEqual([]);
+    expect(tracker.consume(secondAcknowledgement)).toEqual([]);
+  });
+
   it('emits a new cue for a new authoritative attack ID of the same kind', () => {
     const tracker = new LocalActionAudioTracker();
     const first = { ...quick(), attackId: 20, profileId: 'quick-1' as const, lockedFacing: { x: 1, y: 0 } };
