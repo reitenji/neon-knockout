@@ -20,7 +20,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 - [x] (2026-08-31 07:34Z) Task 2: replaced pointer combat with keyboard-only input, physical release gating, and ownership-safe Phaser capture leases; 21 focused tests, typecheck, and targeted ESLint pass (`994cdb9`, `d68b2f5`, `9a4dbaa`, `e206f3e`).
 - [x] (2026-08-31 07:51Z) Prerequisite L: repaired the pre-existing Playwright worker-fixture lint boundary; full lint, typecheck, and Playwright test listing pass (`d190b7c`).
 - [x] (2026-08-31 07:51Z) Task 3: exposed required authoritative action/pulse state and event contracts with deterministic serialization; 37 final focused tests, full lint, and typecheck pass (`420df3a`).
-- [ ] Task 4: replace sector hits with sweeps, clashes, and perfect dodge.
+- [x] (2026-08-31 08:23Z) Task 4: replaced sector hits with shared swept capsules, deterministic clash priorities, and one-per-dash perfect dodge; 63 focused and 239 full tests pass (`4fdb113`, `746655d`, `355cb62`).
 - [ ] Task 5: add Neon Pulse and align match pacing.
 - [ ] Task 6: make prediction and charge/release animation continuous.
 - [ ] Task 7: render shared sweeps, pulses, charge direction, FX, audio, and HUD feedback.
@@ -54,6 +54,8 @@ The result is visible by running `npm run lan`, opening the printed local addres
   Evidence: the file is unchanged from commit `f234036`; ESLint rejects the Playwright-required empty fixture parameter and interprets its `use` callback as a React hook. Task 3's 26 required tests, 89 extended owned tests, typecheck, targeted lint, and isolated review are otherwise green.
 - Observation: renaming the Playwright provider callback and explicitly consuming its worker dependency object restores the full lint gate without rule suppression or behavior change.
   Evidence: prerequisite commit `d190b7c` passed targeted and full ESLint, both TypeScript projects, a two-test Playwright listing, and an independent one-file review; Task 3 then passed 37 focused tests on the repaired HEAD.
+- Observation: an active slice can remain valid after a large timer step fully removes its runtime, but any retained shape must be rejected outside its exact state and tick.
+  Evidence: Task 4 reviews reproduced both lost large-step contact and stale/cross-state fallback. Commits `746655d` and `355cb62` bind built shapes to their originating runtime through same-state/same-tick weak associations while keeping manual test shapes on an explicit live-runtime fallback; final re-review found no remaining issue.
 
 ## Decision Log
 
@@ -90,7 +92,7 @@ The result is visible by running `npm run lan`, opening the printed local addres
 
 ## Outcomes & Retrospective
 
-Tasks 0–3 and Prerequisite L are accepted. The runner and lint boundaries are clean. Shared profiles define exact attack timing and swept geometry; keyboard-only input is safe across browser and Phaser lifecycle resets. The authoritative contract now requires deterministic action metadata, locked facing, normalized active progress, sorted hit targets, numerically sorted pulse snapshots, exact clash/dodge/pulse event variants, and new-dash dodge-reset state. Task 3 passed 37 focused tests, full lint, typecheck, and independent review with no findings. Task 4 can now replace sector hits with the shared sweep truth.
+Tasks 0–4 and Prerequisite L are accepted. Runner and lint boundaries are clean; keyboard-only input is lifecycle-safe; the authoritative state/event contract is deterministic. Melee now uses the shared swept weapon path instead of center sectors, resolves attack clashes before hurtboxes, applies exact heavy/quick priorities and recoil, preserves terminal active slices, rejects stale shapes, and grants one 550 ms perfect-dodge refund per dash. Task 4 finishes with 63 focused tests, 239 full tests, typecheck, lint, and clean final review. Task 5 now adds the short Neon Pulse and final 120-second match pacing.
 
 ## Context and Orientation
 
