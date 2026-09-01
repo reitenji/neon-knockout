@@ -17,7 +17,7 @@ type AppProps = Readonly<{
 
 function viewportNeedsRotation(): boolean {
   const touchCapable = (window.matchMedia?.('(pointer: coarse)').matches ?? false) || navigator.maxTouchPoints > 0;
-  return touchCapable && window.innerWidth < 900 && window.innerHeight > window.innerWidth;
+  return touchCapable && window.innerHeight > window.innerWidth;
 }
 
 function subscribeToViewport(listener: () => void): () => void {
