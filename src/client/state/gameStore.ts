@@ -61,6 +61,7 @@ export interface ArenaBridge {
   subscribeConnected(listener: (connected: boolean) => void): () => void;
   subscribeEvent(listener: (event: GameEvent) => void): () => void;
   subscribeMuted(listener: (muted: boolean) => void): () => void;
+  reserveInputSequence(minimum: number): number;
   sendInput(frame: InputFrame): void;
 }
 
@@ -418,6 +419,7 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
 }
 
 export function createArenaBridge(store: GameStore): ArenaBridge {
+  let nextInputSequence = 0;
   return {
     getSnapshot: store.getLatestMatch,
     isConnected: () => store.getSnapshot().connectionState === 'connected',
@@ -442,6 +444,11 @@ export function createArenaBridge(store: GameStore): ArenaBridge {
         previous = next;
         listener(next);
       });
+    },
+    reserveInputSequence(minimum) {
+      const sequence = Math.max(nextInputSequence, minimum);
+      nextInputSequence = sequence + 1;
+      return sequence;
     },
     sendInput: store.sendInput
   };

@@ -56,7 +56,7 @@ describe('createSocketGameClient', () => {
   beforeEach(() => socketHarness.reset());
   afterEach(() => vi.useRealTimers());
 
-  it('creates one same-origin WebSocket client and cleans external subscriptions', () => {
+  it('creates one same-origin client with WebSocket-first polling fallback and cleans external subscriptions', () => {
     const client = createSocketGameClient();
     const listener = vi.fn();
     const unsubscribe = client.subscribe('room:state', listener);
@@ -64,7 +64,9 @@ describe('createSocketGameClient', () => {
     expect(socketHarness.io).toHaveBeenCalledWith(window.location.origin, expect.objectContaining({
       autoConnect: false,
       reconnection: true,
-      reconnectionAttempts: Infinity
+      reconnectionAttempts: Infinity,
+      transports: ['websocket', 'polling'],
+      tryAllTransports: true
     }));
     socketHarness.trigger('room:state', roomState());
     expect(listener).toHaveBeenCalledOnce();

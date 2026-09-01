@@ -67,7 +67,9 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
   const socket: GameSocket = io(origin, {
     autoConnect: false,
     reconnection: true,
-    reconnectionAttempts: Infinity
+    reconnectionAttempts: Infinity,
+    transports: ['websocket', 'polling'],
+    tryAllTransports: true
   });
   const listeners = createListenerSets();
   let connectionState: GameClientConnectionState = 'idle';

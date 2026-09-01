@@ -11,11 +11,11 @@ Use Node.js 20 or newer. The host command builds the production client and start
 
 1. On the host computer, run the two commands above.
 2. The host opens the printed `http://localhost:4173` URL, enters a name, and chooses **Oda Kur**.
-3. Share the visible four-character room code and the printed private LAN URL with up to seven friends.
+3. Share the visible four-character room code and the appropriate **LAN Adresleri** link shown in the host lobby with up to seven friends. Use **Yenile** if the host changes network.
 4. Each friend opens that LAN URL, enters a name and the four-character room code, and selects a chassis.
 5. The host chooses the room rules, every player chooses **Hazırım**, and the host chooses **Maçı Başlat** when every connected player is ready.
 
-The local host may use `http://localhost:4173`; other machines must use the printed private LAN URL, commonly in `192.168.x.x`, `10.x.x.x`, or `172.16–31.x.x`. Allow incoming TCP connections on port 4173 in the operating-system firewall when players cannot join. Guests only need a modern desktop browser after the host has installed dependencies.
+The local host may use `http://localhost:4173`; other devices must use the private LAN URL shown in the lobby, commonly in `192.168.x.x`, `10.x.x.x`, or `172.16–31.x.x`. Allow incoming TCP connections on port 4173 in the operating-system firewall when players cannot join. Guests only need a modern browser after the host has installed dependencies.
 
 Only the current host can edit **Oda Ayarları**. Match duration can be **90 sn**, **2 dk**, or **3 dk**; the winning target can be **3**, **5**, **7**, or **10** knockouts. New rooms default to two minutes and five knockouts. Guests see the same server-owned values in read-only controls. A real settings change clears every player's ready state, and the selected pair persists through reconnects, host migration, returns to the lobby, and rematches.
 
@@ -26,7 +26,9 @@ Only the current host can edit **Oda Ayarları**. Match duration can be **90 sn*
 - Hold `K`: charge a heavy strike while steering with `WASD`; release `K` to attack
 - `Space`: dash
 
-Arrow keys, both `Shift` keys, mouse movement, and mouse buttons do not control the fighter. The arena requires a desktop viewport of at least 900 × 600 CSS pixels. All chassis have the same gameplay values. The first player to the room's configured knockout target wins; a normal knockout returns control in 600 ms, resets overload, and does not add any escalating penalty.
+Arrow keys, both `Shift` keys, mouse movement, and mouse buttons do not control the fighter. All chassis have the same gameplay values. The first player to the room's configured knockout target wins; a normal knockout returns control in 600 ms, resets overload, and does not add any escalating penalty.
+
+On touch devices, menus and the lobby work in portrait. Rotate to landscape for the match, then use the left joystick to move and aim. The right-side buttons perform quick attack, charge heavy while held and release it when lifted, and dash. Losing focus, rotating, or canceling a touch clears held controls so an action cannot remain stuck.
 
 ## Combat and match pacing
 
@@ -48,7 +50,7 @@ Closing or losing a browser connection does not award a knockout or a fall. Keep
 - Windows: allow Node.js on private networks in Windows Defender Firewall.
 - Linux: allow TCP port 4173 on the active private-network firewall profile.
 
-If the LAN URL is absent, make sure the host has an active private network adapter. VPN, guest Wi-Fi isolation, captive portals, and corporate firewalls can block direct LAN connections. Stop an older local server already using port 4173 before running `npm run lan`.
+If the LAN URL is absent, make sure the host has an active private network adapter. VPN, guest Wi-Fi isolation, captive portals, and corporate firewalls can block direct LAN connections. The client prefers WebSocket and falls back to Socket.IO polling when WebSocket setup is blocked, but neither transport can bypass router isolation or a closed host firewall. Stop an older local server already using port 4173 before running `npm run lan`.
 
 ## Health probe and troubleshooting
 
@@ -58,7 +60,7 @@ The host can confirm the server is listening with:
 curl --fail http://127.0.0.1:4173/health
 ```
 
-It returns JSON with `status: "ok"` and the current room count. Also run the same `/health` request against the exact private address printed by `npm run lan`, for example `curl --fail http://192.168.1.20:4173/health`; do not guess or hardcode that address. Both requests must return HTTP 200. If the host probe works but a guest cannot connect, verify both devices are on the same private network, use the printed LAN URL exactly, and check the firewall rule. If the game shows a viewport warning, enlarge the browser window rather than using a mobile browser.
+It returns JSON with `status: "ok"` and the current room count. Also run the same `/health` request against the exact private address shown in the lobby or printed by `npm run lan`, for example `curl --fail http://192.168.1.20:4173/health`; do not guess or hardcode that address. Both requests must return HTTP 200. If the host probe works but a guest cannot connect, verify both devices are on the same private network, avoid an isolated guest Wi-Fi, use the displayed LAN URL exactly, and check the firewall rule.
 
 ## Verification
 

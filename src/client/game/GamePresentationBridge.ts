@@ -10,6 +10,7 @@ export interface GamePresentationBridge {
   subscribeConnected(listener: (connected: boolean) => void): () => void;
   subscribeEvent(listener: (event: GameEvent) => void): () => void;
   subscribeMuted(listener: (muted: boolean) => void): () => void;
+  reserveInputSequence?(minimum: number): number;
   sendInput(frame: InputFrame): void;
 }
 

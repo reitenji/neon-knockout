@@ -50,6 +50,32 @@ function expectWelcome(acknowledgement: Ack<SessionWelcome>): SessionWelcome {
 }
 
 describe('GameServer lifecycle', () => {
+  it('accepts a polling-only Socket.IO client when WebSocket is unavailable', async () => {
+    const server = createGameServer({ host: '127.0.0.1', port: 0, clientDirectory: false });
+    let pollingClient: GameClient | null = null;
+    try {
+      const address = await server.start();
+      pollingClient = io(address.origin, { transports: ['polling'], forceNew: true, reconnection: false });
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('Timed out connecting polling-only client')), 1_500);
+        pollingClient?.once('connect', () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        pollingClient?.once('connect_error', (error) => {
+          clearTimeout(timer);
+          reject(error);
+        });
+      });
+
+      const welcome = expectWelcome(await emitAck<SessionWelcome>(pollingClient, 'room:create', { name: 'Ada' }));
+      expect(welcome.roomCode).toHaveLength(4);
+    } finally {
+      pollingClient?.disconnect();
+      await server.stop();
+    }
+  });
+
   it('discovers the current LAN address on every runtime network request', async () => {
     let currentAddress = '192.168.68.51';
     const server = createGameServer({

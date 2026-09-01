@@ -415,6 +415,16 @@ describe('createGameStore', () => {
     expect(client.sendInput).toHaveBeenCalledOnce();
   });
 
+  it('allocates input sequences monotonically across arena remounts and snapshot catch-up', () => {
+    const { store } = createFixture();
+    const bridge = createArenaBridge(store);
+
+    expect(bridge.reserveInputSequence(0)).toBe(0);
+    expect(bridge.reserveInputSequence(0)).toBe(1);
+    expect(bridge.reserveInputSequence(12)).toBe(12);
+    expect(bridge.reserveInputSequence(2)).toBe(13);
+  });
+
   it('persists mute and notifies bridge listeners only when that setting changes', () => {
     const { storage, store } = createFixture();
     const bridge = createArenaBridge(store);

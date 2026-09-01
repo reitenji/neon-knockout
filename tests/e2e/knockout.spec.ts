@@ -173,10 +173,11 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
   const match = await createTwoPlayerMatch(browser, game);
   const journeyMarker = marker(game, match.code);
   try {
-    const hostRoster = match.host.page.getByRole('region', { name: 'Oyuncu listesi' });
-    await expect(hostRoster).toBeVisible();
-    await expect(match.host.page.getByLabel(/^Ada pingi:/)).not.toHaveText('—');
-    await expect(match.host.page.getByLabel(/^Linus pingi:/)).not.toHaveText('—');
+    for (const participant of [match.host, match.guest]) {
+      await expect(participant.page.getByRole('region', { name: 'Oyuncu listesi' })).toBeVisible();
+      await expect(participant.page.getByLabel(/^Ada pingi:/)).not.toHaveText('—');
+      await expect(participant.page.getByLabel(/^Linus pingi:/)).not.toHaveText('—');
+    }
 
     await placePlayers(game, match, { x: 500, y: 300 }, { x: 900, y: 500 });
     const beforeMouseTick = snapshot(game, match.code).tick;
@@ -377,7 +378,7 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
       intervals: [5], timeout: 1_000
     }).toBeGreaterThanOrEqual(windupTick + 3);
     await match.guest.page.keyboard.down('Space');
-    await expect.poll(() => player(game, match.code, match.guestPlayerId).dashRemainingMs, {
+    await expect.poll(() => player(game, match.code, match.guestPlayerId).dashCooldownRemainingMs, {
       intervals: [5], timeout: 1_000
     }).toBeGreaterThan(0);
     const dodge = await waitForEvent(game, match.code, eventMarker, 'PERFECT_DODGE');
@@ -464,6 +465,10 @@ test('rematch still allows consecutive quick attacks without refresh', async ({ 
     await match.host.page.getByRole('button', { name: 'Rövanşı Başlat' }).click();
     await expect(match.host.page.getByRole('img', { name: 'Neon Knockout oyun alanı' })).toBeVisible();
     await expect.poll(() => snapshot(game, match.code).phase).toBe('REGULATION');
+    for (const participant of [match.host, match.guest]) {
+      await expect(participant.page.getByLabel(/^Ada pingi:/)).not.toHaveText('—');
+      await expect(participant.page.getByLabel(/^Linus pingi:/)).not.toHaveText('—');
+    }
 
     await placePlayers(game, match, { x: 500, y: 360 }, { x: 548, y: 360 });
     const rematchSeq = player(game, match.code, match.hostPlayerId).lastProcessedInputSeq;
@@ -498,11 +503,32 @@ test('rematch still allows consecutive quick attacks without refresh', async ({ 
       (event) => event.attackerId === match.hostPlayerId && event.targetId === match.guestPlayerId
     );
     await waitForNeutral(game, match);
+
+    await placePlayers(
+      game,
+      match,
+      { x: 548, y: 360 },
+      { x: 500, y: 360 },
+      { x: -1, y: 0 },
+      { x: 1, y: 0 }
+    );
+    const guestMarker = marker(game, match.code);
+    await match.guest.page.keyboard.down('j');
+    await expect.poll(() => player(game, match.code, match.guestPlayerId).action.kind).toBe('QUICK_1');
+    await match.guest.page.keyboard.up('j');
+    await waitForEvent(
+      game,
+      match.code,
+      guestMarker,
+      'HIT',
+      (event) => event.attackerId === match.guestPlayerId && event.targetId === match.hostPlayerId
+    );
+    await waitForNeutral(game, match);
     await assertNoUnexpectedErrors(game, match.host, match.guest);
   } finally {
     await match.close();
   }
-}, 20_000);
+}, 25_000);
 
 test('result screen preserves ready and departed player statuses', async ({ browser, game }) => {
   const match = await createTwoPlayerMatch(browser, game);

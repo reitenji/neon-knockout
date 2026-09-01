@@ -11,12 +11,12 @@ Neon Knockout must survive a rematch without requiring a browser refresh, make t
 - [x] (2026-09-01) Reproduced the rematch input lock and traced it to the socket-local input sequence gate.
 - [x] (2026-09-01) Confirmed the running host LAN address can change while the old terminal URL becomes stale.
 - [x] (2026-09-01) Audited ping semantics and the current desktop-only viewport/input path.
-- [x] (2026-09-01) Added the failing rematch regression and reset the sequence gate at successful match start.
-- [ ] Add an in-product LAN share/diagnostics surface backed by live server network data.
-- [ ] Add touch input, landscape match layout, safe-area handling, and compact mobile HUD.
-- [ ] Reduce avoidable client load and stabilize the displayed application RTT without hiding sustained latency.
-- [ ] Run focused tests, full verification, production browser journeys, and a real LAN reachability probe.
-- [ ] Push the verified result to the public GitHub repository and restart the production LAN server.
+- [x] (2026-09-01) Added the failing rematch regression and moved input sequence allocation to the connection-lived arena bridge.
+- [x] (2026-09-01) Added an in-product LAN share/diagnostics surface backed by live server network data, with every physical-interface link equally visible.
+- [x] (2026-09-01) Added touch input, landscape match layout, safe-area handling, and compact mobile HUD.
+- [x] (2026-09-01) Capped mobile rendering load and made fresh application RTT samples appear promptly without hiding sustained latency.
+- [x] (2026-09-01) Ran focused tests, full verification, all production browser journeys, and localhost/private-LAN reachability probes.
+- [ ] Push the final reviewed result to the public GitHub repository.
 
 ## Surprises & Discoveries
 
@@ -27,8 +27,8 @@ Neon Knockout must survive a rematch without requiring a browser refresh, make t
 
 ## Decision Log
 
-- Decision: reset the socket-local input sequence gate only after a successful `match:start`.
-  Rationale: a new authoritative match is the lifecycle boundary where client sequence numbering restarts; failed start attempts must not mutate the gate.
+- Decision: keep the server input gate monotonic for a socket's full lifetime and allocate client input sequences from the app-lived arena bridge.
+  Rationale: an arena remount is a presentation boundary, not a connection boundary. Continuing the sequence removes the rematch lock without accepting delayed frames from the previous match.
 - Decision: mobile means the same web application in Safari/Chrome, with portrait supported for menus and landscape required during play.
   Rationale: this meets the request without introducing native packaging and keeps desktop controls unchanged.
 - Decision: touch movement and aim share the left joystick; quick, heavy hold/release, and dash use large right-side buttons.
@@ -42,13 +42,13 @@ The authoritative server is under `src/server`; Socket.IO lifecycle handlers liv
 
 ## Plan of Work
 
-First preserve the rematch bug with an integration assertion that sends sequence zero after a successful rematch and waits for the authoritative snapshot to process it. Reset the per-socket accepted sequence only at that new-match boundary.
+First preserve the rematch bug with a session-remount regression, then keep input sequence allocation above the per-match `ArenaSession`. The server retains its connection-lived monotonic gate, so delayed packets from the previous match cannot reopen a reset sequence window.
 
 Next expose current private IPv4 URLs through a small same-origin runtime endpoint and render the primary share URL with copy/share affordances in the room flow. Keep the room code prominent and include concise diagnostics for firewall, guest Wi-Fi/client isolation, and stale IP failures. Do not promise that browser local-network permissions or transport fallbacks can bypass router isolation.
 
 Then add a mutable touch control source whose state can be consumed by the existing `ArenaInput` path. Mount an accessible overlay in `PhaserArena`, capture pointer IDs, clear all held state on cancellation/blur/orientation change, and merge touch with the unchanged keyboard source. On small screens, menus scroll normally; the match requests landscape and displays a rotate prompt in portrait. Collapse the roster and combat status so controls do not hide the arena. Cap rendering at 60 fps and avoid excessive DPR on mobile-class viewports.
 
-Finally stabilize ping presentation with a short rolling median or similarly bounded smoothing that preserves sustained high RTT. Exercise two-browser rematch, mobile touch quick/heavy/dash, reconnect, room leaving, and LAN address copying. Run the complete repository gates, build production artifacts, restart the LAN process, probe localhost and the current private URL, then push only the intended changes.
+Finally sample application RTT as soon as a match becomes active and every two seconds thereafter, preserving the measured value rather than disguising sustained high latency. Prefer WebSocket with a tested Socket.IO polling fallback. Exercise two-browser rematch, mobile touch quick/heavy/dash, reconnect, room leaving, and LAN address copying. Run the complete repository gates, build production artifacts, restart the LAN process, probe localhost and the current private URL, then push only the intended changes.
 
 ## Concrete Steps
 
@@ -77,4 +77,4 @@ Tests and builds are repeatable. Runtime endpoint discovery reads current interf
 
 ## Outcomes & Retrospective
 
-Pending implementation and verification.
+The rematch root cause was fixed at the client lifecycle boundary; room-wide server sequence resets were removed. The host lobby now shows every physical LAN URL without guessing which subnet guests use, development proxies the runtime endpoint, and the real client has WebSocket-first polling fallback. Mobile portrait lobby, landscape controls, safe areas, and compact HUD remain covered by production browser tests. Verification completed with 390 Vitest tests, the eight-client load gate, all production Playwright journeys, production builds, and live health probes through both localhost and `192.168.68.51`. Cloud hosting, Firebase, WebRTC, and TURN remain intentionally unimplemented.

@@ -40,21 +40,33 @@ function renderPanel(
 describe('LanSharePanel', () => {
   afterEach(cleanup);
 
-  it('shows the first live LAN URL and copies that connection link', async () => {
+  it('shows every LAN URL with equal weight and copies each address independently', async () => {
     const copied: string[] = [];
     renderPanel(
       [networkInfo(['192.168.68.51', '10.0.0.8'])],
       { writeText: async (value) => { copied.push(value); } }
     );
 
-    const link = await screen.findByRole('link', { name: 'http://192.168.68.51:4173' });
-    expect(link).toHaveAttribute('href', 'http://192.168.68.51:4173');
-    expect(screen.queryByText('http://10.0.0.8:4173')).toBeNull();
+    const firstLink = await screen.findByRole('link', { name: 'http://192.168.68.51:4173' });
+    const secondLink = screen.getByRole('link', { name: 'http://10.0.0.8:4173' });
+    expect(firstLink).toHaveAttribute('href', 'http://192.168.68.51:4173');
+    expect(secondLink).toHaveAttribute('href', 'http://10.0.0.8:4173');
+    expect(screen.getByText('en0')).toBeVisible();
+    expect(screen.getByText('en1')).toBeVisible();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Bağlantı Linkini Kopyala' }));
+    fireEvent.click(screen.getByRole('button', { name: 'http://192.168.68.51:4173 adresini kopyala' }));
 
     await waitFor(() => expect(copied).toEqual(['http://192.168.68.51:4173']));
-    expect(screen.getByRole('status')).toHaveTextContent('Bağlantı linki kopyalandı.');
+    expect(screen.getByRole('status')).toHaveTextContent('http://192.168.68.51:4173 kopyalandı.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'http://10.0.0.8:4173 adresini kopyala' }));
+
+    await waitFor(() => {
+      expect(copied).toEqual(['http://192.168.68.51:4173', 'http://10.0.0.8:4173']);
+    });
+    expect(screen.getByRole('status')).toHaveTextContent('http://10.0.0.8:4173 kopyalandı.');
+    expect(screen.getByText(/Önce WebSocket denenir; polling otomatik yedektir/i)).toBeVisible();
+    expect(screen.getByText(/misafir ağı izolasyonunu veya host güvenlik duvarını aşmaz/i)).toBeVisible();
   });
 
   it('refreshes the LAN URL so a changed DHCP address replaces the stale one', async () => {
@@ -77,7 +89,7 @@ describe('LanSharePanel', () => {
     expect(screen.getByText(/misafir ağı veya istemci izolasyonu/i)).toBeVisible();
     expect(screen.getByText(/güvenlik duvarında Node\.js'e izin verin/i)).toBeVisible();
     expect(screen.getByText(/eski adresi kullanmadığınızdan emin olmak için yenileyin/i)).toBeVisible();
-    expect(screen.queryByRole('button', { name: 'Bağlantı Linkini Kopyala' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /adresini kopyala/i })).toBeNull();
   });
 
   it('keeps a refresh path visible when network discovery fails', async () => {
@@ -85,6 +97,7 @@ describe('LanSharePanel', () => {
 
     expect(await screen.findByRole('alert')).toHaveTextContent('LAN adresi alınamadı.');
     expect(screen.getByRole('button', { name: 'LAN adresini yenile' })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: 'Bağlantı Linkini Kopyala' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /adresini kopyala/i })).toBeNull();
+    expect(screen.getByText(/Önce WebSocket denenir; polling otomatik yedektir/i)).toBeVisible();
   });
 });

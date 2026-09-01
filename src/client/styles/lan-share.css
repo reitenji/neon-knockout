@@ -32,16 +32,8 @@
 
 .lan-share-panel__content {
   min-width: 0;
-}
-
-.lan-share-panel__url {
-  display: block;
-  overflow: hidden;
-  border-radius: 2px;
-  color: var(--color-cyan);
-  font: 0.72rem var(--font-mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  display: grid;
+  gap: var(--space-1);
 }
 
 .lan-share-panel__message,
@@ -63,8 +55,8 @@
   gap: var(--space-1);
 }
 
-.lan-share-panel__button,
-.lan-share-panel__refresh {
+.lan-share-panel__refresh,
+.lan-share-panel__copy {
   min-height: 30px;
   padding: 0 9px;
   border: 1px solid var(--color-border-strong);
@@ -77,8 +69,8 @@
   white-space: nowrap;
 }
 
-.lan-share-panel__button:hover,
-.lan-share-panel__refresh:hover:not(:disabled) {
+.lan-share-panel__refresh:hover:not(:disabled),
+.lan-share-panel__copy:hover {
   border-color: var(--color-cyan-dim);
   color: var(--color-text);
 }
@@ -86,6 +78,49 @@
 .lan-share-panel__refresh:disabled {
   cursor: wait;
   opacity: 0.48;
+}
+
+.lan-share-panel__addresses {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-1);
+  list-style: none;
+}
+
+.lan-share-panel__address {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.lan-share-panel__interface {
+  color: var(--color-text-muted);
+  font: 0.62rem var(--font-mono);
+}
+
+.lan-share-panel__url {
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 2px;
+  color: var(--color-cyan);
+  font: 0.7rem var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-share-panel__copy {
+  padding-inline: 8px;
+  font-size: 0.64rem;
+}
+
+.lan-share-panel__transport-guide {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.62rem;
+  line-height: 1.35;
 }
 
 .lan-share-panel__copy-feedback {

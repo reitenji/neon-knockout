@@ -50,9 +50,11 @@ export class ArenaSession {
       this.releaseHeldInput(false);
       return this.localPresentation;
     }
-    const frame = this.input.sample(this.inputSequence, this.now());
-    if (!frame) return this.localPresentation;
-    this.inputSequence += 1;
+    const sampledFrame = this.input.sample(this.inputSequence, this.now());
+    if (!sampledFrame) return this.localPresentation;
+    const sequence = this.bridge.reserveInputSequence?.(this.inputSequence) ?? this.inputSequence;
+    this.inputSequence = sequence + 1;
+    const frame = sequence === sampledFrame.seq ? sampledFrame : { ...sampledFrame, seq: sequence };
     this.localPresentation = this.prediction.predict(
       frame,
       localPlayer,

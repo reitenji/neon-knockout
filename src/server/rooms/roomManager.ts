@@ -279,7 +279,7 @@ export class RoomManager {
     return room.roomCode;
   }
 
-  startMatch(connectionId: string): string {
+  startMatch(connectionId: string): void {
     const { room, player } = this.requireConnectedPlayer(connectionId);
     if (room.phase !== 'LOBBY' && room.phase !== 'RESULT') {
       throw new DomainError('INVALID_PHASE', 'Bu işlem şu anda kullanılamaz.', true);
@@ -314,7 +314,6 @@ export class RoomManager {
     room.snapshotAccumulatorMs = 0;
     this.publishRoom(room);
     this.deps.publish({ type: 'MATCH_STARTED', roomCode: room.roomCode, snapshot: snapshotMatch(room.match) });
-    return room.roomCode;
   }
 
   applyInput(connectionId: string, input: InputFrame): void {

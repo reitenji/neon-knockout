@@ -759,21 +759,19 @@ describe('Socket.IO FFA game server flow', () => {
     expect(player(rematchSnapshot, match.host.playerId).lastProcessedInputSeq).toBe(-1);
     expect(player(rematchSnapshot, match.guest.playerId).lastProcessedInputSeq).toBe(-1);
 
-    match.hostClient.emit('match:input', input(0, { aimX: 0, aimY: -1, quick: true }));
-    resumedClient.emit('match:input', input(0, { aimX: -1, aimY: 0, quick: true }));
-    const rematchInputsAccepted = await expectEvent(
-      match.hostClient,
-      'match:snapshot',
-      (value) =>
-        player(value, match.host.playerId).lastProcessedInputSeq === 0 &&
-        player(value, match.guest.playerId).lastProcessedInputSeq === 0
-    );
+    const hostRematchSequence = sequences.get(match.hostClient) ?? 0;
+    const guestRematchSequence = sequences.get(resumedClient) ?? 0;
+    await submitFrames(match, [
+      { client: match.hostClient, playerId: match.host.playerId, overrides: { aimX: 0, aimY: -1, quick: true } },
+      { client: resumedClient, playerId: match.guest.playerId, overrides: { aimX: -1, aimY: 0, quick: true } }
+    ]);
+    const rematchInputsAccepted = snapshot(match.roomCode);
     expect(player(rematchInputsAccepted, match.host.playerId)).toMatchObject({
-      lastProcessedInputSeq: 0,
+      lastProcessedInputSeq: hostRematchSequence,
       facing: { x: 0, y: -1 }
     });
     expect(player(rematchInputsAccepted, match.guest.playerId)).toMatchObject({
-      lastProcessedInputSeq: 0,
+      lastProcessedInputSeq: guestRematchSequence,
       facing: { x: -1, y: 0 }
     });
   }, 12_000);

@@ -15,6 +15,11 @@ type NetworkState = Readonly<{
   info: RuntimeNetworkInfo | null;
 }>;
 
+type CopyFeedback = Readonly<{
+  status: 'copied' | 'failed';
+  url: string;
+}> | null;
+
 const defaultFetch: FetchLike = (input, init) => fetch(input, init);
 
 function isRuntimeNetworkInfo(value: unknown): value is RuntimeNetworkInfo {
@@ -60,9 +65,13 @@ async function readNetworkInfo(fetchImpl: FetchLike): Promise<RuntimeNetworkInfo
   return body;
 }
 
+function copyFeedbackMessage(feedback: Exclude<CopyFeedback, null>): string {
+  return `${feedback.url} ${feedback.status === 'copied' ? 'kopyalandı.' : 'kopyalanamadı.'}`;
+}
+
 export function LanSharePanel({ fetchImpl = defaultFetch, clipboard }: LanSharePanelProps) {
   const [network, setNetwork] = useState<NetworkState>({ status: 'loading', info: null });
-  const [copyFeedback, setCopyFeedback] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>(null);
   const requestGeneration = useRef(0);
 
   useEffect(() => {
@@ -70,7 +79,7 @@ export function LanSharePanel({ fetchImpl = defaultFetch, clipboard }: LanShareP
     void readNetworkInfo(fetchImpl).then((body) => {
       if (generation === requestGeneration.current) {
         setNetwork({ status: 'ready', info: body });
-        setCopyFeedback('idle');
+        setCopyFeedback(null);
       }
     }, () => {
       if (generation === requestGeneration.current) setNetwork({ status: 'error', info: null });
@@ -84,48 +93,67 @@ export function LanSharePanel({ fetchImpl = defaultFetch, clipboard }: LanShareP
     void readNetworkInfo(fetchImpl).then((body) => {
       if (generation === requestGeneration.current) {
         setNetwork({ status: 'ready', info: body });
-        setCopyFeedback('idle');
+        setCopyFeedback(null);
       }
     }, () => {
       if (generation === requestGeneration.current) setNetwork({ status: 'error', info: null });
     });
   };
 
-  const lanUrl = network.info?.lanAddresses[0]?.url ?? null;
-  const copyLink = async (): Promise<void> => {
-    if (!lanUrl) return;
+  const lanAddresses = network.info?.lanAddresses ?? [];
+  const copyLink = async (url: string): Promise<void> => {
     try {
-      await (clipboard?.writeText(lanUrl) ?? defaultCopy(lanUrl));
-      setCopyFeedback('copied');
+      await (clipboard?.writeText(url) ?? defaultCopy(url));
+      setCopyFeedback({ status: 'copied', url });
     } catch {
-      setCopyFeedback('failed');
+      setCopyFeedback({ status: 'failed', url });
     }
   };
 
   return (
     <aside className="lan-share-panel" aria-label="LAN bağlantısı" aria-busy={network.status === 'loading'}>
-      <span className="lan-share-panel__label">LAN ADRESİ</span>
+      <span className="lan-share-panel__label">LAN ADRESLERİ</span>
       <div className="lan-share-panel__content">
-        {network.status === 'loading' && !lanUrl ? <span className="lan-share-panel__message">Adres aranıyor…</span> : null}
-        {lanUrl ? (
-          <a className="lan-share-panel__url focus-ring" href={lanUrl} target="_blank" rel="noreferrer">
-            {lanUrl}
-          </a>
+        {network.status === 'loading' && lanAddresses.length === 0 ? (
+          <span className="lan-share-panel__message">Adres aranıyor…</span>
         ) : null}
-        {network.status === 'ready' && !lanUrl ? (
+        {lanAddresses.length > 0 ? (
+          <ul className="lan-share-panel__addresses" aria-label="LAN adresleri">
+            {lanAddresses.map((address) => (
+              <li className="lan-share-panel__address" key={`${address.interfaceName}-${address.address}`}>
+                <span className="lan-share-panel__interface">{address.interfaceName}</span>
+                <a
+                  className="lan-share-panel__url focus-ring"
+                  href={address.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {address.url}
+                </a>
+                <button
+                  className="lan-share-panel__copy focus-ring"
+                  type="button"
+                  aria-label={`${address.url} adresini kopyala`}
+                  onClick={() => void copyLink(address.url)}
+                >
+                  Kopyala
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {network.status === 'ready' && lanAddresses.length === 0 ? (
           <p className="lan-share-panel__help">
             Aynı Wi-Fi veya özel ağa bağlı olduğunuzu doğrulayın; misafir ağı veya istemci izolasyonunu kapatın,
             host güvenlik duvarında Node.js'e izin verin ve eski adresi kullanmadığınızdan emin olmak için yenileyin.
           </p>
         ) : null}
         {network.status === 'error' ? <span className="lan-share-panel__error" role="alert">LAN adresi alınamadı.</span> : null}
+        <p className="lan-share-panel__transport-guide">
+          Önce WebSocket denenir; polling otomatik yedektir. İkisi de misafir ağı izolasyonunu veya host güvenlik duvarını aşmaz.
+        </p>
       </div>
       <div className="lan-share-panel__actions">
-        {lanUrl ? (
-          <button className="lan-share-panel__button focus-ring" type="button" onClick={() => void copyLink()}>
-            Bağlantı Linkini Kopyala
-          </button>
-        ) : null}
         <button
           className="lan-share-panel__refresh focus-ring"
           type="button"
@@ -136,9 +164,9 @@ export function LanSharePanel({ fetchImpl = defaultFetch, clipboard }: LanShareP
           Yenile
         </button>
       </div>
-      {copyFeedback !== 'idle' ? (
-        <span className={`lan-share-panel__copy-feedback is-${copyFeedback}`} role="status">
-          {copyFeedback === 'copied' ? 'Bağlantı linki kopyalandı.' : 'Bağlantı linki kopyalanamadı.'}
+      {copyFeedback ? (
+        <span className={`lan-share-panel__copy-feedback is-${copyFeedback.status}`} role="status">
+          {copyFeedbackMessage(copyFeedback)}
         </span>
       ) : null}
     </aside>

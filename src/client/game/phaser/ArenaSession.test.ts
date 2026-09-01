@@ -21,6 +21,7 @@ function snapshot(local = player()): MatchSnapshot {
 class Bridge implements GamePresentationBridge {
   connected = true;
   current: MatchSnapshot | null = snapshot();
+  private nextInputSequence = 0;
   readonly sent: InputFrame[] = [];
   readonly snapshotListeners = new Set<(value: MatchSnapshot) => void>();
   readonly connectionListeners = new Set<(value: boolean) => void>();
@@ -32,6 +33,11 @@ class Bridge implements GamePresentationBridge {
   subscribeConnected = (listener: (value: boolean) => void): (() => void) => { this.connectionListeners.add(listener); listener(this.connected); return () => this.connectionListeners.delete(listener); };
   subscribeEvent = (listener: (value: GameEvent) => void): (() => void) => { this.eventListeners.add(listener); return () => this.eventListeners.delete(listener); };
   subscribeMuted = (listener: (value: boolean) => void): (() => void) => { this.mutedListeners.add(listener); return () => this.mutedListeners.delete(listener); };
+  reserveInputSequence = (minimum: number): number => {
+    const sequence = Math.max(this.nextInputSequence, minimum);
+    this.nextInputSequence = sequence + 1;
+    return sequence;
+  };
   sendInput = (frame: InputFrame): void => { this.sent.push(frame); };
   setConnected(connected: boolean): void { this.connected = connected; for (const listener of this.connectionListeners) listener(connected); }
 }
@@ -66,6 +72,23 @@ describe('ArenaSession', () => {
     session.step(16);
 
     expect(bridge.sent.at(-1)).toMatchObject({ quick: true, moveX: 1, aimX: 1, aimY: 0 });
+  });
+
+  it('keeps input sequences monotonic when the arena remounts for a rematch', () => {
+    const bridge = new Bridge();
+    let now = 0;
+    const firstSession = new ArenaSession(bridge, 'p-local', new ArenaInput(controls()), () => now);
+    firstSession.start();
+    firstSession.step(16);
+    firstSession.dispose();
+
+    bridge.current = snapshot(player({ lastProcessedInputSeq: -1 }));
+    now += 17;
+    const rematchSession = new ArenaSession(bridge, 'p-local', new ArenaInput(controls()), () => now);
+    rematchSession.start();
+    rematchSession.step(16);
+
+    expect(bridge.sent.map((frame) => frame.seq)).toEqual([0, 1]);
   });
 
   it('stops immediately on disconnect and suppresses held keyboard combat through reconnect until release', () => {

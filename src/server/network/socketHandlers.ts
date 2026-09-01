@@ -115,7 +115,6 @@ class SocketRateLimiter {
 
 export function registerSocketHandlers(options: SocketHandlerOptions): void {
   const { io, rooms, now, logger, onSession, onLeave, onDisconnect } = options;
-  const resetInputSequenceBySocketId = new Map<string, () => void>();
 
   io.on('connection', (socket) => {
     const limiter = new SocketRateLimiter(now);
@@ -175,10 +174,6 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     const emitRateLimit = (): void => {
       if (limiter.shouldEmitError()) socket.emit('server:error', RATE_LIMITED);
     };
-    const resetAcceptedInputSeq = (): void => {
-      lastAcceptedInputSeq = -1;
-    };
-
     const acknowledge = <TPayload, TData>(
       schema: z.ZodType<TPayload>,
       payload: unknown,
@@ -218,7 +213,6 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     const establishSession = (welcome: SessionWelcome): void => {
       void socket.join(welcome.roomCode);
       onSession(socket, welcome);
-      resetInputSequenceBySocketId.set(socket.id, resetAcceptedInputSeq);
       startLatencySampling();
       queueMicrotask(() => socket.emit('session:welcome', welcome));
     };
@@ -266,7 +260,6 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       acknowledge(roomLeaveSchema, payload, callback, () => {
         const roomCode = rooms.leaveRoom(socket.id);
         stopLatencySampling();
-        resetInputSequenceBySocketId.delete(socket.id);
         void socket.leave(roomCode);
         onLeave(socket, roomCode);
         return null;
@@ -274,10 +267,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     });
     socket.on('match:start', (payload, callback) => {
       acknowledge(matchStartSchema, payload, callback, () => {
-        const roomCode = rooms.startMatch(socket.id);
-        for (const socketId of io.sockets.adapter.rooms.get(roomCode) ?? []) {
-          resetInputSequenceBySocketId.get(socketId)?.();
-        }
+        rooms.startMatch(socket.id);
         return null;
       });
     });
@@ -319,7 +309,6 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     });
     socket.on('disconnect', () => {
       stopLatencySampling();
-      resetInputSequenceBySocketId.delete(socket.id);
       rooms.disconnect(socket.id);
       onDisconnect(socket);
     });
