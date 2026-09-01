@@ -16,7 +16,7 @@ Neon Knockout must survive a rematch without requiring a browser refresh, make t
 - [x] (2026-09-01) Added touch input, landscape match layout, safe-area handling, and compact mobile HUD.
 - [x] (2026-09-01) Capped mobile rendering load and made fresh application RTT samples appear promptly without hiding sustained latency.
 - [x] (2026-09-01) Ran focused tests, full verification, all production browser journeys, and localhost/private-LAN reachability probes.
-- [ ] Push the final reviewed result to the public GitHub repository.
+- [x] (2026-09-01) Pushed the final reviewed result to the public GitHub repository.
 
 ## Surprises & Discoveries
 
@@ -77,4 +77,4 @@ Tests and builds are repeatable. Runtime endpoint discovery reads current interf
 
 ## Outcomes & Retrospective
 
-The rematch root cause was fixed at the client lifecycle boundary; room-wide server sequence resets were removed. The host lobby now shows every physical LAN URL without guessing which subnet guests use, development proxies the runtime endpoint, and the real client has WebSocket-first polling fallback. Mobile portrait lobby, landscape controls, safe areas, and compact HUD remain covered by production browser tests. Verification completed with 390 Vitest tests, the eight-client load gate, all production Playwright journeys, production builds, and live health probes through both localhost and `192.168.68.51`. Cloud hosting, Firebase, WebRTC, and TURN remain intentionally unimplemented.
+The rematch root cause was fixed at the client lifecycle boundary; room-wide server sequence resets were removed. The host lobby now shows every physical LAN URL without guessing which subnet guests use, development proxies the runtime endpoint, and the real client has WebSocket-first polling fallback. Mobile portrait lobby, landscape controls, safe areas, and compact HUD remain covered by production browser tests. Verification completed with 390 Vitest tests, the eight-client load gate, all production Playwright journeys, production builds, and live health probes through both localhost and `192.168.68.51`. The reviewed result is public at `https://github.com/reitenji/neon-relay`. Cloud hosting, Firebase, WebRTC, and TURN remain intentionally unimplemented.
