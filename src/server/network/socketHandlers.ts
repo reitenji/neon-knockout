@@ -7,7 +7,6 @@ import {
   lobbyChassisSchema,
   lobbyReadySchema,
   lobbySettingsSchema,
-  matchInputSchema,
   matchStartSchema,
   resultLobbySchema,
   resultReadySchema,
@@ -20,6 +19,7 @@ import {
 } from '../../shared/protocol.js';
 import { DomainError } from '../rooms/domainError.js';
 import type { RoomManager } from '../rooms/roomManager.js';
+import { createMatchInputIngress, type MatchInputIngress } from './matchInputIngress.js';
 
 export type GameIo = Server<ClientToServerEvents, ServerToClientEvents>;
 export type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -31,7 +31,7 @@ type SocketHandlerOptions = Readonly<{
   rooms: RoomManager;
   now: () => number;
   logger: ErrorLogger;
-  onSession: (socket: GameSocket, welcome: SessionWelcome) => void;
+  onSession: (socket: GameSocket, welcome: SessionWelcome, inputIngress: MatchInputIngress) => void;
   onLeave: (socket: GameSocket, roomCode: string) => void;
   onDisconnect: (socket: GameSocket) => void;
 }>;
@@ -76,27 +76,15 @@ function domainError(error: DomainError): ServerError {
 
 class SocketRateLimiter {
   private readonly actions: Bucket;
-  private readonly inputs: Bucket;
-  private readonly acceptedInputs: Bucket;
   private errorSuppressedUntil = 0;
 
   constructor(private readonly now: () => number) {
     const timestamp = now();
     this.actions = { tokens: 10, updatedAt: timestamp };
-    this.inputs = { tokens: GAME.inputRateLimitPerSecond, updatedAt: timestamp };
-    this.acceptedInputs = { tokens: GAME.maxInputFramesPerSecond, updatedAt: timestamp };
   }
 
   consumeAction(): boolean {
     return this.consume(this.actions, 10);
-  }
-
-  consumeInput(): boolean {
-    return this.consume(this.inputs, GAME.inputRateLimitPerSecond);
-  }
-
-  acceptInput(): boolean {
-    return this.consume(this.acceptedInputs, GAME.maxInputFramesPerSecond);
   }
 
   shouldEmitError(): boolean {
@@ -122,7 +110,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
 
   io.on('connection', (socket) => {
     const limiter = new SocketRateLimiter(now);
-    let lastAcceptedInputSeq = -1;
+    const inputIngress = createMatchInputIngress({ connectionId: socket.id, rooms, now, logger });
     let latencySampling = false;
     let latencyTimer: ReturnType<typeof setTimeout> | null = null;
     let latencyProbeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -217,7 +205,8 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
 
     const establishSession = (welcome: SessionWelcome): void => {
       void socket.join(welcome.roomCode);
-      onSession(socket, welcome);
+      inputIngress.reset();
+      onSession(socket, welcome, inputIngress);
       rooms.setTransport(socket.id, currentTransport(socket));
       startLatencySampling();
       queueMicrotask(() => socket.emit('session:welcome', welcome));
@@ -298,29 +287,8 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       });
     });
     socket.on('match:input', (payload) => {
-      const parsed = matchInputSchema.safeParse(payload);
-      if (!parsed.success) {
-        socket.emit('server:error', INVALID_PAYLOAD);
-        return;
-      }
-      if (rooms.isInResult(socket.id)) return;
-      if (!limiter.consumeInput()) {
-        return;
-      }
-      if (parsed.data.seq <= lastAcceptedInputSeq) return;
-      if (!limiter.acceptInput()) return;
-      try {
-        rooms.applyInput(socket.id, parsed.data);
-        lastAcceptedInputSeq = parsed.data.seq;
-      } catch (error) {
-        if (error instanceof DomainError) {
-          socket.emit('server:error', domainError(error));
-          return;
-        }
-        const correlationId = randomUUID();
-        logger.error(`[${correlationId}] Unexpected Socket.IO input failure`, error);
-        socket.emit('server:error', INTERNAL_ERROR);
-      }
+      const result = inputIngress.accept(payload);
+      if (result.status === 'error') socket.emit('server:error', result.error);
     });
     socket.on('disconnect', () => {
       stopLatencySampling();

@@ -836,6 +836,22 @@ describe('Socket.IO FFA game server flow', () => {
     });
   });
 
+  it('resets the Socket.IO ingress sequence for a newly established session', async () => {
+    const match = await startMatch();
+    match.hostClient.emit('match:input', input(7));
+    await waitFor(
+      () => player(snapshot(match.roomCode), match.host.playerId).lastProcessedInputSeq === 7,
+      'the first session input frame'
+    );
+    await emitSuccess<null>(match.hostClient, 'room:leave', {});
+    await emitSuccess<SessionWelcome>(match.hostClient, 'room:create', { name: 'Ada again' });
+    const invalidPhase = expectEvent(match.hostClient, 'server:error', (error) => error.code === 'INVALID_PHASE');
+
+    match.hostClient.emit('match:input', input(0));
+
+    await expect(invalidPhase).resolves.toMatchObject({ code: 'INVALID_PHASE' });
+  });
+
   it('limits room actions to ten per second and suppresses repeated rate-limit events', async () => {
     const clientA = await client();
     await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });

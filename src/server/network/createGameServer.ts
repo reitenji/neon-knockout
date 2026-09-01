@@ -15,6 +15,7 @@ import {
 } from '../rooms/roomManager.js';
 import { discoverRuntimeNetworkInfo, type NetworkInterfaces } from '../runtime/lanAddresses.js';
 import { registerSocketHandlers, type GameSocket } from './socketHandlers.js';
+import type { MatchInputIngress } from './matchInputIngress.js';
 
 export interface GameServer {
   start(): Promise<{ port: number; origin: string }>;
@@ -164,7 +165,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     rooms,
     now,
     logger,
-    onSession: (socket: GameSocket, welcome: SessionWelcome) => {
+    onSession: (socket: GameSocket, welcome: SessionWelcome, _inputIngress: MatchInputIngress) => {
       playerConnections.set(welcome.playerId, { roomCode: welcome.roomCode, socketId: socket.id });
     },
     onLeave: (socket: GameSocket, roomCode: string) => {

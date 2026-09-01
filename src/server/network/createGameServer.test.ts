@@ -3,6 +3,7 @@ import { GAME } from '../../shared/constants.js';
 import type { Ack, SessionWelcome } from '../../shared/model.js';
 import { RoomManager, type RoomPublication } from '../rooms/roomManager.js';
 import { createGameServer } from './createGameServer.js';
+import type { MatchInputIngress } from './matchInputIngress.js';
 import { registerSocketHandlers, type GameIo, type GameSocket } from './socketHandlers.js';
 
 describe('createGameServer scheduler', () => {
@@ -127,5 +128,52 @@ describe('socket latency scheduler', () => {
     socketListeners.get('disconnect')?.();
     vi.advanceTimersByTime(GAME.maxPingMs * 2);
     expect(probeCount).toBe(3);
+  });
+});
+
+describe('socket session ingress', () => {
+  it('passes each established session its authoritative input ingress', () => {
+    const rooms = new RoomManager({
+      now: () => 0,
+      randomBytes: (size) => new Uint8Array(size).fill(size),
+      publish: () => undefined
+    });
+    let onConnection: ((socket: GameSocket) => void) | undefined;
+    const io = {
+      on: (_event: string, listener: (socket: GameSocket) => void): void => {
+        onConnection = listener;
+      }
+    } as unknown as GameIo;
+    const socketListeners = new Map<string, (...args: unknown[]) => void>();
+    const socket = {
+      id: 'host-socket',
+      conn: { transport: { name: 'websocket' }, on: () => undefined },
+      emit: () => true,
+      join: async () => undefined,
+      leave: async () => undefined,
+      on: (event: string, listener: (...args: unknown[]) => void): void => {
+        socketListeners.set(event, listener);
+      }
+    } as unknown as GameSocket;
+    let sessionIngress: MatchInputIngress | undefined;
+
+    registerSocketHandlers({
+      io,
+      rooms,
+      now: () => 0,
+      logger: { error: vi.fn() },
+      onSession: (_socket, _welcome, inputIngress) => { sessionIngress = inputIngress; },
+      onLeave: () => undefined,
+      onDisconnect: () => undefined
+    });
+    if (!onConnection) throw new Error('Socket connection handler was not registered.');
+    onConnection(socket);
+    const createRoom = socketListeners.get('room:create') as (
+      payload: { name: string },
+      acknowledge: (acknowledgement: Ack<SessionWelcome>) => void
+    ) => void;
+    createRoom({ name: 'Ada' }, () => undefined);
+
+    expect(sessionIngress).toMatchObject({ accept: expect.any(Function), reset: expect.any(Function) });
   });
 });
