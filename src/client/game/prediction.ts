@@ -26,7 +26,6 @@ type PredictionRuntime = KinematicState & {
   action: MatchAction;
   heavyChargeMs: number;
   heavyHeld: boolean;
-  heavyChargeLatched: boolean;
   heavyAim: Vec2;
 };
 
@@ -133,7 +132,6 @@ function runtimeOf(player: MatchPlayer): PredictionRuntime {
     action: player.action,
     heavyChargeMs: player.action.kind === null ? player.action.chargeMs : 0,
     heavyHeld: player.action.kind === null && player.action.chargeMs > 0,
-    heavyChargeLatched: player.action.chargeMs >= GAME.heavyEnterChargeMs,
     heavyAim: lockedHeavyFacing ?? player.facing
   };
 }
@@ -175,7 +173,6 @@ function advanceRuntime(
   let commitsAction = false;
   let heavyChargeMs = runtime.heavyChargeMs;
   const heavyRelease = runtime.heavyHeld && !frame.heavy;
-  let heavyChargeLatched = runtime.heavyChargeLatched;
   let heavyAim = runtime.heavyAim;
 
   if (!committedAction && (frame.heavy || heavyRelease)) {
@@ -184,7 +181,6 @@ function advanceRuntime(
 
   if (frame.dash && canStartAction) {
     heavyChargeMs = 0;
-    heavyChargeLatched = false;
     if (dashCooldownRemainingMs <= 0) {
       dashDirectionValue = dashDirection(frame, runtime.facing);
       dashRemainingMs = GAME.dashDurationMs;
@@ -194,12 +190,11 @@ function advanceRuntime(
     }
   } else if (canStartAction && frame.heavy) {
     heavyChargeMs = Math.min(GAME.heavyMaxChargeMs, heavyChargeMs + elapsed);
-    heavyChargeLatched = heavyChargeMs >= GAME.heavyEnterChargeMs;
     actionStart = {
       kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs,
       ...NEUTRAL_ACTION_METADATA, charging: true
     };
-  } else if (canStartAction && heavyRelease && heavyChargeLatched) {
+  } else if (canStartAction && heavyRelease && heavyChargeMs > 0) {
     actionStart = {
       kind: 'HEAVY', phase: 'WINDUP', comboStep: 0, chargeMs: heavyChargeMs,
       ...NEUTRAL_ACTION_METADATA, lockedFacing: heavyAim
@@ -210,12 +205,11 @@ function advanceRuntime(
     commitsAction = true;
   } else if (!frame.heavy) {
     heavyChargeMs = 0;
-    heavyChargeLatched = false;
   }
 
   const vertices = platformVertices(platformProgress);
   const outsidePlatform = !pointInConvexPolygon(runtime.position, vertices);
-  const charging = canStartAction && frame.heavy && heavyChargeMs >= GAME.heavyEnterChargeMs;
+  const charging = canStartAction && frame.heavy && heavyChargeMs > 0;
   const movementInput = hitstunRemainingMs > 0
     ? { ...frame, moveX: 0, moveY: 0 }
     : frame;
@@ -250,7 +244,6 @@ function advanceRuntime(
       action: commitsAction && actionStart ? actionStart : runtime.action,
       heavyChargeMs,
       heavyHeld: frame.heavy,
-      heavyChargeLatched,
       heavyAim
     },
     actionStart

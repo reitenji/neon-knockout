@@ -46,11 +46,18 @@ describe('animationPlanFor', () => {
     expect(animationPlanFor('reconnect', false).durationMs).toBe(GAME.reconnectWarpMs);
   });
 
-  it.each([180, 350, 699])('starts a %ims heavy release at the exact sampled charge pose', (chargeMs) => {
+  it.each([1, GAME.heavyMaxChargeMs / 2, GAME.heavyMaxChargeMs])('starts a %ims heavy release at the exact sampled charge pose', (chargeMs) => {
     const release = heavyReleasePlanFrom(chargeMs, false);
 
     expect(release.transitionMs).toBe(45);
     expect(poseAt(release, 0)).toEqual(chargePoseAt(chargeMs, false));
+  });
+
+  it('uses the shared 450 ms duration and proportional midpoint for heavy charge progress', () => {
+    const charge = animationPlanFor('heavy-charge', false);
+
+    expect(charge.durationMs).toBe(450);
+    expect(charge.keyframes.map(({ atMs }) => atMs)).toEqual([0, 225, 450]);
   });
 
   it('derives quick and heavy windup, active, recovery timing from shared profiles', () => {

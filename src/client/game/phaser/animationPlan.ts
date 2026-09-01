@@ -110,7 +110,7 @@ const REGULAR_PLANS: Readonly<Record<FighterAnimationName, FighterAnimationPlan>
   ]),
   'heavy-charge': plan('heavy-charge', GAME.heavyMaxChargeMs, false, 0, [
     frame(0, { bodyX: -2, bodyScale: 0.98, leftArmAngle: -0.34, rightArmAngle: 0.34, coreScale: 1.1, coreAlpha: 0.78 }),
-    frame(350, { bodyX: -4, bodyY: 1.5, bodyRotation: -0.025, bodyScale: 0.94, leftArmAngle: -0.66, rightArmAngle: 0.64, coreScale: 1.55, coreAlpha: 1, trailIntensity: 0.14 }),
+    frame(GAME.heavyMaxChargeMs / 2, { bodyX: -4, bodyY: 1.5, bodyRotation: -0.025, bodyScale: 0.94, leftArmAngle: -0.66, rightArmAngle: 0.64, coreScale: 1.55, coreAlpha: 1, trailIntensity: 0.14 }),
     frame(GAME.heavyMaxChargeMs, { bodyX: -5, bodyY: -1, bodyRotation: 0.025, bodyScale: 0.92, leftArmAngle: -0.78, rightArmAngle: 0.76, coreScale: 1.9, coreAlpha: 1, trailIntensity: 0.22 })
   ]),
   'heavy-release': plan('heavy-release', HEAVY_PROFILE.windupMs + HEAVY_PROFILE.activeMs + HEAVY_PROFILE.recoveryMs, false, 0, [

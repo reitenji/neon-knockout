@@ -130,11 +130,7 @@ function chargedValue(
   chargeMs: number
 ): number {
   if (typeof value === 'number') return value;
-  const progress = clamp(
-    (chargeMs - GAME.heavyEnterChargeMs) / (GAME.heavyMaxChargeMs - GAME.heavyEnterChargeMs),
-    0,
-    1
-  );
+  const progress = clamp(chargeMs / GAME.heavyMaxChargeMs, 0, 1);
   return value.minimum + (value.maximum - value.minimum) * progress;
 }
 

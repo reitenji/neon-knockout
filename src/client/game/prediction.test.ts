@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GAME } from '../../shared/constants.js';
 import type { InputFrame, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import {
@@ -130,16 +131,16 @@ describe('PredictionBuffer', () => {
     expect(afterQuick.velocity.x).not.toBe(760);
   });
 
-  it('accumulates held heavy across frames and slows movement only after the entry threshold', () => {
+  it('accumulates held heavy across frames and slows movement from the first observed charge', () => {
     const prediction = new PredictionBuffer('p-1');
     const canonical = player({ position: { x: 640, y: 360 } });
 
-    const belowThreshold = prediction.predict(frame(0, { moveX: 1, heavy: true }), canonical, 100);
-    const atThreshold = prediction.predict(frame(1, { moveX: -1, heavy: true }), canonical, 80);
+    const firstCharge = prediction.predict(frame(0, { moveX: 1, heavy: true }), canonical, 1);
+    const continuedCharge = prediction.predict(frame(1, { moveX: -1, heavy: true }), canonical, 224);
 
-    expect(belowThreshold.velocity.x).toBe(240);
-    expect(atThreshold.actionStart?.chargeMs).toBe(180);
-    expect(atThreshold.velocity.x).toBeCloseTo(134.4, 5);
+    expect(firstCharge.actionStart?.chargeMs).toBe(1);
+    expect(firstCharge.velocity.x).toBeCloseTo(1.32, 5);
+    expect(continuedCharge.actionStart?.chargeMs).toBe(225);
   });
 
   it('lets dash cancel an uncommitted heavy charge and restarts charge from zero after dash', () => {
@@ -156,20 +157,19 @@ describe('PredictionBuffer', () => {
     });
   });
 
-  it('commits heavy on release after the threshold and blocks a following dash', () => {
+  it('commits a minimum heavy on release and blocks a following dash', () => {
     const prediction = new PredictionBuffer('p-1');
     const canonical = player({ position: { x: 640, y: 360 } });
 
-    prediction.predict(frame(0, { heavy: true }), canonical, 100);
-    prediction.predict(frame(1, { heavy: true }), canonical, 80);
-    const release = prediction.predict(frame(2), canonical, 16);
-    const afterRelease = prediction.predict(frame(3, { dash: true }), canonical, 16);
+    prediction.predict(frame(0, { heavy: true }), canonical, 1);
+    const release = prediction.predict(frame(1), canonical, 16);
+    const afterRelease = prediction.predict(frame(2, { dash: true }), canonical, 16);
 
     expect(release.actionStart).toEqual({
       ...idleAction,
       kind: 'HEAVY',
       phase: 'WINDUP',
-      chargeMs: 180,
+      chargeMs: 1,
       lockedFacing: { x: 1, y: 0 }
     });
     expect(afterRelease.actionStart).toBeNull();
@@ -190,32 +190,31 @@ describe('PredictionBuffer', () => {
     expect(afterRelease.actionStart).toBeNull();
   });
 
-  it('cancels an early release without latching an attack or release facing', () => {
+  it('keeps a one-millisecond release committed instead of discarding it', () => {
     const prediction = new PredictionBuffer('p-1');
     const canonical = player({ position: { x: 640, y: 360 } });
 
-    prediction.predict(frame(0, { heavy: true, aimX: 0, aimY: -1 }), canonical, 179);
-    const cancelled = prediction.predict(frame(1, { aimX: 1, aimY: 0 }), canonical, 16);
+    prediction.predict(frame(0, { heavy: true, aimX: 0, aimY: -1 }), canonical, 1);
+    const release = prediction.predict(frame(1, { aimX: 1, aimY: 0 }), canonical, 16);
     const quick = prediction.predict(frame(2, { quick: true, aimX: 1, aimY: 0 }), canonical, 16);
 
-    expect(cancelled.actionStart).toBeNull();
-    expect(cancelled.facing).toEqual({ x: 1, y: 0 });
-    expect(quick.actionStart?.kind).toBe('QUICK_1');
+    expect(release.actionStart).toMatchObject({ kind: 'HEAVY', chargeMs: 1, lockedFacing: { x: 1, y: 0 } });
+    expect(quick.actionStart).toBeNull();
   });
 
-  it('cancels an early release after reconciling a sub-threshold authoritative charge', () => {
+  it('commits a positive authoritative charge when its release is replayed', () => {
     const prediction = new PredictionBuffer('p-1');
     const charging = player({
       position: { x: 640, y: 360 },
-      action: { ...idleAction, chargeMs: 100, charging: true }
+      action: { ...idleAction, chargeMs: 1, charging: true }
     });
 
     prediction.reconcile(charging, 16);
-    const cancelled = prediction.predict(frame(0), charging, 16);
+    const release = prediction.predict(frame(0), charging, 16);
     const quick = prediction.predict(frame(1, { quick: true }), charging, 16);
 
-    expect(cancelled.actionStart).toBeNull();
-    expect(quick.actionStart?.kind).toBe('QUICK_1');
+    expect(release.actionStart).toMatchObject({ kind: 'HEAVY', chargeMs: 1 });
+    expect(quick.actionStart).toBeNull();
   });
 
   it('presents one authoritative attack ID once across unchanged reconciliation snapshots', () => {

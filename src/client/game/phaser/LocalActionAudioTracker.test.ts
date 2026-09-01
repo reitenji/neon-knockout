@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GAME } from '../../../shared/constants.js';
 import type { MatchAction } from '../../../shared/model.js';
 import { LocalActionAudioTracker } from './LocalActionAudioTracker.js';
 
@@ -55,10 +56,10 @@ describe('LocalActionAudioTracker', () => {
     const tracker = new LocalActionAudioTracker();
 
     expect(tracker.consume(heavy(16))).toEqual(['heavy-charge']);
-    expect(tracker.consume(heavy(180))).toEqual([]);
-    expect(tracker.consume(heavy(699))).toEqual([]);
-    expect(tracker.consume(heavy(699, false))).toEqual(['heavy-release']);
-    expect(tracker.consume(heavy(699, false))).toEqual([]);
+    expect(tracker.consume(heavy(GAME.heavyMaxChargeMs / 2))).toEqual([]);
+    expect(tracker.consume(heavy(GAME.heavyMaxChargeMs - 1))).toEqual([]);
+    expect(tracker.consume(heavy(GAME.heavyMaxChargeMs - 1, false))).toEqual(['heavy-release']);
+    expect(tracker.consume(heavy(GAME.heavyMaxChargeMs - 1, false))).toEqual([]);
     expect(tracker.consume(null)).toEqual([]);
   });
 
@@ -107,19 +108,20 @@ describe('LocalActionAudioTracker', () => {
   it('does not replay charge or release when a predicted heavy receives its attack ID', () => {
     const tracker = new LocalActionAudioTracker();
 
-    expect(tracker.consume(heavy(350))).toEqual(['heavy-charge']);
-    expect(tracker.consume(heavy(350, false))).toEqual(['heavy-release']);
-    expect(tracker.consume(heavy(350, false, 30))).toEqual([]);
+    expect(tracker.consume(heavy(GAME.heavyMaxChargeMs / 2))).toEqual(['heavy-charge']);
+    expect(tracker.consume(heavy(GAME.heavyMaxChargeMs / 2, false))).toEqual(['heavy-release']);
+    expect(tracker.consume(heavy(GAME.heavyMaxChargeMs / 2, false, 30))).toEqual([]);
     expect(tracker.consume(null)).toEqual([]);
-    expect(tracker.consume(heavy(350, false, 30))).toEqual([]);
+    expect(tracker.consume(heavy(GAME.heavyMaxChargeMs / 2, false, 30))).toEqual([]);
   });
 
-  it('does not emit release for a tap or a charge cancelled into dash', () => {
+  it('emits release for a positive tap but not for a charge cancelled into dash', () => {
     const tracker = new LocalActionAudioTracker();
 
-    expect(tracker.consume(heavy(100))).toEqual(['heavy-charge']);
+    expect(tracker.consume(heavy(1))).toEqual(['heavy-charge']);
+    expect(tracker.consume(heavy(1, false))).toEqual(['heavy-release']);
     expect(tracker.consume(null)).toEqual([]);
-    expect(tracker.consume(heavy(180))).toEqual(['heavy-charge']);
+    expect(tracker.consume(heavy(1))).toEqual(['heavy-charge']);
     expect(tracker.consume(dash)).toEqual(['dash']);
     expect(tracker.consume(null)).toEqual([]);
   });

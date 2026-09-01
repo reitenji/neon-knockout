@@ -118,7 +118,7 @@ export function advanceCombatTimers(state: MatchState, stepMs: number): CombatTi
       player.charging = false;
     } else if (player.latestInput.heavy && player.respawnRemainingMs <= 0) {
       player.chargeMs = Math.min(GAME.heavyMaxChargeMs, player.chargeMs + elapsedMs);
-      player.charging = player.chargeMs >= GAME.heavyEnterChargeMs;
+      player.charging = player.chargeMs > 0;
     }
   }
   return { activeSlices, activated };
@@ -151,7 +151,7 @@ export function startActions(state: MatchState, timersElapsedMs = 0): void {
 
     let started = false;
     if (canAct && !player.attack && !dashEdge) {
-      if (heavyRelease && player.chargeMs >= GAME.heavyEnterChargeMs) {
+      if (heavyRelease && player.chargeMs > 0) {
         beginAttack(state, player, 'HEAVY', Math.min(player.chargeMs, GAME.heavyMaxChargeMs));
         started = true;
       } else if ((player.bufferedQuick || quickEdge) && player.chargeMs === 0) {

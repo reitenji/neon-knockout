@@ -148,35 +148,29 @@ describe('authoritative combat', () => {
     expect(player.attack?.lockedFacing).toEqual({ x: 0, y: -1 });
   });
 
-  it('requires 180 ms heavy charge, caps power at 700 ms, and captures release power', () => {
-    const tooEarly = createState();
-    tooEarly.players.p1.latestInput = input(0, { heavy: true });
-    advanceCombatTimers(tooEarly, GAME.heavyEnterChargeMs - 1);
-    startActions(tooEarly);
-    tooEarly.players.p1.latestInput = input(1);
-    startActions(tooEarly);
-    expect(tooEarly.players.p1.attack).toBeNull();
+  it('releases every positive heavy hold as melee, and caps full charge at 450 ms', () => {
     const minimum = createState();
     minimum.players.p1.latestInput = input(0, { heavy: true });
-    advanceCombatTimers(minimum, GAME.heavyEnterChargeMs);
+    advanceCombatTimers(minimum, 1);
     startActions(minimum);
     minimum.players.p1.latestInput = input(1);
     startActions(minimum);
-    expect(minimum.players.p1.attack).toMatchObject({ kind: 'HEAVY', chargeMs: 180 });
+    expect(minimum.players.p1.attack).toMatchObject({ kind: 'HEAVY', chargeMs: 1 });
     const maximum = createState();
     maximum.players.p1.latestInput = input(0, { heavy: true });
     advanceCombatTimers(maximum, GAME.heavyMaxChargeMs + 500);
     startActions(maximum);
     maximum.players.p1.latestInput = input(1);
     startActions(maximum);
-    expect(maximum.players.p1.attack).toMatchObject({ kind: 'HEAVY', chargeMs: 700 });
+    expect(GAME.heavyMaxChargeMs).toBe(450);
+    expect(maximum.players.p1.attack).toMatchObject({ kind: 'HEAVY', chargeMs: 450 });
   });
 
   it('lets dash cancel only an uncommitted charge', () => {
     const state = createState();
     const player = state.players.p1;
     player.latestInput = input(0, { heavy: true });
-    advanceCombatTimers(state, GAME.heavyEnterChargeMs);
+    advanceCombatTimers(state, 1);
     startActions(state);
     expect(player.charging).toBe(true);
     player.latestInput = input(1, { heavy: true, dash: true });

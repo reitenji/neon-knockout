@@ -37,7 +37,8 @@ function attack(
   playerId: string,
   attackId: number,
   kind: AttackKind,
-  lockedFacing: Vec2 = { x: 1, y: 0 }
+  lockedFacing: Vec2 = { x: 1, y: 0 },
+  chargeMs = kind === 'HEAVY' ? GAME.heavyMaxChargeMs : 0
 ): AttackRuntime {
   const profile = profileForAttack(kind);
   const runtime: AttackRuntime = {
@@ -49,7 +50,7 @@ function attack(
     phaseElapsedMs: 0,
     previousActiveProgress: 0,
     lockedFacing,
-    chargeMs: kind === 'HEAVY' ? GAME.heavyMaxChargeMs : 0,
+    chargeMs,
     hitPlayerIds: new Set(),
     resolvedPlayerIds: new Set()
   };
@@ -255,7 +256,7 @@ describe('shared-shape melee resolution', () => {
 
   it('cancels an uncommitted heavy charge only after a confirmed normal hit', () => {
     const state = createState();
-    state.players.p2.chargeMs = GAME.heavyEnterChargeMs;
+    state.players.p2.chargeMs = 1;
     state.players.p2.charging = true;
     const runtime = attack(state, 'p1', 1, 'QUICK_1');
 
@@ -264,6 +265,21 @@ describe('shared-shape melee resolution', () => {
     ])).toEqual([expect.objectContaining({ type: 'HIT', targetId: 'p2' })]);
     expect(state.players.p2.chargeMs).toBe(0);
     expect(state.players.p2.charging).toBe(false);
+  });
+
+  it.each([
+    { chargeMs: 0, resultingOverload: 18, impulse: 460 * 1.18 },
+    { chargeMs: 225, resultingOverload: 25, impulse: 610 * 1.25 },
+    { chargeMs: 450, resultingOverload: 32, impulse: 760 * 1.32 }
+  ])('scales heavy impact continuously from zero through $chargeMs ms', ({ chargeMs, resultingOverload, impulse }) => {
+    const state = createState();
+    const runtime = attack(state, 'p1', 1, 'HEAVY', { x: 1, y: 0 }, chargeMs);
+
+    expect(resolveMeleeInteractions(state, [
+      shape('p1', runtime, { x: 620, y: 340 }, { x: 660, y: 380 }, 10)
+    ])).toEqual([expect.objectContaining({
+      type: 'HIT', attack: 'HEAVY', resultingOverload, impulse
+    })]);
   });
 
   it('refunds exactly 550 ms only for the first avoided attack of a dash and resolves every contact', () => {

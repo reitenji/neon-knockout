@@ -1,4 +1,3 @@
-import { GAME } from '../../../shared/constants.js';
 import type { MatchAction } from '../../../shared/model.js';
 import type { GameAudioCue } from './GameAudio.js';
 
@@ -87,7 +86,7 @@ export class LocalActionAudioTracker {
     if (kind === 'HEAVY' && this.currentPrediction) {
       this.currentPrediction.chargeMs = Math.max(this.currentPrediction.chargeMs, action?.chargeMs ?? 0);
       if (!action?.charging && !this.currentPrediction.heavyReleased &&
-        this.currentPrediction.chargeMs >= GAME.heavyEnterChargeMs) {
+        this.currentPrediction.chargeMs > 0) {
         cues.push('heavy-release');
         this.currentPrediction.heavyReleased = true;
       }
