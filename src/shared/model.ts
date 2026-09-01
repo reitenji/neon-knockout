@@ -115,7 +115,7 @@ export type MatchPlayer = Readonly<{
   stats: PlayerStats;
 }>;
 
-export type PlayerNetworkTransport = 'websocket' | 'polling';
+export type PlayerNetworkTransport = 'webrtc' | 'websocket' | 'polling';
 
 export type PlayerNetworkStatus = Readonly<{
   currentMs: number | null;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Ack, GameEvent, MatchSnapshot, RoomState } from './model.js';
+import type { Ack, GameEvent, MatchSnapshot, PlayerNetworkTransport, RoomState } from './model.js';
 import * as protocol from './protocol.js';
 import type { ClientToServerEvents } from './protocol.js';
 import { ACCENTS, ARENA, CHASSIS, GAME } from './constants.js';
@@ -16,6 +16,12 @@ const acknowledgedLeaveHandler: ClientToServerEvents['room:leave'] = (_payload, 
 };
 
 describe('shared input boundary protocol', () => {
+  it('includes WebRTC in the network transport contract', () => {
+    const transport: PlayerNetworkTransport = 'webrtc';
+
+    expect(transport).toBe('webrtc');
+  });
+
   it('accepts normalized combat input and rejects invalid axes or legacy directional buttons', () => {
     expect(protocol.roomCreateSchema.parse({ name: 'Ada' })).toEqual({ name: 'Ada' });
     expect(

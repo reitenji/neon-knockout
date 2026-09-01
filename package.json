@@ -27,6 +27,7 @@
     "react-dom": "^19.2.8",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
+    "werift": "0.24.4",
     "zod": "^4.4.3"
   },
   "devDependencies": {

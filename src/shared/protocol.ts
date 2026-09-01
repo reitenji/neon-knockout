@@ -1,5 +1,11 @@
 import { z } from 'zod';
 import { CHASSIS } from './model.js';
+import {
+  type RtcActivationRequest,
+  type RtcNegotiationAnswer,
+  type RtcNegotiationRequest,
+  type TransportModeNotice
+} from './gameplayTransport.js';
 import { KNOCKOUT_TARGET_OPTIONS, MATCH_DURATION_OPTIONS } from './roomSettings.js';
 import type {
   Ack,
@@ -15,7 +21,6 @@ import { normalizeRoomCode } from './names.js';
 
 const chassisSchema = z.enum(CHASSIS);
 const emptyPayloadSchema = z.object({}).strict();
-const finiteAxisSchema = z.number().finite().min(-1).max(1);
 const durationSchema = z.union(MATCH_DURATION_OPTIONS.map((value) => z.literal(value)) as [
   z.ZodLiteral<(typeof MATCH_DURATION_OPTIONS)[0]>,
   z.ZodLiteral<(typeof MATCH_DURATION_OPTIONS)[1]>,
@@ -47,18 +52,7 @@ export const lobbySettingsSchema = z.object({
   knockoutTarget: knockoutTargetSchema
 }).strict();
 export const matchStartSchema = emptyPayloadSchema;
-export const matchInputSchema = z
-  .object({
-    seq: z.number().int().nonnegative(),
-    moveX: finiteAxisSchema,
-    moveY: finiteAxisSchema,
-    aimX: finiteAxisSchema,
-    aimY: finiteAxisSchema,
-    quick: z.boolean(),
-    heavy: z.boolean(),
-    dash: z.boolean()
-  })
-  .strict();
+export { matchInputSchema } from './gameplayTransport.js';
 export const resultReadySchema = z.object({ ready: z.boolean() }).strict();
 export const resultLobbySchema = emptyPayloadSchema;
 
@@ -82,6 +76,15 @@ export interface ClientToServerEvents {
   'lobby:settings': (payload: LobbySettingsPayload, acknowledge: (ack: Ack<null>) => void) => void;
   'match:start': (payload: z.infer<typeof matchStartSchema>, acknowledge: (ack: Ack<null>) => void) => void;
   'match:input': (payload: MatchInputPayload) => void;
+  'transport:negotiate': (
+    payload: RtcNegotiationRequest,
+    acknowledge: (ack: Ack<RtcNegotiationAnswer>) => void
+  ) => void;
+  'transport:activate': (
+    payload: RtcActivationRequest,
+    acknowledge: (ack: Ack<TransportModeNotice>) => void
+  ) => void;
+  'transport:fallback': (payload: Readonly<Record<string, never>>) => void;
   'result:ready': (payload: ResultReadyPayload, acknowledge: (ack: Ack<null>) => void) => void;
   'result:lobby': (payload: z.infer<typeof resultLobbySchema>, acknowledge: (ack: Ack<null>) => void) => void;
 }
@@ -89,6 +92,7 @@ export interface ClientToServerEvents {
 export interface ServerToClientEvents {
   'session:welcome': (welcome: SessionWelcome) => void;
   'room:state': (state: RoomState) => void;
+  'transport:mode': (notice: TransportModeNotice) => void;
   'match:started': (snapshot: MatchSnapshot) => void;
   'match:snapshot': (snapshot: MatchSnapshot) => void;
   'match:event': (event: GameEvent) => void;
