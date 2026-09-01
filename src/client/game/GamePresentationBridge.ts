@@ -1,7 +1,9 @@
 import type Phaser from 'phaser';
 import type { GameEvent, InputFrame, MatchSnapshot } from '../../shared/model.js';
+import type { ArenaInputSource } from './phaser/ArenaInput.js';
 
 export interface GamePresentationBridge {
+  readonly inputSource?: ArenaInputSource;
   getSnapshot(): MatchSnapshot | null;
   isConnected(): boolean;
   subscribeSnapshot(listener: (snapshot: MatchSnapshot) => void): () => void;
@@ -21,8 +23,15 @@ const LOCAL_PLAYER_ID = Symbol('localPlayerId');
 
 type ScopedBridge = GamePresentationBridge & { readonly [LOCAL_PLAYER_ID]?: string };
 
-export function scopeBridgeToPlayer(bridge: GamePresentationBridge, localPlayerId: string): GamePresentationBridge {
-  return Object.assign(Object.create(bridge) as ScopedBridge, { [LOCAL_PLAYER_ID]: localPlayerId });
+export function scopeBridgeToPlayer(
+  bridge: GamePresentationBridge,
+  localPlayerId: string,
+  inputSource: ArenaInputSource | undefined = bridge.inputSource
+): GamePresentationBridge {
+  return Object.assign(Object.create(bridge) as ScopedBridge, {
+    [LOCAL_PLAYER_ID]: localPlayerId,
+    ...(inputSource ? { inputSource } : {})
+  });
 }
 
 export function localPlayerIdFromBridge(bridge: GamePresentationBridge): string | null {

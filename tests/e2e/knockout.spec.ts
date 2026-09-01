@@ -448,6 +448,62 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
   }
 }, 55_000);
 
+test('rematch still allows consecutive quick attacks without refresh', async ({ browser, game }) => {
+  const match = await createTwoPlayerMatch(browser, game);
+  try {
+    for (let knockout = 0; knockout < 5; knockout += 1) {
+      const knockoutMarker = marker(game, match.code);
+      game.harness.forceKnockout(match.code, match.hostPlayerId, match.guestPlayerId);
+      const forced = await waitForEvent(game, match.code, knockoutMarker, 'KNOCKOUT');
+      if (knockout < 4) await waitForEvent(game, match.code, forced.eventId, 'RESPAWN');
+    }
+
+    await match.host.page.getByRole('button', { name: 'Tekrar Hazır' }).click();
+    await match.guest.page.getByRole('button', { name: 'Tekrar Hazır' }).click();
+    await expect(match.host.page.getByRole('button', { name: 'Rövanşı Başlat' })).toBeEnabled();
+    await match.host.page.getByRole('button', { name: 'Rövanşı Başlat' }).click();
+    await expect(match.host.page.getByRole('img', { name: 'Neon Knockout oyun alanı' })).toBeVisible();
+    await expect.poll(() => snapshot(game, match.code).phase).toBe('REGULATION');
+
+    await placePlayers(game, match, { x: 500, y: 360 }, { x: 548, y: 360 });
+    const rematchSeq = player(game, match.code, match.hostPlayerId).lastProcessedInputSeq;
+    await match.host.page.keyboard.down('d');
+    await expect.poll(() => player(game, match.code, match.hostPlayerId).lastProcessedInputSeq).toBeGreaterThan(rematchSeq);
+    await expect.poll(() => player(game, match.code, match.hostPlayerId).position.x).toBeGreaterThan(500);
+    await release(match.host.page, 'd');
+    await waitForNeutral(game, match);
+    await placePlayers(game, match, { x: 500, y: 360 }, { x: 548, y: 360 });
+    const firstMarker = marker(game, match.code);
+    await match.host.page.keyboard.down('j');
+    await expect.poll(() => player(game, match.code, match.hostPlayerId).action.kind).toBe('QUICK_1');
+    await match.host.page.keyboard.up('j');
+    const firstHit = await waitForEvent(
+      game,
+      match.code,
+      firstMarker,
+      'HIT',
+      (event) => event.attackerId === match.hostPlayerId && event.targetId === match.guestPlayerId
+    );
+    await waitForNeutral(game, match);
+
+    await placePlayers(game, match, { x: 500, y: 360 }, { x: 548, y: 360 });
+    await match.host.page.keyboard.down('j');
+    await expect.poll(() => player(game, match.code, match.hostPlayerId).action.kind).toBe('QUICK_1');
+    await match.host.page.keyboard.up('j');
+    await waitForEvent(
+      game,
+      match.code,
+      firstHit.eventId,
+      'HIT',
+      (event) => event.attackerId === match.hostPlayerId && event.targetId === match.guestPlayerId
+    );
+    await waitForNeutral(game, match);
+    await assertNoUnexpectedErrors(game, match.host, match.guest);
+  } finally {
+    await match.close();
+  }
+}, 20_000);
+
 test('result screen preserves ready and departed player statuses', async ({ browser, game }) => {
   const match = await createTwoPlayerMatch(browser, game);
   try {

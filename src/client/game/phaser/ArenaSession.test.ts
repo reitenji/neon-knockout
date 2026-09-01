@@ -47,6 +47,27 @@ function controls(): ArenaInputSource & { movementHeld: Record<'up' | 'down' | '
 }
 
 describe('ArenaSession', () => {
+  it('clears countdown-held combat without forcing a fresh release when regulation begins', () => {
+    const bridge = new Bridge();
+    bridge.current = { ...snapshot(), phase: 'COUNTDOWN' };
+    const source = controls();
+    let now = 0;
+    const session = new ArenaSession(bridge, 'p-local', new ArenaInput(source), () => now);
+    session.start();
+
+    source.attackHeld.quick = true;
+    source.movementHeld.right = true;
+    session.step(16);
+    expect(bridge.sent).toHaveLength(0);
+
+    bridge.current = snapshot(player({ lastProcessedInputSeq: -1 }));
+    for (const listener of bridge.snapshotListeners) listener(bridge.current);
+    now += 17;
+    session.step(16);
+
+    expect(bridge.sent.at(-1)).toMatchObject({ quick: true, moveX: 1, aimX: 1, aimY: 0 });
+  });
+
   it('stops immediately on disconnect and suppresses held keyboard combat through reconnect until release', () => {
     const bridge = new Bridge();
     const source = controls();

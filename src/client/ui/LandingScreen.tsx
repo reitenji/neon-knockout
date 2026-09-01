@@ -11,6 +11,14 @@ function ActionMark({ pending, idle }: Readonly<{ pending: boolean; idle: string
   return pending ? <span className="action-spinner" aria-hidden="true" /> : <span aria-hidden="true">{idle}</span>;
 }
 
+function networkMessage(): string {
+  const loopbackHosts = new Set(['localhost', '127.0.0.1']);
+  if (loopbackHosts.has(window.location.hostname)) {
+    return 'Misafirler localhost yerine bu bilgisayarın LAN adresini açmalı; localhost sadece bu cihazda çalışır.';
+  }
+  return `Ağ adresi: ${window.location.origin}`;
+}
+
 export function LandingScreen({ state, onCreateRoom, onJoinRoom }: LandingScreenProps) {
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
@@ -103,9 +111,15 @@ export function LandingScreen({ state, onCreateRoom, onJoinRoom }: LandingScreen
                 {inlineError.message}
               </p>
             ) : null}
+            {inlineError?.code === 'ACK_TIMEOUT' ? (
+              <p className="landing-network landing-network--warning">
+                Aynı Wi-Fi, guest/AP isolation kapalı olması ve tarayıcının yerel ağ izni kontrol edilmeli.
+              </p>
+            ) : null}
           </div>
         </form>
 
+        <p className="landing-network" data-testid="network-origin">{networkMessage()}</p>
         <p className="landing-tagline">Aynı ağdaki arkadaşlarınla oyna</p>
       </div>
     </section>

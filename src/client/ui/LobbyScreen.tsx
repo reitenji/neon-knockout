@@ -8,6 +8,7 @@ import {
   type RoomSettings
 } from '../../shared/roomSettings.js';
 import { selectCanStart, selectSelfPlayer, type ClientState } from '../state/gameStore.js';
+import { LanSharePanel } from './LanSharePanel.js';
 
 type LobbyScreenProps = Readonly<{
   state: ClientState;
@@ -80,15 +81,18 @@ export function LobbyScreen({
   return (
     <section className="screen screen--lobby" aria-label="Oda lobisi">
       <div className="lobby-frame tech-frame">
-        <header className="lobby-room">
-          <span className="eyebrow">ODA</span>
-          <strong className="room-code" data-testid="room-code">{room.roomCode}</strong>
-          <button className="chrome-button copy-button focus-ring" type="button" aria-label="Kodu Kopyala" onClick={() => void onCopyRoomCode()}>
-            <span>Kodu Kopyala</span>
-            <span className={`copy-button__mark is-${state.copyFeedback}`} aria-hidden="true">
-              {state.copyFeedback === 'copied' ? '✓' : state.copyFeedback === 'failed' ? '!' : '⧉'}
-            </span>
-          </button>
+        <header className={`lobby-room${isHost ? ' lobby-room--with-share' : ''}`}>
+          <div className="lobby-room__primary">
+            <span className="eyebrow">ODA</span>
+            <strong className="room-code" data-testid="room-code">{room.roomCode}</strong>
+            <button className="chrome-button copy-button focus-ring" type="button" aria-label="Kodu Kopyala" onClick={() => void onCopyRoomCode()}>
+              <span>Kodu Kopyala</span>
+              <span className={`copy-button__mark is-${state.copyFeedback}`} aria-hidden="true">
+                {state.copyFeedback === 'copied' ? '✓' : state.copyFeedback === 'failed' ? '!' : '⧉'}
+              </span>
+            </button>
+          </div>
+          {isHost ? <LanSharePanel /> : null}
         </header>
 
         <fieldset className="chassis-picker" disabled={!selfPlayer || anyPending}>

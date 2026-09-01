@@ -373,6 +373,10 @@
   text-overflow: ellipsis;
 }
 
+.touch-controls {
+  display: none;
+}
+
 .match-hud__announcement {
   position: absolute;
   top: 50%;
@@ -533,6 +537,301 @@
 
   .match-hud__controls small {
     font-size: 0.57rem;
+  }
+}
+
+@media (pointer: coarse) and (orientation: landscape) {
+  .game-screen,
+  .game-stage,
+  .touch-controls,
+  .touch-controls * {
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  .touch-controls {
+    position: absolute;
+    z-index: 8;
+    inset: 0;
+    padding:
+      max(8px, env(safe-area-inset-top))
+      max(12px, env(safe-area-inset-right))
+      max(10px, env(safe-area-inset-bottom))
+      max(12px, env(safe-area-inset-left));
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    pointer-events: none;
+  }
+
+  .touch-controls__pad,
+  .touch-controls__button {
+    pointer-events: auto;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .touch-controls__pad {
+    position: relative;
+    width: clamp(112px, 19vw, 148px);
+    height: clamp(112px, 19vw, 148px);
+    flex: 0 0 auto;
+    border: 1px solid rgb(137 201 220 / 0.3);
+    border-radius: 50%;
+    background: rgb(3 9 13 / 0.44);
+    box-shadow: inset 0 0 28px rgb(37 217 248 / 0.08);
+  }
+
+  .touch-controls__pad-ring {
+    position: absolute;
+    inset: 20%;
+    border: 1px solid rgb(130 189 207 / 0.2);
+    border-radius: 50%;
+  }
+
+  .touch-controls__pad-ring::before,
+  .touch-controls__pad-ring::after {
+    content: "";
+    position: absolute;
+    background: rgb(146 201 218 / 0.17);
+  }
+
+  .touch-controls__pad-ring::before {
+    top: 50%;
+    left: -14%;
+    right: -14%;
+    height: 1px;
+  }
+
+  .touch-controls__pad-ring::after {
+    top: -14%;
+    bottom: -14%;
+    left: 50%;
+    width: 1px;
+  }
+
+  .touch-controls__pad-thumb {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 48px;
+    height: 48px;
+    border: 1px solid rgb(175 235 246 / 0.64);
+    border-radius: 50%;
+    background: rgb(22 67 79 / 0.78);
+    box-shadow: 0 5px 18px rgb(0 0 0 / 0.38), inset 0 0 14px rgb(37 217 248 / 0.15);
+    transform: translate(calc(-50% + var(--touch-stick-x)), calc(-50% + var(--touch-stick-y)));
+    transition: transform 45ms linear;
+  }
+
+  .touch-controls__actions {
+    width: clamp(172px, 27vw, 218px);
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas:
+      "dash heavy"
+      "quick heavy";
+    align-items: end;
+    justify-items: end;
+    gap: 8px;
+    pointer-events: none;
+  }
+
+  .touch-controls__button {
+    min-width: 64px;
+    min-height: 64px;
+    padding: 7px;
+    display: grid;
+    place-content: center;
+    gap: 1px;
+    border: 1px solid rgb(145 190 207 / 0.48);
+    border-radius: 50%;
+    background: rgb(3 9 13 / 0.7);
+    color: #e5f5fa;
+    font-family: var(--font-mono);
+    text-align: center;
+    box-shadow: 0 7px 20px rgb(0 0 0 / 0.34), inset 0 0 16px rgb(255 255 255 / 0.035);
+  }
+
+  .touch-controls__button strong {
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+  }
+
+  .touch-controls__button span {
+    color: #9fb9c3;
+    font: 0.55rem var(--font-ui);
+  }
+
+  .touch-controls__button--quick {
+    grid-area: quick;
+    border-color: rgb(37 217 248 / 0.68);
+  }
+
+  .touch-controls__button--heavy {
+    grid-area: heavy;
+    width: clamp(76px, 11vw, 92px);
+    height: clamp(76px, 11vw, 92px);
+    border-color: rgb(255 179 71 / 0.72);
+  }
+
+  .touch-controls__button--dash {
+    grid-area: dash;
+  }
+
+  .touch-controls__button.is-active {
+    border-color: #eefcff;
+    background: rgb(31 87 101 / 0.9);
+    color: #fff;
+    box-shadow: 0 0 20px rgb(37 217 248 / 0.28), inset 0 0 18px rgb(255 255 255 / 0.1);
+    transform: scale(0.94);
+  }
+
+  .touch-controls__button--heavy.is-active {
+    background: rgb(105 62 17 / 0.9);
+    box-shadow: 0 0 22px rgb(255 179 71 / 0.3), inset 0 0 18px rgb(255 255 255 / 0.1);
+  }
+
+  .match-hud__controls {
+    display: none;
+  }
+
+  .match-hud__clock {
+    top: max(5px, env(safe-area-inset-top));
+    min-width: 118px;
+    padding: 4px 9px 5px;
+  }
+
+  .match-hud__clock time {
+    font-size: 1.1rem;
+  }
+
+  .match-hud__clock > span,
+  .match-hud__rule,
+  .match-hud__contraction {
+    font-size: 0.48rem;
+  }
+
+  .match-hud__roster {
+    top: max(5px, env(safe-area-inset-top));
+    left: max(5px, env(safe-area-inset-left));
+    width: clamp(126px, 20vw, 156px);
+    padding: 3px;
+  }
+
+  .match-hud__roster-heading,
+  .match-hud__ranking li {
+    grid-template-columns: 4px minmax(0, 1fr) 15px 35px;
+    gap: 3px;
+  }
+
+  .match-hud__roster-heading {
+    min-height: 14px;
+    font-size: 0.4rem;
+  }
+
+  .match-hud__ranking li {
+    min-height: 17px;
+    padding: 1px 3px;
+  }
+
+  .match-hud__name {
+    font-size: 0.56rem;
+  }
+
+  .match-hud__name small {
+    display: none;
+  }
+
+  .match-hud__score {
+    font-size: 0.62rem;
+  }
+
+  .match-hud__ping {
+    font-size: 0.45rem;
+  }
+
+  .match-hud__connection {
+    top: max(5px, env(safe-area-inset-top));
+    right: max(5px, env(safe-area-inset-right));
+    min-width: 28px;
+    min-height: 28px;
+    padding: 0 9px;
+    overflow: hidden;
+    font-size: 0;
+  }
+
+  .match-hud__connection i {
+    width: 8px;
+    height: 8px;
+  }
+
+  .match-hud__combat {
+    right: auto;
+    left: 50%;
+    bottom: max(6px, env(safe-area-inset-bottom));
+    width: clamp(238px, 40vw, 330px);
+    min-height: 42px;
+    padding: 4px 6px;
+    transform: translateX(-50%);
+    background: rgb(3 8 12 / 0.68);
+  }
+
+  .match-hud__overload,
+  .match-hud__ability,
+  .match-hud__action {
+    padding-inline: 5px;
+    gap: 2px 4px;
+  }
+
+  .match-hud__overload > span,
+  .match-hud__ability > span,
+  .match-hud__action > span {
+    font-size: 0.45rem;
+  }
+
+  .match-hud__overload strong,
+  .match-hud__ability strong,
+  .match-hud__action strong {
+    font-size: 0.57rem;
+  }
+
+  .match-hud__meter {
+    height: 4px;
+  }
+
+  .match-hud__announcement {
+    font-size: clamp(2.3rem, 11vw, 4rem);
+  }
+
+  .match-hud__announcement-slot {
+    top: 47px;
+  }
+}
+
+@media (pointer: coarse) and (orientation: landscape) and (max-height: 380px) {
+  .touch-controls__pad {
+    width: 106px;
+    height: 106px;
+  }
+
+  .touch-controls__actions {
+    width: 166px;
+    gap: 5px;
+  }
+
+  .touch-controls__button {
+    min-width: 58px;
+    min-height: 58px;
+  }
+
+  .touch-controls__button--heavy {
+    width: 72px;
+    height: 72px;
+  }
+
+  .match-hud__combat {
+    width: 224px;
   }
 }
 

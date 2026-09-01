@@ -61,7 +61,11 @@ describe('createSocketGameClient', () => {
     const listener = vi.fn();
     const unsubscribe = client.subscribe('room:state', listener);
     expect(socketHarness.io).toHaveBeenCalledOnce();
-    expect(socketHarness.io).toHaveBeenCalledWith(window.location.origin, expect.objectContaining({ transports: ['websocket'] }));
+    expect(socketHarness.io).toHaveBeenCalledWith(window.location.origin, expect.objectContaining({
+      autoConnect: false,
+      reconnection: true,
+      reconnectionAttempts: Infinity
+    }));
     socketHarness.trigger('room:state', roomState());
     expect(listener).toHaveBeenCalledOnce();
     unsubscribe();

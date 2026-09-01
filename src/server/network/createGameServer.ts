@@ -1,11 +1,13 @@
 import { randomBytes } from 'node:crypto';
 import { createServer, type Server as HttpServer } from 'node:http';
+import { networkInterfaces as getNetworkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 import express from 'express';
 import { Server } from 'socket.io';
 import type { GameEvent, MatchSnapshot, SessionWelcome, Vec2 } from '../../shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
 import { RoomManager, type RoomManagerTestHarness, type RoomPublication } from '../rooms/roomManager.js';
+import { discoverRuntimeNetworkInfo, type NetworkInterfaces } from '../runtime/lanAddresses.js';
 import { registerSocketHandlers, type GameSocket } from './socketHandlers.js';
 
 export interface GameServer {
@@ -27,6 +29,7 @@ export type CreateGameServerOptions = Readonly<{
   enableTestHarness?: boolean;
   clientDirectory?: string | false;
   logger?: Pick<Console, 'error'>;
+  networkInterfaces?: () => NetworkInterfaces;
 }>;
 
 type PlayerConnection = Readonly<{ roomCode: string; socketId: string }>;
@@ -53,12 +56,11 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
   const host = options.host ?? '0.0.0.0';
   const requestedPort = options.port ?? 4173;
   const logger = options.logger ?? console;
+  const networkInterfaces = options.networkInterfaces ?? getNetworkInterfaces;
   const now = (): number => performance.now();
   const app = express();
   const httpServer: HttpServer = createServer(app);
-  const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
-    transports: ['websocket']
-  });
+  const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer);
   const roomCodes = new Set<string>();
   const snapshots = new Map<string, MatchSnapshot>();
   const testEventHistory = options.enableTestHarness ? new Map<string, GameEvent[]>() : null;
@@ -125,6 +127,15 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
       rooms: roomCodes.size,
       uptimeSeconds: Math.max(0, (now() - startedAt) / 1_000)
     });
+  });
+
+  app.get('/api/runtime/network', (_request, response) => {
+    const address = httpServer.address();
+    if (!address || typeof address === 'string') {
+      response.status(503).json({ error: 'SERVER_NOT_LISTENING' });
+      return;
+    }
+    response.json(discoverRuntimeNetworkInfo(address.port, networkInterfaces()));
   });
 
   const clientDirectory = options.clientDirectory === undefined ? resolve(process.cwd(), 'dist/client') : options.clientDirectory;

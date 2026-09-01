@@ -30,13 +30,18 @@ describe('PhaserArena', () => {
   it('creates one game for a stable mount and destroys it exactly once with removeCanvas=true', () => {
     const presentation = bridge();
     const destroy = vi.fn();
+    let touchInput: GamePresentationBridge['inputSource'];
     const factory = vi.fn<NeonGameFactory>((_parent, receivedBridge) => {
+      touchInput = receivedBridge.inputSource;
       const unsubscribe = receivedBridge.subscribeSnapshot(() => undefined);
       return { destroy(removeCanvas?: boolean) { unsubscribe(); destroy(removeCanvas); } };
     });
     const view = render(<PhaserArena bridge={presentation} localPlayerId="p-local" createGame={factory} reducedMotion />);
 
     expect(factory).toHaveBeenCalledOnce();
+    expect(touchInput).toBeDefined();
+    expect(touchInput?.movement()).toEqual({ up: false, down: false, left: false, right: false, dash: false });
+    expect(touchInput?.attack()).toEqual({ quick: false, heavy: false });
     expect(screen.getByRole('complementary', { name: 'Maç bilgileri' })).toBeVisible();
     expect(presentation.snapshotListeners).toHaveLength(2);
     expect(presentation.connectionListeners).toHaveLength(1);

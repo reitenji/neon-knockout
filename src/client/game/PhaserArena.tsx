@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef } from 'react';
 import type { GamePresentationBridge, NeonGameFactory } from './GamePresentationBridge.js';
 import { scopeBridgeToPlayer } from './GamePresentationBridge.js';
+import { TouchInputSource } from './phaser/TouchInputSource.js';
 import { MatchHud } from '../ui/MatchHud.js';
+import { TouchControls } from '../ui/TouchControls.js';
 
 type PhaserArenaProps = Readonly<{
   bridge: GamePresentationBridge;
@@ -17,7 +19,11 @@ export function PhaserArena({
   reducedMotion
 }: PhaserArenaProps) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const scopedBridge = useMemo(() => scopeBridgeToPlayer(bridge, localPlayerId), [bridge, localPlayerId]);
+  const touchInput = useMemo(() => new TouchInputSource(), []);
+  const scopedBridge = useMemo(
+    () => scopeBridgeToPlayer(bridge, localPlayerId, touchInput),
+    [bridge, localPlayerId, touchInput]
+  );
   const prefersReducedMotion = reducedMotion ?? (
     window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
   );
@@ -50,6 +56,7 @@ export function PhaserArena({
         onContextMenu={(event) => event.preventDefault()}
       />
       <MatchHud bridge={scopedBridge} localPlayerId={localPlayerId} />
+      <TouchControls source={touchInput} />
     </section>
   );
 }

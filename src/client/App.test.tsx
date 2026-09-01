@@ -87,40 +87,38 @@ describe('App', () => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    [899, 600],
-    [900, 599]
-  ])('replaces the shell with an accessible warning at %d×%d', (width, height) => {
-    setViewport(width, height);
-    render(<App store={storeFor(landing)} />);
-
-    expect(screen.getByRole('main')).toContainElement(screen.getByRole('alert'));
-    expect(screen.getByRole('heading', { name: 'Pencere çok küçük' })).toBeVisible();
-    expect(screen.getByText('Neon Knockout en az 900 × 600 masaüstü alanı gerektirir. Pencereyi büyüt.')).toBeVisible();
-    expect(document.querySelector('.app-shell')).toBeNull();
-  });
-
-  it('renders the normal shell at the exact 900×600 minimum', () => {
-    setViewport(900, 600);
+  it('keeps the complete landing flow available on a portrait phone', () => {
+    setViewport(390, 844);
     render(<App store={storeFor(landing)} />);
 
     expect(screen.getByRole('heading', { name: 'NEON KNOCKOUT' })).toBeVisible();
-    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Oda Kur' })).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Odaya Katıl' })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Telefonu yatay çevir' })).toBeNull();
   });
 
-  it('reacts to viewport changes and removes its resize listener on unmount', () => {
-    setViewport(899, 600);
+  it('keeps the match mounted under a portrait rotate prompt, then clears it in landscape', () => {
+    setViewport(390, 844);
     const addListener = vi.spyOn(window, 'addEventListener');
     const removeListener = vi.spyOn(window, 'removeEventListener');
-    const view = render(<App store={storeFor(landing)} />);
+    const matchStore = storeFor({
+      ...landing,
+      screen: 'MATCH',
+      match: matchSnapshot(),
+      session: { playerId: 'p-local', roomCode: 'AB2Z', resumeToken: 'token' }
+    });
+    const view = render(<App store={matchStore} gameFactory={gameFactory} />);
     const resizeRegistration = addListener.mock.calls.find(([event]) => event === 'resize');
 
     expect(resizeRegistration).toBeDefined();
-    expect(screen.getByRole('alert')).toBeVisible();
+    expect(screen.getByRole('dialog', { name: 'Telefonu yatay çevir' })).toBeVisible();
+    expect(screen.getByLabelText('Neon Knockout oyun alanı')).toBeInTheDocument();
+    expect(gameFactory).toHaveBeenCalledOnce();
 
-    setViewport(900, 600);
+    setViewport(844, 390);
     act(() => window.dispatchEvent(new Event('resize')));
-    expect(screen.getByRole('heading', { name: 'NEON KNOCKOUT' })).toBeVisible();
+    expect(screen.queryByRole('dialog', { name: 'Telefonu yatay çevir' })).toBeNull();
+    expect(gameFactory).toHaveBeenCalledOnce();
 
     view.unmount();
     expect(removeListener).toHaveBeenCalledWith('resize', resizeRegistration?.[1]);

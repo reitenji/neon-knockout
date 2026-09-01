@@ -1,0 +1,133 @@
+.lobby-room--with-share {
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.lobby-room__primary {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.lan-share-panel {
+  min-width: 0;
+  max-width: 760px;
+  padding: 6px 7px 6px 10px;
+  flex: 1 1 auto;
+  display: grid;
+  grid-template-columns: auto minmax(130px, 1fr) auto;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid rgb(33 49 63 / 0.78);
+  background: rgb(10 16 22 / 0.86);
+}
+
+.lan-share-panel__label {
+  color: var(--color-text-muted);
+  font: 0.64rem var(--font-mono);
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.lan-share-panel__content {
+  min-width: 0;
+}
+
+.lan-share-panel__url {
+  display: block;
+  overflow: hidden;
+  border-radius: 2px;
+  color: var(--color-cyan);
+  font: 0.72rem var(--font-mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.lan-share-panel__message,
+.lan-share-panel__error,
+.lan-share-panel__help {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.lan-share-panel__error {
+  color: var(--color-danger);
+}
+
+.lan-share-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.lan-share-panel__button,
+.lan-share-panel__refresh {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-raised);
+  color: var(--color-text-muted);
+  font: 0.66rem var(--font-ui);
+  cursor: pointer;
+  transition: border-color var(--motion-fast), color var(--motion-fast);
+  white-space: nowrap;
+}
+
+.lan-share-panel__button:hover,
+.lan-share-panel__refresh:hover:not(:disabled) {
+  border-color: var(--color-cyan-dim);
+  color: var(--color-text);
+}
+
+.lan-share-panel__refresh:disabled {
+  cursor: wait;
+  opacity: 0.48;
+}
+
+.lan-share-panel__copy-feedback {
+  grid-column: 2 / -1;
+  color: var(--color-text-muted);
+  font-size: 0.65rem;
+}
+
+.lan-share-panel__copy-feedback.is-copied {
+  color: var(--color-ready);
+}
+
+.lan-share-panel__copy-feedback.is-failed {
+  color: var(--color-danger);
+}
+
+@media (max-width: 900px) {
+  .lobby-room--with-share {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .lobby-room__primary {
+    justify-content: center;
+  }
+
+  .lan-share-panel {
+    width: 100%;
+    max-width: none;
+  }
+}
+
+@media (max-width: 620px) {
+  .lan-share-panel {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .lan-share-panel__label {
+    display: none;
+  }
+
+  .lan-share-panel__copy-feedback {
+    grid-column: 1 / -1;
+  }
+}

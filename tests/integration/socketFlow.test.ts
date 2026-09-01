@@ -308,14 +308,14 @@ describe('Socket.IO FFA game server flow', () => {
     expect(observed.some((state) => state.settings.durationMs !== 90_000 || state.settings.knockoutTarget !== 3)).toBe(false);
   });
 
-  it('measures RTT from a server-issued challenge and ignores forged client latency events', async () => {
+  it('promptly measures RTT after a match starts and ignores forged client latency events', async () => {
     const match = await startMatch();
-    const measuredSnapshot = expectEvent(
-      match.hostClient,
-      'match:snapshot',
-      (value) => value.pingMs[match.host.playerId] !== null
+    await waitFor(
+      () => snapshot(match.roomCode).pingMs[match.host.playerId] !== null,
+      'first server-issued RTT sample after match start',
+      750
     );
-    const measured = await measuredSnapshot;
+    const measured = snapshot(match.roomCode);
     expect(measured.pingMs[match.host.playerId]).toEqual(expect.any(Number));
     expect(measured.pingMs[match.host.playerId]).toBeLessThan(GAME.maxPingMs);
 
@@ -748,6 +748,33 @@ describe('Socket.IO FFA game server flow', () => {
       scores: { [match.host.playerId]: 0, [match.guest.playerId]: 0 },
       winnerPlayerId: null,
       resultReason: null
+    });
+
+    const rematchSnapshot = advanceUntil(
+      match.roomCode,
+      (value) => value.phase === 'REGULATION',
+      'rematch regulation',
+      GAME.countdownMs + 100
+    );
+    expect(player(rematchSnapshot, match.host.playerId).lastProcessedInputSeq).toBe(-1);
+    expect(player(rematchSnapshot, match.guest.playerId).lastProcessedInputSeq).toBe(-1);
+
+    match.hostClient.emit('match:input', input(0, { aimX: 0, aimY: -1, quick: true }));
+    resumedClient.emit('match:input', input(0, { aimX: -1, aimY: 0, quick: true }));
+    const rematchInputsAccepted = await expectEvent(
+      match.hostClient,
+      'match:snapshot',
+      (value) =>
+        player(value, match.host.playerId).lastProcessedInputSeq === 0 &&
+        player(value, match.guest.playerId).lastProcessedInputSeq === 0
+    );
+    expect(player(rematchInputsAccepted, match.host.playerId)).toMatchObject({
+      lastProcessedInputSeq: 0,
+      facing: { x: 0, y: -1 }
+    });
+    expect(player(rematchInputsAccepted, match.guest.playerId)).toMatchObject({
+      lastProcessedInputSeq: 0,
+      facing: { x: -1, y: 0 }
     });
   }, 12_000);
 

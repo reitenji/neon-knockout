@@ -36,7 +36,7 @@ export class ArenaSession {
     this.connected = this.bridge.isConnected();
     const initial = this.bridge.getSnapshot();
     if (initial) this.acceptSnapshot(initial);
-    if (!this.connected) this.releaseHeldInput();
+    if (!this.connected) this.releaseHeldInput(true);
     this.unsubscribers.push(
       this.bridge.subscribeSnapshot((snapshot) => this.acceptSnapshot(snapshot)),
       this.bridge.subscribeConnected((connected) => this.acceptConnection(connected))
@@ -47,7 +47,7 @@ export class ArenaSession {
     if (!this.started || this.disposed || !this.connected || !this.latestSnapshot) return this.localPresentation;
     const localPlayer = playerById(this.latestSnapshot, this.localPlayerId);
     if (!localPlayer || !acceptsInput(this.latestSnapshot)) {
-      this.releaseHeldInput();
+      this.releaseHeldInput(false);
       return this.localPresentation;
     }
     const frame = this.input.sample(this.inputSequence, this.now());
@@ -78,7 +78,7 @@ export class ArenaSession {
   private acceptConnection(connected: boolean): void {
     if (connected === this.connected) return;
     this.connected = connected;
-    if (!connected) this.releaseHeldInput();
+    if (!connected) this.releaseHeldInput(true);
   }
 
   private acceptSnapshot(snapshot: MatchSnapshot): void {
@@ -98,8 +98,8 @@ export class ArenaSession {
     );
   }
 
-  private releaseHeldInput(): void {
-    this.input.clearHeld();
+  private releaseHeldInput(requireRelease: boolean): void {
+    this.input.clearHeld(requireRelease);
     const localPlayer = this.latestSnapshot ? playerById(this.latestSnapshot, this.localPlayerId) : null;
     this.prediction.reset(localPlayer ?? undefined);
     this.localPresentation = localPlayer

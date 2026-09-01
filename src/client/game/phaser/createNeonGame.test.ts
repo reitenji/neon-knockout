@@ -31,7 +31,7 @@ const bridge: GamePresentationBridge = {
 };
 
 describe('buildNeonGameConfig', () => {
-  it('uses one 1280x720 AUTO game with FIT and CENTER_BOTH scaling and capped DPR', () => {
+  it('uses one 1280x720 AUTO game with FIT, CENTER_BOTH, a 60fps cap, and capped desktop DPR', () => {
     const parent = document.createElement('div');
     const config = buildNeonGameConfig(parent, bridge, { reducedMotion: true }, 4);
 
@@ -41,6 +41,7 @@ describe('buildNeonGameConfig', () => {
       height: 720,
       parent,
       zoom: 2,
+      fps: { target: 60, limit: 60 },
       scale: {
         mode: Phaser.Scale.FIT,
         autoCenter: Phaser.Scale.CENTER_BOTH,
@@ -49,5 +50,12 @@ describe('buildNeonGameConfig', () => {
       }
     });
     expect(config.scene).toHaveLength(2);
+  });
+
+  it('caps DPR more aggressively on a coarse-pointer mobile device', () => {
+    const parent = document.createElement('div');
+    const config = buildNeonGameConfig(parent, bridge, { reducedMotion: false, mobile: true }, 4);
+
+    expect(config.zoom).toBe(1.25);
   });
 });

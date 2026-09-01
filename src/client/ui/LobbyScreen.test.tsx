@@ -31,6 +31,7 @@ function state(overrides: Partial<ClientState> = {}): ClientState {
   };
 }
 function renderLobby(clientState = state(), handlers: Partial<Parameters<typeof LobbyScreen>[0]> = {}) {
+  vi.stubGlobal('fetch', () => new Promise<Response>(() => undefined));
   const props: Parameters<typeof LobbyScreen>[0] = {
     state: clientState,
     onSetChassis: vi.fn(async () => undefined),
@@ -44,7 +45,10 @@ function renderLobby(clientState = state(), handlers: Partial<Parameters<typeof 
 }
 
 describe('LobbyScreen', () => {
-  afterEach(cleanup);
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
 
   it('renders four meaningful chassis silhouette buttons and no grouped color columns', () => {
     renderLobby();
@@ -85,6 +89,17 @@ describe('LobbyScreen', () => {
     cleanup();
     renderLobby(state({ room: { ...readyRoom, hostPlayerId: 'player-2' } }));
     expect(screen.queryByRole('button', { name: 'Maçı Başlat' })).toBeNull();
+  });
+
+  it('shows LAN sharing only to the room host while keeping the room code primary', () => {
+    renderLobby();
+    expect(screen.getByTestId('room-code')).toHaveTextContent('AB2Z');
+    expect(screen.getByRole('complementary', { name: 'LAN bağlantısı' })).toBeVisible();
+    cleanup();
+
+    renderLobby(state({ room: room({ hostPlayerId: 'player-2' }) }));
+    expect(screen.getByTestId('room-code')).toHaveTextContent('AB2Z');
+    expect(screen.queryByRole('complementary', { name: 'LAN bağlantısı' })).toBeNull();
   });
 
   it('shows the authoritative room settings as enabled native selects for the host', () => {

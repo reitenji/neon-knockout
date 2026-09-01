@@ -50,6 +50,48 @@ function expectWelcome(acknowledgement: Ack<SessionWelcome>): SessionWelcome {
 }
 
 describe('GameServer lifecycle', () => {
+  it('discovers the current LAN address on every runtime network request', async () => {
+    let currentAddress = '192.168.68.51';
+    const server = createGameServer({
+      host: '127.0.0.1',
+      port: 0,
+      clientDirectory: false,
+      networkInterfaces: () => ({
+        en0: [{ address: currentAddress, family: 'IPv4', internal: false }],
+        utun4: [{ address: '10.8.0.2', family: 'IPv4', internal: false }]
+      })
+    });
+
+    try {
+      const address = await server.start();
+      const first = await fetch(`${address.origin}/api/runtime/network`).then((response) => response.json());
+
+      expect(first).toEqual({
+        port: address.port,
+        localUrl: `http://localhost:${address.port}`,
+        lanAddresses: [{
+          interfaceName: 'en0',
+          address: '192.168.68.51',
+          url: `http://192.168.68.51:${address.port}`
+        }]
+      });
+
+      currentAddress = '192.168.68.52';
+      const second = await fetch(`${address.origin}/api/runtime/network`).then((response) => response.json());
+      expect(second).toEqual({
+        port: address.port,
+        localUrl: `http://localhost:${address.port}`,
+        lanAddresses: [{
+          interfaceName: 'en0',
+          address: '192.168.68.52',
+          url: `http://192.168.68.52:${address.port}`
+        }]
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('coalesces concurrent starts onto one listener and one address', async () => {
     const server = createGameServer({ host: '127.0.0.1', port: 0, clientDirectory: false });
     try {

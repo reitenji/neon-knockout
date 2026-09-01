@@ -1,3 +1,5 @@
+import type { RuntimeNetworkInfo } from '../../shared/runtime.js';
+
 export type LanUrl = Readonly<{
   url: string;
   kind: 'local' | 'lan' | 'virtual';
@@ -42,4 +44,29 @@ export function discoverLanUrls(port: number, interfaces: NetworkInterfaces): La
   }
 
   return urls;
+}
+
+export function discoverRuntimeNetworkInfo(port: number, interfaces: NetworkInterfaces): RuntimeNetworkInfo {
+  const lanAddresses: RuntimeNetworkInfo['lanAddresses'][number][] = [];
+  const seen = new Set<string>();
+
+  for (const [interfaceName, addresses] of Object.entries(interfaces)) {
+    if (VIRTUAL_INTERFACE.test(interfaceName)) continue;
+    for (const networkAddress of addresses ?? []) {
+      const { address, family, internal } = networkAddress;
+      if (internal || (family !== 'IPv4' && family !== 4) || !isPrivateIpv4(address) || seen.has(address)) continue;
+      seen.add(address);
+      lanAddresses.push({
+        interfaceName,
+        address,
+        url: `http://${address}:${port}`
+      });
+    }
+  }
+
+  return {
+    port,
+    localUrl: `http://localhost:${port}`,
+    lanAddresses
+  };
 }

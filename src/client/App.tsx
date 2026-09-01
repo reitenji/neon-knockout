@@ -15,25 +15,26 @@ type AppProps = Readonly<{
   gameFactory?: NeonGameFactory;
 }>;
 
-const MIN_VIEWPORT_WIDTH = 900;
-const MIN_VIEWPORT_HEIGHT = 600;
-
-function viewportIsSupported(): boolean {
-  return window.innerWidth >= MIN_VIEWPORT_WIDTH && window.innerHeight >= MIN_VIEWPORT_HEIGHT;
+function viewportIsPortrait(): boolean {
+  return window.innerHeight > window.innerWidth;
 }
 
 function subscribeToViewport(listener: () => void): () => void {
   window.addEventListener('resize', listener);
-  return () => window.removeEventListener('resize', listener);
+  window.addEventListener('orientationchange', listener);
+  return () => {
+    window.removeEventListener('resize', listener);
+    window.removeEventListener('orientationchange', listener);
+  };
 }
 
-function useSupportedViewport(): boolean {
-  return useSyncExternalStore(subscribeToViewport, viewportIsSupported, () => true);
+function usePortraitViewport(): boolean {
+  return useSyncExternalStore(subscribeToViewport, viewportIsPortrait, () => false);
 }
 
 export function App({ store, gameFactory }: AppProps) {
   const state = useGameStore(store);
-  const viewportSupported = useSupportedViewport();
+  const portraitViewport = usePortraitViewport();
   const arenaBridge = useMemo(() => createArenaBridge(store), [store]);
 
   useEffect(() => {
@@ -41,19 +42,8 @@ export function App({ store, gameFactory }: AppProps) {
     return () => store.dispose();
   }, [store]);
 
-  if (!viewportSupported) {
-    return (
-      <main className="viewport-warning">
-        <section className="viewport-warning__frame tech-frame" role="alert" aria-labelledby="viewport-warning-title">
-          <h1 id="viewport-warning-title">Pencere çok küçük</h1>
-          <p>Neon Knockout en az 900 × 600 masaüstü alanı gerektirir. Pencereyi büyüt.</p>
-        </section>
-      </main>
-    );
-  }
-
   return (
-    <div className="app-shell">
+    <div className={`app-shell${state.screen === 'MATCH' ? ' app-shell--match' : ''}`}>
       <TopBar state={state} onToggleSound={store.actions.toggleSound} onLeaveRoom={store.actions.leaveRoom} />
 
       <main className="app-main">
@@ -79,6 +69,18 @@ export function App({ store, gameFactory }: AppProps) {
               localPlayerId={state.session?.playerId ?? ''}
               createGame={gameFactory}
             />
+            {portraitViewport ? (
+              <section
+                className="rotate-prompt"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="rotate-prompt-title"
+              >
+                <div className="rotate-prompt__device" aria-hidden="true"><span /></div>
+                <h1 id="rotate-prompt-title">Telefonu yatay çevir</h1>
+                <p>Arena ve dokunmatik kontroller yatay ekranda kullanılır.</p>
+              </section>
+            ) : null}
             {(state.connectionState !== 'connected' && state.connectionState !== 'idle') || state.reconnectRemainingMs !== null ? (
               <ConnectionOverlay
                 connectionState={state.connectionState}

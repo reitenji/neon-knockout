@@ -94,18 +94,24 @@ export class ArenaInput {
     return { seq, moveX: movement.x, moveY: movement.y, aimX: aim.x, aimY: aim.y, quick, heavy, dash };
   }
 
-  clearHeld(): void {
+  clearHeld(requireRelease = true): void {
     const movementHeld = this.source.movement();
     const attackHeld = this.source.attack();
-    for (const code of this.rawHeldCodes) this.blockedRawCodes.add(code);
-    for (const key of heldSourceKeys(movementHeld, attackHeld)) {
-      if (!hasRawHeldKey(this.rawHeldCodes, key)) this.blockedSourceKeys.add(key);
+    if (requireRelease) {
+      for (const code of this.rawHeldCodes) this.blockedRawCodes.add(code);
+      for (const key of heldSourceKeys(movementHeld, attackHeld)) {
+        if (!hasRawHeldKey(this.rawHeldCodes, key)) this.blockedSourceKeys.add(key);
+      }
+    } else {
+      this.blockedRawCodes.clear();
+      this.blockedSourceKeys.clear();
     }
-    this.source.reset();
+    if (requireRelease) this.source.reset();
     this.previousQuick = false;
     this.previousHeavy = false;
     this.previousDash = false;
-    this.suppressHeldUntilRelease = this.blockedRawCodes.size > 0 || this.blockedSourceKeys.size > 0;
+    this.suppressHeldUntilRelease = requireRelease &&
+      (this.blockedRawCodes.size > 0 || this.blockedSourceKeys.size > 0);
   }
 
   dispose(): void {

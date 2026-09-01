@@ -6,6 +6,7 @@ import { localPlayerIdFromBridge } from '../GamePresentationBridge.js';
 import { SnapshotTimeline, interpolateRemotePlayer } from '../prediction.js';
 import { ARENA_SCENE_KEY } from './BootScene.js';
 import { ArenaInput, createPhaserInputSource } from './ArenaInput.js';
+import { combineArenaInputSources } from './TouchInputSource.js';
 import { ArenaSession } from './ArenaSession.js';
 import { createArenaView, type ArenaView } from './ArenaView.js';
 import {
@@ -99,7 +100,11 @@ export class ArenaScene extends Phaser.Scene {
       { reducedMotion: this.reducedMotion }
     );
     this.gameAudio = new GameAudio(new PhaserAudioAdapter(this.sound, window));
-    const inputController = new ArenaInput(createPhaserInputSource(this), {
+    const keyboardInput = createPhaserInputSource(this);
+    const inputSource = this.bridge.inputSource
+      ? combineArenaInputSources(keyboardInput, this.bridge.inputSource)
+      : keyboardInput;
+    const inputController = new ArenaInput(inputSource, {
       windowTarget: window,
       documentTarget: document,
       onShutdown: (listener) => {
