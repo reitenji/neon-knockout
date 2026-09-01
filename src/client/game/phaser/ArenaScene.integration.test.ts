@@ -3,6 +3,7 @@ import type { GameEvent, MatchPlayer, MatchSnapshot } from '../../../shared/mode
 import { DEFAULT_ROOM_SETTINGS } from '../../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
 import type { PlayerPresentation } from '../prediction.js';
+import type { ArenaInputSource } from './ArenaInput.js';
 
 const probes = vi.hoisted(() => ({
   arenaApply: vi.fn(),
@@ -20,7 +21,8 @@ const probes = vi.hoisted(() => ({
   pulseDestroy: vi.fn(),
   createPulseView: vi.fn(),
   sessionDispose: vi.fn(),
-  sessionPresentation: vi.fn<() => PlayerPresentation | null>(() => null)
+  sessionPresentation: vi.fn<() => PlayerPresentation | null>(() => null),
+  arenaInputSource: null as ArenaInputSource | null
 }));
 
 class FakeEvents {
@@ -57,8 +59,14 @@ vi.mock('phaser', () => ({
 }));
 
 vi.mock('./ArenaInput.js', () => ({
-  ArenaInput: class ArenaInput {},
-  createPhaserInputSource: () => ({})
+  ArenaInput: class ArenaInput {
+    constructor(source: ArenaInputSource) { probes.arenaInputSource = source; }
+  },
+  createPhaserInputSource: (): ArenaInputSource => ({
+    movement: () => ({ up: false, down: false, left: false, right: false, dash: false }),
+    attack: () => ({ quick: false, heavy: false }),
+    reset: () => undefined
+  })
 }));
 
 vi.mock('./ArenaSession.js', () => ({
@@ -128,6 +136,7 @@ import Phaser from 'phaser';
 import { scopeBridgeToPlayer } from '../GamePresentationBridge.js';
 import { ArenaScene } from './ArenaScene.js';
 import { capsuleForAttackTelegraph } from './FighterView.js';
+import { TouchInputSource } from './TouchInputSource.js';
 
 const idleAction = {
   kind: null, phase: 'IDLE', comboStep: 0, chargeMs: 0, charging: false,
@@ -190,6 +199,7 @@ describe('ArenaScene live presentation integration', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     probes.sessionPresentation.mockReturnValue(null);
+    probes.arenaInputSource = null;
   });
 
   it('builds the visible sweep capsule from shared profile points and thickness', () => {
@@ -200,6 +210,22 @@ describe('ArenaScene live presentation integration', () => {
       currentProgress: 1 / 3,
       active: true
     })).toEqual({ from: { x: 334, y: 328 }, to: { x: 358, y: 344 }, radius: 6 });
+  });
+
+  it('composes the scoped touch source with keyboard input before the arena session starts', () => {
+    const bridge = new Bridge();
+    const touch = new TouchInputSource();
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1', touch), false);
+
+    scene.create();
+    touch.setJoystick(1, -1);
+    touch.setQuickHeld(true);
+    touch.setDashHeld(true);
+
+    expect(probes.arenaInputSource?.movement()).toEqual({
+      up: true, down: false, left: false, right: true, dash: true
+    });
+    expect(probes.arenaInputSource?.attack()).toEqual({ quick: true, heavy: false });
   });
 
   it('wires live arena state, canonical feedback/audio, persisted mute, reduced motion, and idempotent teardown', () => {
