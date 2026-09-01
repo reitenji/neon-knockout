@@ -66,7 +66,8 @@ class FakeDataChannel {
   constructor(
     readonly label: string,
     readonly ordered: boolean,
-    readonly maxRetransmits: number | null
+    readonly maxRetransmits: number | null,
+    readonly maxPacketLifeTime: number | null = null
   ) {}
 
   send(serialized: string): void {
@@ -240,6 +241,23 @@ describe.sequential('createWeriftServerPeer', () => {
       reliable.readyState = 'open';
       expect(serverPeer.isReady()).toBe(true);
       expect([fast.closeCalls, reliable.closeCalls]).toEqual([0, 0]);
+    } finally {
+      await serverPeer.close();
+    }
+  });
+
+  it('rejects a reliable-label channel with a finite packet lifetime', async () => {
+    const { serverPeer, peer } = await loadFakeAdapter();
+
+    try {
+      const timeLimitedReliable = new FakeDataChannel('match-reliable', true, null, 500);
+      peer.onDataChannel.emit(timeLimitedReliable);
+
+      expect(timeLimitedReliable.closeCalls).toBe(1);
+      const { fast, reliable } = acceptedChannels(peer);
+      fast.readyState = 'open';
+      reliable.readyState = 'open';
+      expect(serverPeer.isReady()).toBe(true);
     } finally {
       await serverPeer.close();
     }

@@ -140,7 +140,12 @@ class WeriftServerPeer implements ServerPeer {
     }
 
     if (channel.label === RELIABLE_CHANNEL_LABEL) {
-      if (this.reliableChannel || channel.ordered !== true || channel.maxRetransmits !== null) {
+      if (
+        this.reliableChannel
+        || channel.ordered !== true
+        || channel.maxRetransmits !== null
+        || channel.maxPacketLifeTime !== null
+      ) {
         channel.close();
         return;
       }
