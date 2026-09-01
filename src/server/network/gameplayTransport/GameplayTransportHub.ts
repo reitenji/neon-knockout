@@ -56,6 +56,7 @@ export type GameplayTransportHubOptions = Readonly<{
 }>;
 
 type RttSample = Readonly<{ value: number; sampledAt: number }>;
+type RttSamplingOwner = Readonly<{ peer: ServerPeer; generationId: string }>;
 
 type SessionRecord = {
   readonly session: TransportSession;
@@ -72,7 +73,7 @@ type SessionRecord = {
   pendingHeartbeatNonce: number | null;
   missedHeartbeats: number;
   rttSamples: RttSample[];
-  rttSampling: boolean;
+  rttSampling: RttSamplingOwner | null;
   rttFresh: boolean;
   fallbackTriggered: boolean;
   negotiationSequence: number;
@@ -130,7 +131,7 @@ export class GameplayTransportHub {
       pendingHeartbeatNonce: null,
       missedHeartbeats: 0,
       rttSamples: [],
-      rttSampling: false,
+      rttSampling: null,
       rttFresh: false,
       fallbackTriggered: false,
       negotiationSequence: 0,
@@ -169,14 +170,13 @@ export class GameplayTransportHub {
     record.pendingHeartbeatNonce = null;
     record.missedHeartbeats = 0;
     record.rttSamples = [];
-    this.bindPeer(record, peer, generationId);
-    record.activationExpiresAt = this.now() + ACTIVATION_TIMEOUT_MS;
-    record.activationTimer = setTimeout(() => {
-      if (!this.isCurrentPeer(record, peer, generationId) || record.mode === 'webrtc') return;
-      void this.transitionToFallback(record, generationId, peer);
-    }, ACTIVATION_TIMEOUT_MS);
-
     try {
+      this.bindPeer(record, peer, generationId);
+      record.activationExpiresAt = this.now() + ACTIVATION_TIMEOUT_MS;
+      record.activationTimer = setTimeout(() => {
+        if (!this.isCurrentPeer(record, peer, generationId) || record.mode === 'webrtc') return;
+        void this.transitionToFallback(record, generationId, peer);
+      }, ACTIVATION_TIMEOUT_MS);
       const answer = await peer.negotiate(parsed.data.offer);
       if (
         !this.isCurrentPeer(record, peer, generationId)
@@ -199,6 +199,12 @@ export class GameplayTransportHub {
     const parsed = rtcActivationRequestSchema.safeParse(request);
     if (!record || record.disposed || !parsed.success) return false;
     const { peer, generationId, activationExpiresAt } = record;
+    if (
+      peer
+      && generationId === parsed.data.generationId
+      && record.mode === 'webrtc'
+      && !record.fallbackTriggered
+    ) return true;
     if (
       !peer
       || generationId !== parsed.data.generationId
@@ -297,14 +303,16 @@ export class GameplayTransportHub {
 
   private bindPeer(record: SessionRecord, peer: ServerPeer, generationId: string): void {
     record.unsubscribers.push(
-      peer.onFastMessage((serialized) => this.acceptFastMessage(record, peer, generationId, serialized)),
-      peer.onReliableMessage((serialized) => this.acceptReliableMessage(record, peer, generationId, serialized)),
-      peer.onClosed(() => {
-        if (this.isCurrentPeer(record, peer, generationId)) {
-          void this.transitionToFallback(record, generationId, peer);
-        }
-      })
+      peer.onFastMessage((serialized) => this.acceptFastMessage(record, peer, generationId, serialized))
     );
+    record.unsubscribers.push(
+      peer.onReliableMessage((serialized) => this.acceptReliableMessage(record, peer, generationId, serialized))
+    );
+    record.unsubscribers.push(peer.onClosed(() => {
+      if (this.isCurrentPeer(record, peer, generationId)) {
+        void this.transitionToFallback(record, generationId, peer);
+      }
+    }));
   }
 
   private acceptFastMessage(
@@ -454,22 +462,23 @@ export class GameplayTransportHub {
 
   private async sampleRtt(record: SessionRecord, peer: ServerPeer, generationId: string): Promise<void> {
     if (
-      record.rttSampling
+      record.rttSampling !== null
       || !this.isCurrentPeer(record, peer, generationId)
       || record.mode !== 'webrtc'
     ) return;
-    record.rttSampling = true;
+    const owner: RttSamplingOwner = { peer, generationId };
+    record.rttSampling = owner;
     let rttMs: number | null;
     try {
       rttMs = await peer.sampleRttMs();
     } catch {
-      record.rttSampling = false;
+      if (record.rttSampling === owner) record.rttSampling = null;
       if (this.isCurrentPeer(record, peer, generationId)) {
         void this.transitionToFallback(record, generationId, peer);
       }
       return;
     }
-    record.rttSampling = false;
+    if (record.rttSampling === owner) record.rttSampling = null;
     if (
       !this.isCurrentPeer(record, peer, generationId)
       || record.mode !== 'webrtc'
@@ -532,7 +541,7 @@ export class GameplayTransportHub {
     record.activationExpiresAt = null;
     record.pendingHeartbeatNonce = null;
     record.missedHeartbeats = 0;
-    record.rttSampling = false;
+    if (record.rttSampling?.peer === peer) record.rttSampling = null;
     record.rttFresh = false;
     record.rttSamples = [];
     return this.closePeer(peer);
@@ -579,6 +588,7 @@ export class GameplayTransportHub {
     record.peer = null;
     record.pendingHeartbeatNonce = null;
     record.rttSamples = [];
+    record.rttSampling = null;
     if (record.mode === 'webrtc' || record.rttFresh) {
       safeInvoke(() => record.session.clearNetworkSample());
     }

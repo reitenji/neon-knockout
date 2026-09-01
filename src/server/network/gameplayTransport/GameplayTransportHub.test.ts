@@ -53,6 +53,18 @@ const event: GameEvent = {
 };
 
 type MessageListener = (serialized: string) => void;
+type ListenerRegistrationFailure = 'reliable' | 'closed' | null;
+
+type Deferred<T> = Readonly<{
+  promise: Promise<T>;
+  resolve(value: T): void;
+}>;
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
 
 class FakePeer implements ServerPeer {
   readonly offers: RtcOffer[] = [];
@@ -66,6 +78,9 @@ class FakePeer implements ServerPeer {
   fastResult: PeerSendResult = 'sent';
   reliableResult: PeerSendResult = 'sent';
   rttSamples: Array<number | null> = [];
+  rttDeferreds: Array<Deferred<number | null>> = [];
+  rttSampleCalls = 0;
+  listenerRegistrationFailure: ListenerRegistrationFailure = null;
   closeCalls = 0;
 
   constructor(readonly generationId: string) {}
@@ -101,6 +116,9 @@ class FakePeer implements ServerPeer {
   }
 
   async sampleRttMs(): Promise<number | null> {
+    this.rttSampleCalls += 1;
+    const pending = this.rttDeferreds.shift();
+    if (pending) return pending.promise;
     return this.rttSamples.shift() ?? null;
   }
 
@@ -110,11 +128,17 @@ class FakePeer implements ServerPeer {
   }
 
   onReliableMessage(listener: MessageListener): () => void {
+    if (this.listenerRegistrationFailure === 'reliable') {
+      throw new Error('reliable listener registration failed');
+    }
     this.reliableListeners.add(listener);
     return () => this.reliableListeners.delete(listener);
   }
 
   onClosed(listener: () => void): () => void {
+    if (this.listenerRegistrationFailure === 'closed') {
+      throw new Error('closed listener registration failed');
+    }
     this.closedListeners.add(listener);
     return () => this.closedListeners.delete(listener);
   }
@@ -146,9 +170,12 @@ class FakePeer implements ServerPeer {
 class FakePeerFactory {
   readonly peers: FakePeer[] = [];
   readonly calls: Parameters<ServerPeerFactory>[0][] = [];
+  nextListenerRegistrationFailure: ListenerRegistrationFailure = null;
   readonly create: ServerPeerFactory = (options) => {
     this.calls.push(options);
     const peer = new FakePeer(options.generationId);
+    peer.listenerRegistrationFailure = this.nextListenerRegistrationFailure;
+    this.nextListenerRegistrationFailure = null;
     this.peers.push(peer);
     return peer;
   };
@@ -300,6 +327,58 @@ describe('GameplayTransportHub', () => {
     expect(hub.modeForPlayer('p1')).toBe('webrtc');
     expect(first.networkModes).toEqual(['webrtc']);
   });
+
+  it('keeps repeated activation of the active current generation idempotently active', async () => {
+    const { hub, factory } = createSubject();
+    const first = session();
+    hub.attachSession(first.session);
+    const peer = await negotiateAndActivate(hub, factory);
+
+    const repeatedActivation = hub.activate('s1', { generationId: FIRST_GENERATION });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect({
+      repeatedActivation,
+      mode: hub.modeForPlayer('p1'),
+      peerCloseCalls: peer.closeCalls,
+      emittedModes: first.emittedModes,
+      networkModes: first.networkModes,
+      fallbackProbeCount: first.fallbackProbeTimes.length
+    }).toEqual({
+      repeatedActivation: true,
+      mode: 'webrtc',
+      peerCloseCalls: 0,
+      emittedModes: [{ generationId: FIRST_GENERATION, mode: 'webrtc' }],
+      networkModes: ['webrtc'],
+      fallbackProbeCount: 0
+    });
+  });
+
+  it.each(['reliable', 'closed'] as const)(
+    'closes and fully unsubscribes a peer when %s listener registration throws',
+    async (listenerRegistrationFailure) => {
+      const { hub, factory } = createSubject();
+      const first = session();
+      hub.attachSession(first.session);
+      factory.nextListenerRegistrationFailure = listenerRegistrationFailure;
+
+      await expect(hub.negotiate('s1', {
+        generationId: FIRST_GENERATION,
+        offer: { type: 'offer', sdp: 'browser-offer' }
+      })).rejects.toThrow(`${listenerRegistrationFailure} listener registration failed`);
+      const peer = factory.peers[0]!;
+
+      expect(peer.closeCalls).toBe(1);
+      expect(peer.fastListeners.size).toBe(0);
+      expect(peer.reliableListeners.size).toBe(0);
+      expect(peer.closedListeners.size).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(hub.modeForPlayer('p1')).toBe('websocket');
+      hub.publish(snapshotPublication());
+      expect(first.emittedSnapshots).toEqual([snapshot]);
+    }
+  );
 
   it('routes valid current-generation and current-epoch input through the exact session ingress', async () => {
     const { hub, factory } = createSubject();
@@ -512,6 +591,43 @@ describe('GameplayTransportHub', () => {
 
     await vi.advanceTimersByTimeAsync(6_000);
     expect(first.networkClearTimes).toEqual([18_000]);
+  });
+
+  it('does not let a deferred RTT completion from a replaced generation unlock the new peer sampling lock', async () => {
+    const { hub, factory } = createSubject();
+    const first = session();
+    hub.attachSession(first.session);
+    const oldPeer = await negotiateAndActivate(hub, factory);
+    oldPeer.autoAcknowledgeHeartbeats = true;
+    const oldSample = deferred<number | null>();
+    oldPeer.rttDeferreds.push(oldSample);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(oldPeer.rttSampleCalls).toBe(1);
+
+    await hub.negotiate('s1', {
+      generationId: SECOND_GENERATION,
+      offer: { type: 'offer', sdp: 'replacement' }
+    });
+    const newPeer = factory.peers[1]!;
+    newPeer.openBothChannels();
+    newPeer.autoAcknowledgeHeartbeats = true;
+    const newSample = deferred<number | null>();
+    newPeer.rttDeferreds.push(newSample);
+    expect(hub.activate('s1', { generationId: SECOND_GENERATION })).toBe(true);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(newPeer.rttSampleCalls).toBe(1);
+
+    oldSample.resolve(77);
+    await Promise.resolve();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(2_000);
+    const callsWhileNewSampleWasPending = newPeer.rttSampleCalls;
+    newSample.resolve(25);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(callsWhileNewSampleWasPending).toBe(1);
+    expect(first.networkSamples).toEqual([{ medianMs: 25, sampledAt: 6_000 }]);
   });
 
   it('isolates room publications and peer failure to their server-owned sessions', async () => {
