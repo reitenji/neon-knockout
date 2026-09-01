@@ -92,7 +92,7 @@ export function LobbyScreen({
               </span>
             </button>
           </div>
-          {isHost ? <LanSharePanel /> : null}
+          {isHost ? <LanSharePanel roomCode={room.roomCode} /> : null}
         </header>
 
         <fieldset className="chassis-picker" disabled={!selfPlayer || anyPending}>

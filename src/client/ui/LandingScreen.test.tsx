@@ -123,4 +123,57 @@ describe('LandingScreen', () => {
     expect(screen.getByRole('button', { name: 'Oda Kur' })).toHaveClass('focus-ring');
     expect(screen.getByRole('button', { name: 'Odaya Katıl' })).toHaveClass('focus-ring');
   });
+
+  it('shows only the invited room and player-name entry in invite mode', () => {
+    render(
+      <LandingScreen
+        state={landingState}
+        invitedRoomCode="AB2Z"
+        onCreateRoom={async () => undefined}
+        onJoinRoom={async () => undefined}
+        onExitInvite={() => undefined}
+      />
+    );
+
+    expect(screen.getByText(/oda daveti/i)).toBeVisible();
+    expect(screen.getByText(/AB2Z/)).toBeVisible();
+    expect(screen.getByLabelText('Oyuncu adı')).toBeVisible();
+    expect(screen.queryByLabelText('Oda kodu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Oda Kur' })).not.toBeInTheDocument();
+  });
+
+  it('joins the invited room with the entered player name', () => {
+    const join = vi.fn(async () => undefined);
+    render(
+      <LandingScreen
+        state={landingState}
+        invitedRoomCode="AB2Z"
+        onCreateRoom={async () => undefined}
+        onJoinRoom={join}
+        onExitInvite={() => undefined}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText('Oyuncu adı'), { target: { value: 'Ada' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Odaya Katıl' }));
+
+    expect(join).toHaveBeenCalledWith('Ada', 'AB2Z');
+  });
+
+  it('exits invite mode from the landing screen', () => {
+    const exitInvite = vi.fn();
+    render(
+      <LandingScreen
+        state={landingState}
+        invitedRoomCode="AB2Z"
+        onCreateRoom={async () => undefined}
+        onJoinRoom={async () => undefined}
+        onExitInvite={exitInvite}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Ana sayfaya dön' }));
+
+    expect(exitInvite).toHaveBeenCalledOnce();
+  });
 });

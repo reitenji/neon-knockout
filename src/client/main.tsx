@@ -1,5 +1,6 @@
 import { createRoot } from 'react-dom/client';
 import { App } from './App.js';
+import { resumeRoomPreferenceFromLocation } from './inviteRoute.js';
 import { createSocketGameClient } from './network/GameClient.js';
 import { createGameStore } from './state/gameStore.js';
 import './styles/tokens.css';
@@ -39,7 +40,9 @@ const clipboard: Pick<Clipboard, 'writeText'> = {
 const store = createGameStore({
   client,
   storage: window.sessionStorage,
-  clipboard
+  clipboard,
+  getPreferredResumeRoomCode: () =>
+    resumeRoomPreferenceFromLocation(window.location.pathname, window.history.state)
 });
 
 createRoot(rootElement).render(<App store={store} />);

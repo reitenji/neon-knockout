@@ -104,6 +104,84 @@ describe('createGameStore', () => {
     expect(storage.values.get('neon-relay:AB2Z:resume')).toBe('a'.repeat(64));
   });
 
+  it('does not resume a stored room when the current invite targets a different room', async () => {
+    const client = new FakeGameClient();
+    const storage = new MemoryStorage();
+    const clipboard = { writeText: vi.fn(async () => undefined) };
+    storage.setItem('neon-relay:last-room', 'AB2Z');
+    storage.setItem('neon-relay:AB2Z:resume', 'a'.repeat(64));
+    client.resumeSession.mockResolvedValue({ ok: true, data: successWelcome({ resumed: true }) });
+    client.joinRoom.mockResolvedValue({
+      ok: true,
+      data: successWelcome({ roomCode: 'CD3X', resumeToken: 'b'.repeat(64) })
+    });
+    const store = createGameStore({
+      client,
+      storage,
+      clipboard,
+      getPreferredResumeRoomCode: () => 'CD3X'
+    });
+
+    client.connectionState = 'connected';
+    client.emit('connection', 'connected');
+    await Promise.resolve();
+
+    expect(client.resumeSession).not.toHaveBeenCalled();
+    expect(storage.getItem('neon-relay:AB2Z:resume')).toBe('a'.repeat(64));
+
+    await store.actions.joinRoom('Ece', 'CD3X');
+    expect(client.joinRoom).toHaveBeenCalledWith('Ece', 'CD3X');
+    expect(store.getSnapshot().session).toMatchObject({ roomCode: 'CD3X' });
+  });
+
+  it('resumes normally when the current invite targets the stored room', async () => {
+    const client = new FakeGameClient();
+    const storage = new MemoryStorage();
+    storage.setItem('neon-relay:last-room', 'AB2Z');
+    storage.setItem('neon-relay:AB2Z:resume', 'a'.repeat(64));
+    client.resumeSession.mockResolvedValue({ ok: true, data: successWelcome({ resumed: true }) });
+    const store = createGameStore({
+      client,
+      storage,
+      clipboard: { writeText: vi.fn(async () => undefined) },
+      getPreferredResumeRoomCode: () => 'AB2Z'
+    });
+
+    client.connectionState = 'connected';
+    client.emit('connection', 'connected');
+
+    await vi.waitFor(() => expect(client.resumeSession).toHaveBeenCalledWith('AB2Z', 'a'.repeat(64)));
+    expect(store.getSnapshot().session).toMatchObject({ roomCode: 'AB2Z', playerId: 'player-1' });
+  });
+
+  it('keeps auto-resume suppressed when an invite is dismissed before connection and across reconnects', async () => {
+    const client = new FakeGameClient();
+    const storage = new MemoryStorage();
+    let resumePreference: string | null | undefined = 'CD3X';
+    storage.setItem('neon-relay:last-room', 'AB2Z');
+    storage.setItem('neon-relay:AB2Z:resume', 'a'.repeat(64));
+    client.resumeSession.mockResolvedValue({ ok: true, data: successWelcome({ resumed: true }) });
+    createGameStore({
+      client,
+      storage,
+      clipboard: { writeText: vi.fn(async () => undefined) },
+      getPreferredResumeRoomCode: () => resumePreference
+    });
+
+    resumePreference = null;
+    client.connectionState = 'connected';
+    client.emit('connection', 'connected');
+    await Promise.resolve();
+    expect(client.resumeSession).not.toHaveBeenCalled();
+
+    client.connectionState = 'reconnecting';
+    client.emit('connection', 'reconnecting');
+    client.connectionState = 'connected';
+    client.emit('connection', 'connected');
+    await Promise.resolve();
+    expect(client.resumeSession).not.toHaveBeenCalled();
+  });
+
   it('keeps chassis and ready state canonical until one authoritative room replacement arrives', async () => {
     const { client, store } = createFixture();
     client.emit('session:welcome', successWelcome());

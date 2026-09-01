@@ -6,6 +6,10 @@ import type { ClientState, GameStore } from './state/gameStore.js';
 import type { MatchPlayer, MatchSnapshot } from '../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../shared/roomSettings.js';
 import { App } from './App.js';
+import {
+  INVITE_DISMISSED_HISTORY_STATE,
+  resumeRoomPreferenceFromLocation
+} from './inviteRoute.js';
 
 const gameFactory = vi.fn<NeonGameFactory>(() => ({ destroy() {} }));
 
@@ -86,10 +90,36 @@ function setTouchPoints(count: number): void {
 describe('App', () => {
   afterEach(() => {
     cleanup();
+    window.history.replaceState(null, '', '/');
     setViewport(1024, 768);
     setTouchPoints(0);
     gameFactory.mockClear();
     vi.restoreAllMocks();
+  });
+
+  it('turns a room deep link into a name-only invitation and can return to the home route', () => {
+    window.history.replaceState(null, '', '/room/ab2z');
+    render(<App store={storeFor(landing)} />);
+
+    expect(screen.getByText(/AB2Z/)).toBeVisible();
+    expect(screen.queryByLabelText('Oda kodu')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Oda Kur' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Ana sayfaya dön' }));
+
+    expect(window.location.pathname).toBe('/');
+    expect(resumeRoomPreferenceFromLocation(window.location.pathname, window.history.state)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Oda Kur' })).toBeVisible();
+  });
+
+  it('clears invite-dismissal suppression after a fresh room session is accepted', () => {
+    window.history.replaceState(INVITE_DISMISSED_HISTORY_STATE, '', '/');
+    render(<App store={storeFor({
+      ...landing,
+      session: { playerId: 'p-new', roomCode: 'CD3X', resumeToken: 'token' }
+    })} />);
+
+    expect(window.history.state).toBeNull();
+    expect(resumeRoomPreferenceFromLocation(window.location.pathname, window.history.state)).toBeUndefined();
   });
 
   it('keeps the complete landing flow available on a portrait phone', () => {
@@ -226,6 +256,34 @@ describe('App', () => {
     expect(store.actions.setRoomSettings).toHaveBeenCalledWith({ durationMs: 120_000, knockoutTarget: 7 });
     expect(screen.getAllByRole('button', { name: 'Odadan Çık' })).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Odadan Çık' }));
+    expect(store.actions.leaveRoom).toHaveBeenCalledOnce();
+  });
+
+  it('clears an invite route after the player leaves the room successfully', async () => {
+    window.history.replaceState(null, '', '/room/AB2Z');
+    let currentState: ClientState = {
+      ...landing,
+      screen: 'LOBBY',
+      room: {
+        roomCode: 'AB2Z', phase: 'LOBBY', hostPlayerId: 'p-1', pauseRemainingMs: null, result: null,
+        settings: DEFAULT_ROOM_SETTINGS,
+        players: [{
+          playerId: 'p-1', name: 'Ada', chassis: 'RIFT', accent: 0, ready: false, connected: true,
+          reconnectRemainingMs: null, stats: { knockouts: 0, falls: 0, landedHits: 0, completedAttacks: 0 }
+        }]
+      },
+      session: { playerId: 'p-1', roomCode: 'AB2Z', resumeToken: 'token' }
+    };
+    const store = storeFor(currentState);
+    store.getSnapshot = () => currentState;
+    store.actions.leaveRoom = vi.fn(async () => {
+      currentState = landing;
+    });
+    render(<App store={store} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Odadan Çık' }));
+
+    await vi.waitFor(() => expect(window.location.pathname).toBe('/'));
     expect(store.actions.leaveRoom).toHaveBeenCalledOnce();
   });
 });

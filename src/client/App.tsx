@@ -1,6 +1,11 @@
-import { useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import type { NeonGameFactory } from './game/GamePresentationBridge.js';
 import { PhaserArena } from './game/PhaserArena.js';
+import {
+  INVITE_DISMISSED_HISTORY_STATE,
+  inviteRoomCodeFromPath,
+  resumeRoomPreferenceFromLocation
+} from './inviteRoute.js';
 import { createArenaBridge, type GameStore } from './state/gameStore.js';
 import { useGameStore } from './state/useGameStore.js';
 import { LandingScreen } from './ui/LandingScreen.js';
@@ -37,19 +42,51 @@ export function App({ store, gameFactory }: AppProps) {
   const state = useGameStore(store);
   const portraitViewport = usePortraitViewport();
   const arenaBridge = useMemo(() => createArenaBridge(store), [store]);
+  const [inviteRoomCode, setInviteRoomCode] = useState(() => inviteRoomCodeFromPath(window.location.pathname));
 
   useEffect(() => {
     store.actions.connect();
     return () => store.dispose();
   }, [store]);
 
+  useEffect(() => {
+    const syncInviteRoute = (): void => setInviteRoomCode(inviteRoomCodeFromPath(window.location.pathname));
+    window.addEventListener('popstate', syncInviteRoute);
+    return () => window.removeEventListener('popstate', syncInviteRoute);
+  }, []);
+
+  useEffect(() => {
+    if (
+      state.session !== null &&
+      resumeRoomPreferenceFromLocation(window.location.pathname, window.history.state) === null
+    ) {
+      window.history.replaceState(null, '', window.location.href);
+    }
+  }, [state.session]);
+
+  const clearInviteRoute = (): void => {
+    window.history.replaceState(INVITE_DISMISSED_HISTORY_STATE, '', '/');
+    setInviteRoomCode(null);
+  };
+
+  const leaveRoom = async (): Promise<void> => {
+    await store.actions.leaveRoom();
+    if (store.getSnapshot().session === null) clearInviteRoute();
+  };
+
   return (
     <div className={`app-shell${state.screen === 'MATCH' ? ' app-shell--match' : ''}`}>
-      <TopBar state={state} onToggleSound={store.actions.toggleSound} onLeaveRoom={store.actions.leaveRoom} />
+      <TopBar state={state} onToggleSound={store.actions.toggleSound} onLeaveRoom={leaveRoom} />
 
       <main className="app-main">
         {state.screen === 'LANDING' ? (
-          <LandingScreen state={state} onCreateRoom={store.actions.createRoom} onJoinRoom={store.actions.joinRoom} />
+          <LandingScreen
+            state={state}
+            invitedRoomCode={inviteRoomCode}
+            onCreateRoom={store.actions.createRoom}
+            onJoinRoom={store.actions.joinRoom}
+            onExitInvite={clearInviteRoute}
+          />
         ) : null}
 
         {state.screen === 'LOBBY' ? (

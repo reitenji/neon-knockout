@@ -67,7 +67,12 @@ export interface ArenaBridge {
 
 type StorageLike = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
 type ClipboardLike = Pick<Clipboard, 'writeText'>;
-type GameStoreOptions = Readonly<{ client: GameClient; storage: StorageLike; clipboard: ClipboardLike }>;
+type GameStoreOptions = Readonly<{
+  client: GameClient;
+  storage: StorageLike;
+  clipboard: ClipboardLike;
+  getPreferredResumeRoomCode?: () => string | null | undefined;
+}>;
 
 const LAST_ROOM_KEY = 'neon-relay:last-room';
 const SOUND_KEY = 'neon-relay:muted';
@@ -111,7 +116,7 @@ function once(remove: () => void): () => void {
   return () => { if (!active) return; active = false; remove(); };
 }
 
-export function createGameStore({ client, storage, clipboard }: GameStoreOptions): GameStore {
+export function createGameStore({ client, storage, clipboard, getPreferredResumeRoomCode }: GameStoreOptions): GameStore {
   const listeners = new Set<() => void>();
   const matchListeners = new Set<(snapshot: MatchSnapshot) => void>();
   const gameEventListeners = new Set<(event: GameEvent) => void>();
@@ -224,6 +229,11 @@ export function createGameStore({ client, storage, clipboard }: GameStoreOptions
     const roomCode = storage.getItem(LAST_ROOM_KEY);
     const resumeToken = roomCode ? storage.getItem(resumeKey(roomCode)) : null;
     if (!roomCode || !resumeToken) return;
+    const preferredRoomCode = getPreferredResumeRoomCode?.();
+    if (preferredRoomCode === null || (preferredRoomCode !== undefined && preferredRoomCode !== roomCode)) {
+      resumeAttemptedForConnection = true;
+      return;
+    }
     resumeAttemptedForConnection = true;
     patch((current) => ({ ...current, pendingAction: 'resume', lastError: null, errorAction: null }));
     acknowledgementsInFlight += 1;

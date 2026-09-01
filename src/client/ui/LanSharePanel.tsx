@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import type { RuntimeNetworkInfo } from '../../shared/runtime.js';
+import { buildRoomInviteUrl } from '../inviteRoute.js';
 import '../styles/lan-share.css';
 
 type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 type ClipboardLike = Readonly<{ writeText: (value: string) => Promise<void> }>;
 
 export type LanSharePanelProps = Readonly<{
+  roomCode: string;
   fetchImpl?: FetchLike;
   clipboard?: ClipboardLike;
 }>;
@@ -69,7 +71,7 @@ function copyFeedbackMessage(feedback: Exclude<CopyFeedback, null>): string {
   return `${feedback.url} ${feedback.status === 'copied' ? 'kopyalandı.' : 'kopyalanamadı.'}`;
 }
 
-export function LanSharePanel({ fetchImpl = defaultFetch, clipboard }: LanSharePanelProps) {
+export function LanSharePanel({ roomCode, fetchImpl = defaultFetch, clipboard }: LanSharePanelProps) {
   const [network, setNetwork] = useState<NetworkState>({ status: 'loading', info: null });
   const [copyFeedback, setCopyFeedback] = useState<CopyFeedback>(null);
   const requestGeneration = useRef(0);
@@ -112,34 +114,37 @@ export function LanSharePanel({ fetchImpl = defaultFetch, clipboard }: LanShareP
 
   return (
     <aside className="lan-share-panel" aria-label="LAN bağlantısı" aria-busy={network.status === 'loading'}>
-      <span className="lan-share-panel__label">LAN ADRESLERİ</span>
+      <span className="lan-share-panel__label">DAVET LİNKLERİ</span>
       <div className="lan-share-panel__content">
         {network.status === 'loading' && lanAddresses.length === 0 ? (
           <span className="lan-share-panel__message">Adres aranıyor…</span>
         ) : null}
         {lanAddresses.length > 0 ? (
           <ul className="lan-share-panel__addresses" aria-label="LAN adresleri">
-            {lanAddresses.map((address) => (
+            {lanAddresses.map((address) => {
+              const inviteUrl = buildRoomInviteUrl(address.url, roomCode);
+              return (
               <li className="lan-share-panel__address" key={`${address.interfaceName}-${address.address}`}>
                 <span className="lan-share-panel__interface">{address.interfaceName}</span>
                 <a
                   className="lan-share-panel__url focus-ring"
-                  href={address.url}
+                  href={inviteUrl}
                   target="_blank"
                   rel="noreferrer"
                 >
-                  {address.url}
+                  {inviteUrl}
                 </a>
                 <button
                   className="lan-share-panel__copy focus-ring"
                   type="button"
-                  aria-label={`${address.url} adresini kopyala`}
-                  onClick={() => void copyLink(address.url)}
+                  aria-label={`${inviteUrl} adresini kopyala`}
+                  onClick={() => void copyLink(inviteUrl)}
                 >
                   Kopyala
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         ) : null}
         {network.status === 'ready' && lanAddresses.length === 0 ? (

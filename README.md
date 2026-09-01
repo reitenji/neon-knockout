@@ -5,14 +5,14 @@ npm ci
 npm run lan
 ```
 
-Use Node.js 20 or newer. The host command builds the production client and starts the game server. It prints a localhost URL for the host machine and a private LAN URL for players on the same network. Open the printed LAN URL from another desktop browser; do not replace it with a public address. Neon Knockout does not provide WAN, Internet matchmaking, accounts, or a relay service.
+Use Node.js 20 or newer. The host command builds the production client and starts the game server. It prints a localhost URL for the host machine and a private LAN URL for players on the same network. Open the printed LAN URL from another browser; do not replace it with a public address. Neon Knockout does not provide WAN, Internet matchmaking, accounts, or a relay service.
 
 ## Host and join
 
 1. On the host computer, run the two commands above.
 2. The host opens the printed `http://localhost:4173` URL, enters a name, and chooses **Oda Kur**.
-3. Share the visible four-character room code and the appropriate **LAN Adresleri** link shown in the host lobby with up to seven friends. Use **Yenile** if the host changes network.
-4. Each friend opens that LAN URL, enters a name and the four-character room code, and selects a chassis.
+3. Copy the appropriate **Davet Linkleri** URL shown in the host lobby and share it with up to seven friends. The link already contains the room code, for example `http://192.168.1.20:4173/room/AB2Z`. Use **Yenile** if the host changes network.
+4. Each friend opens that exact link, enters only a player name, chooses **Odaya Katıl**, and selects a chassis. The four-character room code remains available as a manual fallback from the main page.
 5. The host chooses the room rules, every player chooses **Hazırım**, and the host chooses **Maçı Başlat** when every connected player is ready.
 
 The local host may use `http://localhost:4173`; other devices must use the private LAN URL shown in the lobby, commonly in `192.168.x.x`, `10.x.x.x`, or `172.16–31.x.x`. Allow incoming TCP connections on port 4173 in the operating-system firewall when players cannot join. Guests only need a modern browser after the host has installed dependencies.
@@ -38,7 +38,7 @@ A regulation match lasts for the host-selected 90, 120, or 180 seconds. Arena co
 
 ## Reconnect behavior
 
-Closing or losing a browser connection does not award a knockout or a fall. Keep the same tab open and the client automatically resumes its stored room identity when it reconnects during the grace window. If a player cannot return before that window expires, the remaining match may be declared no contest rather than treating the disconnect as a score.
+Closing or losing a browser connection does not award a knockout or a fall. Keep the same tab open and the client automatically resumes its stored room identity when it reconnects during the grace window. Reloading the same `/room/CODE` invite also resumes that room, while opening a different room invite never resumes an unrelated stored room first. If a player cannot return before that window expires, the remaining match may be declared no contest rather than treating the disconnect as a score.
 
 ## Leaving a room
 
