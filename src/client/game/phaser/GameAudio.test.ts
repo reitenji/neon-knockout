@@ -142,6 +142,30 @@ describe('GameAudio', () => {
     });
   });
 
+  it('coalesces simultaneous knockout events to one burst while preserving later knockout ticks', () => {
+    const adapter = new RecordingAudioAdapter();
+    const audio = new GameAudio(adapter);
+    adapter.gesture();
+
+    expect(audio.playEvent({
+      eventId: 30, tick: 18, type: 'KNOCKOUT', attackerId: 'a', targetId: 'b',
+      scoreAwardedTo: 'a', scores: { a: 2, b: 0 }
+    })).toBe(true);
+    expect(audio.playEvent({
+      eventId: 31, tick: 18, type: 'KNOCKOUT', attackerId: 'c', targetId: 'd',
+      scoreAwardedTo: 'c', scores: { a: 2, b: 0, c: 1, d: 0 }
+    })).toBe(true);
+    expect(audio.playEvent({
+      eventId: 32, tick: 19, type: 'KNOCKOUT', attackerId: 'a', targetId: 'd',
+      scoreAwardedTo: 'a', scores: { a: 3, b: 0, c: 1, d: 0 }
+    })).toBe(true);
+
+    expect(adapter.played).toEqual([
+      { cue: 'knockout', options: { volume: 0.92, detune: detuneForEvent(30) } },
+      { cue: 'knockout', options: { volume: 0.92, detune: detuneForEvent(32) } }
+    ]);
+  });
+
   it('removes the gesture listener, stops sound, and destroys owned sounds once on teardown', () => {
     const adapter = new RecordingAudioAdapter();
     const audio = new GameAudio(adapter);

@@ -45,6 +45,7 @@ export class GameAudio {
   private muted: boolean;
   private unlocked = false;
   private disposed = false;
+  private lastKnockoutTick: number | null = null;
 
   constructor(
     private readonly adapter: GameAudioAdapter,
@@ -78,6 +79,8 @@ export class GameAudio {
     } else if (event.type === 'PULSE_BREAK') {
       this.play('pulse-break', event.eventId, 0, 0.76);
     } else if (event.type === 'KNOCKOUT') {
+      if (this.lastKnockoutTick === event.tick) return true;
+      this.lastKnockoutTick = event.tick;
       this.play('knockout', event.eventId, 0, 0.92);
     } else if (event.type === 'RESPAWN') {
       this.play('respawn', event.eventId, 0, 0.66);
@@ -105,6 +108,7 @@ export class GameAudio {
     this.adapter.stopAll();
     this.adapter.destroy();
     this.consumedEventIds.clear();
+    this.lastKnockoutTick = null;
   }
 
   private unlock(): void {

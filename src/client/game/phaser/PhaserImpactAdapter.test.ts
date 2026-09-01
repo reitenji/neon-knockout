@@ -7,6 +7,7 @@ class FakeObject {
   scaleX = 1;
   scaleY = 1;
   rotation = 0;
+  text = '';
   destroyed = 0;
 
   constructor(public x = 0, public y = 0, readonly color: number | null = null) {}
@@ -15,6 +16,8 @@ class FakeObject {
   setRotation(value: number): this { this.rotation = value; return this; }
   setScale(x: number, y = x): this { this.scaleX = x; this.scaleY = y; return this; }
   setAlpha(value: number): this { this.alpha = value; return this; }
+  setPosition(x: number, y: number): this { this.x = x; this.y = y; return this; }
+  setText(value: string): this { this.text = value; return this; }
   setBlendMode(): this { return this; }
   setDepth(): this { return this; }
   destroy(): void { this.destroyed += 1; }
@@ -97,6 +100,16 @@ describe('PhaserImpactAdapter', () => {
     });
   });
 
+  it('coalesces repeated camera nudges that land in the same frame', () => {
+    const stub = harness();
+    const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+
+    adapter.nudgeCamera({ x: 1, y: 0 }, 0.75);
+    adapter.nudgeCamera({ x: -1, y: 0.5 }, 1);
+
+    expect(stub.tweens).toHaveLength(1);
+  });
+
   it('caps presentation hit-stop at 35ms', () => {
     const stub = harness();
     const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
@@ -136,6 +149,23 @@ describe('PhaserImpactAdapter', () => {
     expect(stub.objects.filter(({ kind }) => kind === 'circle').length).toBeGreaterThanOrEqual(3);
     expect(stub.objects.filter(({ kind }) => kind === 'text')).toHaveLength(3);
     expect(stub.objects.filter(({ kind }) => kind === 'rectangle').length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('keeps repeated knockout presentations bounded after the reusable pool is saturated', () => {
+    const stub = harness();
+    const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+
+    for (const [index, x] of [300, 340, 380].entries()) {
+      adapter.emitKnockoutBurst({ x, y: 360 }, 1);
+      adapter.emitEdgeStreak({ x, y: 360 }, { x: index % 2 === 0 ? -1 : 1, y: 0 });
+      adapter.pulseScore('p1', index + 1);
+      adapter.announceKnockout(`Ada ${index + 1}`, `Bora ${index + 1}`);
+    }
+
+    expect(stub.objects).toHaveLength(36);
+    expect(stub.objects.filter(({ kind }) => kind === 'text')).toHaveLength(6);
+    expect(stub.objects.filter(({ kind }) => kind === 'circle')).toHaveLength(4);
+    expect(stub.objects.filter(({ kind }) => kind === 'rectangle')).toHaveLength(26);
   });
 
   it('removes live tweens and visuals, restores fighter content, and disposes idempotently', () => {
