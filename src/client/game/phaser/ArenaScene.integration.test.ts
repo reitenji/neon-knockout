@@ -163,6 +163,12 @@ function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
   };
 }
 
+function latestPlayerCall(playerId: string): unknown[] | undefined {
+  return probes.fighterApply.mock.calls
+    .filter(([playerArg]) => (playerArg as MatchPlayer).playerId === playerId)
+    .at(-1);
+}
+
 class Bridge implements GamePresentationBridge {
   current: MatchSnapshot = snapshot();
   readonly snapshotListeners = new Set<(snapshot: MatchSnapshot) => void>();
@@ -197,6 +203,7 @@ class Bridge implements GamePresentationBridge {
 
 describe('ArenaScene live presentation integration', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
     probes.sessionPresentation.mockReturnValue(null);
     probes.arenaInputSource = null;
@@ -305,32 +312,30 @@ describe('ArenaScene live presentation integration', () => {
     scene.create();
     scene.update();
 
-    expect(probes.fighterApply).toHaveBeenCalledWith(
-      expect.objectContaining({ playerId: 'p1' }),
-      expect.any(Object),
-      expect.any(Object),
-      null,
-      {
-        profileId: 'heavy-melee', facing: { x: -1, y: 0 },
-        previousProgress: 0.5, currentProgress: 0.5, active: true
-      },
-      { facing: { x: -1, y: 0 }, progress: 1, pulseReady: true }
-    );
-    expect(probes.fighterApply).toHaveBeenCalledWith(
-      expect.objectContaining({ playerId: 'p2' }),
-      expect.any(Object),
-      { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
-      null,
-      null,
-      { facing: { x: Math.SQRT1_2, y: -Math.SQRT1_2 }, progress: 0.5, pulseReady: false }
-    );
+    const localCall = latestPlayerCall('p1');
+    expect(localCall).toBeDefined();
+    expect(localCall?.[0]).toEqual(expect.objectContaining({ playerId: 'p1' }));
+    expect(localCall?.[4]).toEqual(expect.objectContaining({
+      profileId: 'heavy-melee', facing: { x: -1, y: 0 }, currentProgress: 0.5, active: true
+    }));
+    expect((localCall?.[4] as { previousProgress: number }).previousProgress).toBeLessThan(0.5);
+    expect(localCall?.[5]).toEqual({ facing: { x: -1, y: 0 }, progress: 1, pulseReady: true });
+    const remoteCall = latestPlayerCall('p2');
+    expect(remoteCall?.[0]).toEqual(expect.objectContaining({ playerId: 'p2' }));
+    expect(remoteCall?.[2]).toEqual({ x: Math.SQRT1_2, y: -Math.SQRT1_2 });
+    expect(remoteCall?.[3]).toBeNull();
+    expect(remoteCall?.[4]).toBeNull();
+    expect(remoteCall?.[5]).toEqual(expect.objectContaining({
+      facing: { x: Math.SQRT1_2, y: -Math.SQRT1_2 },
+      pulseReady: false
+    }));
   });
 
   it('selects predicted local charge and facing while remote charge remains authoritative', () => {
     const bridge = new Bridge();
     const staleLocalAction = { ...idleAction, chargeMs: 175, charging: true } as const;
-    const remoteAction = { ...idleAction, chargeMs: 700, charging: true } as const;
-    const predictedLocalAction = { ...idleAction, chargeMs: 525, charging: true } as const;
+    const remoteAction = { ...idleAction, chargeMs: 450, charging: true } as const;
+    const predictedLocalAction = { ...idleAction, chargeMs: 340, charging: true } as const;
     bridge.current = snapshot({
       players: [
         player({ facing: { x: 1, y: 0 }, action: staleLocalAction }),
@@ -348,22 +353,138 @@ describe('ArenaScene live presentation integration', () => {
     scene.create();
     scene.update();
 
-    expect(probes.fighterApply).toHaveBeenCalledWith(
-      expect.objectContaining({ playerId: 'p1', action: staleLocalAction }),
-      { x: 312, y: 348 },
-      { x: 0, y: -1 },
-      predictedLocalAction,
-      null,
-      { facing: { x: 0, y: -1 }, progress: 0.75, pulseReady: false }
-    );
-    expect(probes.fighterApply).toHaveBeenCalledWith(
-      expect.objectContaining({ playerId: 'p2', action: remoteAction }),
-      expect.any(Object),
-      { x: -1, y: 0 },
-      null,
-      null,
-      { facing: { x: -1, y: 0 }, progress: 1, pulseReady: true }
-    );
+    const localCall = latestPlayerCall('p1');
+    expect(localCall?.[0]).toEqual(expect.objectContaining({ playerId: 'p1', action: staleLocalAction }));
+    expect(localCall?.[1]).toEqual({ x: 312, y: 348 });
+    expect(localCall?.[2]).toEqual({ x: 0, y: -1 });
+    expect(localCall?.[3]).toEqual(predictedLocalAction);
+    expect(localCall?.[4]).toBeNull();
+    expect(localCall?.[5]).toEqual(expect.objectContaining({ facing: { x: 0, y: -1 } }));
+
+    const remoteCall = latestPlayerCall('p2');
+    expect(remoteCall?.[0]).toEqual(expect.objectContaining({ playerId: 'p2', action: remoteAction }));
+    expect(remoteCall?.[2]).toEqual({ x: -1, y: 0 });
+    expect(remoteCall?.[3]).toBeNull();
+    expect(remoteCall?.[4]).toBeNull();
+    expect(remoteCall?.[5]).toEqual(expect.objectContaining({ facing: { x: -1, y: 0 }, pulseReady: true }));
+  });
+
+  it('projects a predicted local quick sweep into the shared trail before authoritative acknowledgement', () => {
+    const bridge = new Bridge();
+    probes.sessionPresentation
+      .mockReturnValueOnce({
+        position: { x: 300, y: 360 },
+        velocity: { x: 0, y: 0 },
+        facing: { x: 0, y: -1 },
+        actionStart: { ...idleAction, kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1 }
+      })
+      .mockReturnValueOnce({
+        position: { x: 300, y: 360 },
+        velocity: { x: 0, y: 0 },
+        facing: { x: 0, y: -1 },
+        actionStart: null
+      });
+    const nowSpy = vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(80);
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+
+    scene.create();
+    scene.update();
+    scene.update();
+
+    const localCall = latestPlayerCall('p1');
+    expect(localCall?.[4]).toEqual(expect.objectContaining({
+      profileId: 'quick-1',
+      facing: { x: 0, y: -1 },
+      active: true
+    }));
+    expect((localCall?.[4] as { currentProgress: number }).currentProgress).toBeGreaterThan(0);
+    expect((localCall?.[4] as { currentProgress: number; previousProgress: number }).currentProgress)
+      .toBeGreaterThan((localCall?.[4] as { previousProgress: number }).previousProgress);
+
+  });
+
+  it('projects a predicted local heavy release sweep into the shared trail before authoritative acknowledgement', () => {
+    const bridge = new Bridge();
+    bridge.current = snapshot({
+      players: [
+        player({ action: { ...idleAction, chargeMs: 340, charging: true } })
+      ]
+    });
+    probes.sessionPresentation
+      .mockReturnValueOnce({
+        position: { x: 300, y: 360 },
+        velocity: { x: 0, y: 0 },
+        facing: { x: 0, y: -1 },
+        actionStart: {
+          ...idleAction,
+          kind: 'HEAVY',
+          phase: 'WINDUP',
+          chargeMs: 340,
+          lockedFacing: { x: -1, y: 0 }
+        }
+      })
+      .mockReturnValueOnce({
+        position: { x: 300, y: 360 },
+        velocity: { x: 0, y: 0 },
+        facing: { x: 0, y: -1 },
+        actionStart: null
+      });
+    const nowSpy = vi.spyOn(performance, 'now')
+      .mockReturnValueOnce(0)
+      .mockReturnValueOnce(150);
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+
+    scene.create();
+    scene.update();
+    scene.update();
+
+    const localCall = latestPlayerCall('p1');
+    expect(localCall?.[4]).toEqual(expect.objectContaining({
+      profileId: 'heavy-melee',
+      facing: { x: -1, y: 0 },
+      active: true
+    }));
+    expect((localCall?.[4] as { currentProgress: number; previousProgress: number }).currentProgress)
+      .toBeGreaterThan((localCall?.[4] as { previousProgress: number }).previousProgress);
+
+  });
+
+  it('keeps a repeated authoritative active snapshot as a meaningful sweep instead of a dot', () => {
+    const bridge = new Bridge();
+    bridge.current = snapshot({
+      players: [
+        player(),
+        player({
+          playerId: 'p2',
+          facing: { x: 1, y: 0 },
+          action: {
+            ...idleAction,
+            kind: 'QUICK_1',
+            phase: 'ACTIVE',
+            chargeMs: 0,
+            attackId: 22,
+            profileId: 'quick-1',
+            lockedFacing: { x: 1, y: 0 },
+            activeProgress: 0.5
+          }
+        })
+      ]
+    });
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+
+    scene.create();
+    scene.update();
+
+    const remoteCall = latestPlayerCall('p2');
+    expect(remoteCall?.[4]).toEqual(expect.objectContaining({
+      profileId: 'quick-1',
+      facing: { x: 1, y: 0 },
+      currentProgress: 0.5,
+      active: true
+    }));
+    expect((remoteCall?.[4] as { previousProgress: number }).previousProgress).toBeLessThan(0.5);
   });
 
   it('reconciles authoritative pulse views by projectile ID without duplicates and clears them on removal or result', () => {

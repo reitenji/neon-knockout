@@ -228,7 +228,7 @@ describe('FighterView real graphics presentation', () => {
       facing: { x: 1, y: 0 },
       action: { ...idleAction, chargeMs: 175, charging: true }
     });
-    const predictedLocalAction = { ...idleAction, chargeMs: 525, charging: true } satisfies MatchAction;
+    const predictedLocalAction = { ...idleAction, chargeMs: 340, charging: true } satisfies MatchAction;
     const remotePlayer = player({
       playerId: 'p2',
       facing: { x: -1, y: 0 },

@@ -21,6 +21,7 @@ import { LocalActionAudioTracker } from './LocalActionAudioTracker.js';
 import { PhaserAudioAdapter } from './PhaserAudioAdapter.js';
 import { PhaserImpactAdapter } from './PhaserImpactAdapter.js';
 import { createPulseView, type PulseView } from './PulseView.js';
+import { AttackTelegraphTracker } from './attackTelegraphTracker.js';
 
 const INPUT_STEP_MS = 1_000 / 60;
 
@@ -68,6 +69,7 @@ export class ArenaScene extends Phaser.Scene {
   private readonly retiredPulseIds = new Set<number>();
   private readonly consumedEventIds = new Set<number>();
   private readonly localActionAudio = new LocalActionAudioTracker();
+  private readonly attackTelegraphs = new AttackTelegraphTracker();
   private readonly unsubscribers: Array<() => void> = [];
   private session: ArenaSession | null = null;
   private arenaView: ArenaView | null = null;
@@ -169,8 +171,16 @@ export class ArenaScene extends Phaser.Scene {
       const isLocal = currentPlayer.playerId === this.localPlayerId;
       const view = this.views.get(currentPlayer.playerId) ?? this.addView(currentPlayer, isLocal);
       const previousPlayer = playerById(frame.previous, currentPlayer.playerId) ?? currentPlayer;
-      const telegraph = attackTelegraph(previousPlayer, currentPlayer);
       if (isLocal && localPresentation) {
+        const telegraph = this.attackTelegraphs.telegraph(
+          currentPlayer.playerId,
+          previousPlayer,
+          currentPlayer,
+          localPresentation.actionStart,
+          localPresentation.facing,
+          nowMs,
+          true
+        );
         const canPresentLocalAction = (frame.current.phase === 'REGULATION' || frame.current.phase === 'SUDDEN_DEATH') &&
           currentPlayer.hitstunRemainingMs <= 0 && currentPlayer.respawnRemainingMs <= 0;
         if (canPresentLocalAction) {
@@ -190,6 +200,15 @@ export class ArenaScene extends Phaser.Scene {
         );
         continue;
       }
+      const telegraph = this.attackTelegraphs.telegraph(
+        currentPlayer.playerId,
+        previousPlayer,
+        currentPlayer,
+        null,
+        currentPlayer.facing,
+        nowMs,
+        false
+      );
       const position = interpolateRemotePlayer(previousPlayer, currentPlayer, frame.alpha);
       view.apply(
         currentPlayer,
@@ -205,6 +224,7 @@ export class ArenaScene extends Phaser.Scene {
       view.destroy();
       this.views.delete(playerId);
     }
+    this.attackTelegraphs.prune(activeIds);
   }
 
   private addView(player: MatchPlayer, isLocal: boolean): FighterView {
@@ -250,6 +270,7 @@ export class ArenaScene extends Phaser.Scene {
     this.session?.dispose();
     this.session = null;
     this.timeline.clear();
+    this.attackTelegraphs.reset();
     this.consumedEventIds.clear();
     this.retiredPulseIds.clear();
     this.resultPresented = false;
