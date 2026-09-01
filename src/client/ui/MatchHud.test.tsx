@@ -164,7 +164,7 @@ describe('MatchHud', () => {
     expect(controls).not.toHaveTextContent(/oklar|shift|tık|fare|mouse/i);
   });
 
-  it('shows a PING/RTT column with opponent current Ping and median RTT while reserving local telemetry for Delay and RB', () => {
+  it('shows current Ping and median RTT for every player without Delay or Rollback telemetry', () => {
     const bridge = new PresentationBridge();
     bridge.current = snapshot({
       players: [
@@ -175,7 +175,7 @@ describe('MatchHud', () => {
       ],
       scores: { 'p-local': 2, 'p-rival': 4, 'p-medium': 3, 'p-high': 1 },
       network: {
-        'p-local': { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' },
+        'p-local': { currentMs: 16, medianMs: 15, jitterMs: 2, transport: 'websocket' },
         'p-rival': { currentMs: 20, medianMs: 18, jitterMs: 4, transport: 'websocket' },
         'p-medium': { currentMs: 51, medianMs: 42, jitterMs: 12, transport: 'polling' },
         'p-high': { currentMs: 144, medianMs: 109, jitterMs: 30, transport: 'websocket' }
@@ -190,10 +190,11 @@ describe('MatchHud', () => {
     expect(within(roster).getByText('PING/RTT')).toBeVisible();
     expect(within(roster).queryByText('MEDYAN')).not.toBeInTheDocument();
 
-    const localTelemetry = screen.getByLabelText('Ada yerel telemetrisi: Delay ölçülüyor, RB ölçülüyor');
-    expect(within(localTelemetry).getByText('Delay —')).toBeVisible();
-    expect(within(localTelemetry).getByText('RB —')).toBeVisible();
-    expect(localTelemetry).not.toHaveTextContent(/Ping|RTT/);
+    const localTelemetry = screen.getByLabelText('Ada ağ telemetrisi: Ping 16 ms, RTT 15 ms');
+    expect(within(localTelemetry).getByText('Ping 16 ms')).toBeVisible();
+    expect(within(localTelemetry).getByText('RTT 15 ms')).toBeVisible();
+    expect(localTelemetry).toHaveClass('is-good');
+    expect(roster).not.toHaveTextContent(/Delay|Rollback|\bRB\b/);
 
     const goodTelemetry = screen.getByLabelText('Linus ağ telemetrisi: Ping 20 ms, RTT 18 ms');
     expect(within(goodTelemetry).getByText('Ping 20 ms')).toBeVisible();
@@ -227,7 +228,7 @@ describe('MatchHud', () => {
     expect(telemetry).toHaveClass('is-high');
   });
 
-  it('uses each client bridge for its own Delay and RB frames while the same players remain opponent Ping/RTT rows elsewhere', () => {
+  it('shows the same player Ping/RTT values to every client and never renders bridge delay diagnostics', () => {
     const sharedSnapshot = snapshot({
       network: {
         'p-local': { currentMs: 47, medianMs: 42, jitterMs: 6, transport: 'polling' },
@@ -246,32 +247,15 @@ describe('MatchHud', () => {
     const adaClient = render(<MatchHud bridge={adaBridge} localPlayerId="p-local" />);
     const linusClient = render(<MatchHud bridge={linusBridge} localPlayerId="p-rival" />);
 
-    const adaLocalTelemetry = within(adaClient.container).getByLabelText(
-      'Ada yerel telemetrisi: Delay 1.0f, RB 3f'
-    );
-    expect(within(adaLocalTelemetry).getByText('Delay 1.0f')).toBeVisible();
-    expect(within(adaLocalTelemetry).getByText('RB 3f')).toBeVisible();
+    expect(within(adaClient.container).getByLabelText('Ada ağ telemetrisi: Ping 47 ms, RTT 42 ms')).toBeVisible();
     expect(within(adaClient.container).getByLabelText('Linus ağ telemetrisi: Ping 21 ms, RTT 18 ms')).toBeVisible();
-    expect(within(adaClient.container).getByRole('status', { name: 'Sunum arabelleği' })).toHaveTextContent(
-      'Delay 16 ms · 1.0f · Rollback 3f'
-    );
+    expect(adaClient.container).not.toHaveTextContent(/Delay|Rollback|\bRB\b/);
+    expect(within(adaClient.container).queryByRole('status', { name: 'Sunum arabelleği' })).not.toBeInTheDocument();
 
-    const linusLocalTelemetry = within(linusClient.container).getByLabelText(
-      'Linus yerel telemetrisi: Delay 2.4f, RB 1f'
-    );
-    expect(within(linusLocalTelemetry).getByText('Delay 2.4f')).toBeVisible();
-    expect(within(linusLocalTelemetry).getByText('RB 1f')).toBeVisible();
+    expect(within(linusClient.container).getByLabelText('Linus ağ telemetrisi: Ping 21 ms, RTT 18 ms')).toBeVisible();
     expect(within(linusClient.container).getByLabelText('Ada ağ telemetrisi: Ping 47 ms, RTT 42 ms')).toBeVisible();
-    expect(within(linusClient.container).getByRole('status', { name: 'Sunum arabelleği' })).toHaveTextContent(
-      'Delay 40 ms · 2.4f · Rollback 1f'
-    );
-
-    act(() => {
-      adaBridge.setPresentationDelay(24);
-      adaBridge.setRollbackFrames(4);
-    });
-    expect(within(adaClient.container).getByLabelText('Ada yerel telemetrisi: Delay 1.4f, RB 4f')).toBeVisible();
-    expect(within(linusClient.container).getByLabelText('Linus yerel telemetrisi: Delay 2.4f, RB 1f')).toBeVisible();
+    expect(linusClient.container).not.toHaveTextContent(/Delay|Rollback|\bRB\b/);
+    expect(within(linusClient.container).queryByRole('status', { name: 'Sunum arabelleği' })).not.toBeInTheDocument();
   });
 
   it('shows exact charge readiness and the authoritative 78-second contraction warning', () => {
@@ -344,7 +328,7 @@ describe('MatchHud', () => {
     expect(screen.getByRole('timer', { name: 'Kalan süre' })).toHaveTextContent('02:00');
     expect(screen.getByText('Hazır')).toBeVisible();
     expect(screen.getByText('Beklemede')).toBeVisible();
-    expect(screen.getByLabelText('Ada yerel telemetrisi: Delay ölçülüyor, RB ölçülüyor')).toBeVisible();
+    expect(screen.getByLabelText('Ada ağ telemetrisi: Ping 132 ms, RTT 109 ms')).toBeVisible();
     expect(createGame).toHaveBeenCalledOnce();
 
     act(() => bridge.setConnected(false));

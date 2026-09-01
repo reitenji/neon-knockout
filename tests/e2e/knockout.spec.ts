@@ -27,10 +27,12 @@ function marker(game: E2eGame, code: string): number {
 }
 
 async function expectLocalAndOpponentTelemetry(match: MatchPages): Promise<void> {
-  await expect(match.host.page.getByLabel(/^Ada yerel telemetrisi:/)).not.toContainText('—');
+  await expect(match.host.page.getByLabel(/^Ada ağ telemetrisi:/)).not.toContainText('—');
   await expect(match.host.page.getByLabel(/^Linus ağ telemetrisi:/)).not.toContainText('—');
-  await expect(match.guest.page.getByLabel(/^Linus yerel telemetrisi:/)).not.toContainText('—');
+  await expect(match.guest.page.getByLabel(/^Linus ağ telemetrisi:/)).not.toContainText('—');
   await expect(match.guest.page.getByLabel(/^Ada ağ telemetrisi:/)).not.toContainText('—');
+  await expect(match.host.page.locator('.match-hud')).not.toContainText(/Delay|Rollback|\bRB\b/);
+  await expect(match.guest.page.locator('.match-hud')).not.toContainText(/Delay|Rollback|\bRB\b/);
 }
 
 function eventsAfter(game: E2eGame, code: string, eventId: number): readonly GameEvent[] {

@@ -801,6 +801,41 @@ describe('Socket.IO FFA game server flow', () => {
     expect(player(monotonic, match.host.playerId).lastProcessedInputSeq).toBe(200);
   }, 12_000);
 
+  it('silently drops input frames that arrive after the match enters the result phase', async () => {
+    const match = await startMatch();
+    const resultState = expectEvent(match.hostClient, 'room:state', (state) => state.phase === 'RESULT');
+    for (let knockout = 0; knockout < GAME.targetScore; knockout += 1) {
+      const marker = eventMarker(match.roomCode);
+      harness().forceKnockout(match.roomCode, match.host.playerId, match.guest.playerId);
+      const forced = eventAfter(match.roomCode, marker, 'KNOCKOUT');
+      if (!forced) throw new Error(`Late-input setup knockout ${knockout + 1} did not occur.`);
+      if (knockout < GAME.targetScore - 1) {
+        advanceToEvent(match, forced.eventId, 'RESPAWN', GAME.knockoutToControlMs + STEP_MS * 2);
+      }
+    }
+    await resultState;
+
+    const errors: ServerError[] = [];
+    match.hostClient.on('server:error', (error) => errors.push(error));
+    for (let seq = 100; seq < 110; seq += 1) match.hostClient.emit('match:input', input(seq));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(errors.filter((error) => error.code === 'INVALID_PHASE')).toEqual([]);
+  }, 12_000);
+
+  it('still reports valid input frames sent from a non-result invalid phase', async () => {
+    const hostClient = await client();
+    await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
+    const invalidPhase = expectEvent(hostClient, 'server:error', (error) => error.code === 'INVALID_PHASE');
+
+    hostClient.emit('match:input', input(1));
+
+    await expect(invalidPhase).resolves.toMatchObject({
+      code: 'INVALID_PHASE',
+      message: 'Bu işlem şu anda kullanılamaz.'
+    });
+  });
+
   it('limits room actions to ten per second and suppresses repeated rate-limit events', async () => {
     const clientA = await client();
     await emitSuccess<SessionWelcome>(clientA, 'room:create', { name: 'Ada' });

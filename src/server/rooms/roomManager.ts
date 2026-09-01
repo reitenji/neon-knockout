@@ -427,6 +427,13 @@ export class RoomManager {
       (room.phase === 'COUNTDOWN' || room.phase === 'MATCH'));
   }
 
+  isInResult(connectionId: string): boolean {
+    const session = this.connections.get(connectionId);
+    const room = session ? this.rooms.get(session.roomCode) : null;
+    const player = session ? room?.players.get(session.playerId) : null;
+    return Boolean(room && player?.connected && room.phase === 'RESULT');
+  }
+
   forceKnockout(roomCode: string, attackerId: string, targetId: string): void {
     const room = this.requireRoom(roomCode);
     if (!room.match || room.phase !== 'MATCH') {

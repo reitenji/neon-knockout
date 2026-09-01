@@ -25,10 +25,12 @@ and same-frame coalescing keep the effect readable without a visible hitch.
 Stage A keeps the direct, host-authoritative Socket.IO topology. The server
 advances rooms and publishes snapshots at 60 Hz. Remote interpolation adapts
 between 16 and 40 ms based on recent snapshot arrival jitter. The compact player
-roster reports each opponent's current `Ping` and median `RTT`, while every player
-sees their own presentation Delay and the number of unacknowledged local input
-frames replayed during the latest authoritative reconciliation. Transport and
-jitter remain in the authoritative network snapshot for diagnostics. Raw spikes
+roster labels the latest application-level Socket.IO probe round trip as `Ping`
+and the rolling median of those same samples as `RTT` for every player; it does
+not expose presentation Delay or rollback-frame diagnostics. Neither HUD field is
+raw ICMP latency or a separate wire-only measurement. Transport and jitter remain in
+the authoritative network snapshot, while presentation diagnostics remain in the
+scoped bridge for testing. Raw spikes
 remain visible and the worse of current/median latency controls the warning tier. A healthy
 foreground client on the same router should normally show a median of 20 ms or
 less, but the UI must not claim an absolute Wi-Fi guarantee.
@@ -43,8 +45,8 @@ recovery in that future design; this Stage A package does not pre-empt the resul
 The server remains the only authority for hit, clash, projectile, knockout, and
 score results. Local predicted sweeps are presentation only and reconcile to the
 next authoritative attack. Existing polling fallback remains available for
-devices that cannot establish WebSocket; the roster labels that fallback rather
-than silently presenting it as equivalent.
+devices that cannot establish WebSocket and remains explicit in the diagnostic
+network snapshot.
 
 No WebRTC signaling, ICE, STUN, TURN, peer mesh, cloud service, new game mode,
 new combat button, or balance system is added in Stage A. The visual identity,
@@ -62,8 +64,8 @@ and audio resources. The browser burst must preserve a Pulse created through rea
 match input while producing four real hits and boundary knockouts. Network tests
 must prove 60 Hz scheduling and snapshot publication, 16–40 ms bounded adaptive
 interpolation, rolling median/jitter calculation, explicit WebSocket/polling
-reporting, and publication of opponent Ping/RTT plus the local presentation buffer
-and prediction replay-frame count to the HUD.
+reporting, publication of every player's Ping/RTT to the HUD, and retention of the
+local presentation buffer and prediction replay-frame count outside the player-facing roster.
 
 The focused tests, complete unit/integration suite, load test, lint, typecheck,
 production build, and a live browser match must pass. A live burst scenario must

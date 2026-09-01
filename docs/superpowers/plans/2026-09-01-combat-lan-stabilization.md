@@ -12,8 +12,9 @@ full heavy charge in 450 ms, read the same attack sweep that the server evaluate
 and see several ring-outs without a visible allocation hitch. LAN play remains
 host-authoritative while the server accepts work and publishes snapshots at its
 native 60 Hz simulation cadence. Remote smoothing uses a 16–40 ms adaptive LAN
-buffer, and the roster separates each opponent's current/median RTT from the
-local presentation delay and rollback-frame count. WebRTC is a measured second-stage transport change, not a
+buffer, and the roster shows the latest application-level probe round trip as
+`Ping` plus the rolling median of those same samples as `RTT` for every player.
+Presentation delay and rollback-frame telemetry remain internal. WebRTC is a measured second-stage transport change, not a
 prerequisite for proving the lower-latency Socket.IO path.
 
 ## Progress
@@ -25,12 +26,13 @@ prerequisite for proving the lower-latency Socket.IO path.
 - [x] (2026-09-01) Implemented predicted shared-geometry attack presentation and contact-point feedback with focused tests.
 - [x] (2026-09-01) Implemented bounded reusable ring-out effects and replaced the synthetic burst acceptance with four simultaneous real hits followed by four real boundary knockouts.
 - [x] (2026-09-01) Recorded the interim 30 Hz snapshot and 35–70 ms interpolation baseline before applying the approved Stage A latency changes.
-- [x] (2026-09-01) Separated current RTT, median RTT, jitter, transport, presentation delay/frames, and true prediction-replay rollback frames in the compact HUD.
+- [x] (2026-09-01) Modeled latest and median samples from the same application RTT probe alongside jitter, transport, presentation delay/frames, and true prediction-replay rollback frames.
 - [x] (2026-09-01) Published authoritative snapshots at 60 Hz and lowered the adaptive LAN interpolation band to 16–40 ms.
-- [x] (2026-09-01) Verified the genuine four-hit/four-ring-out browser lifecycle with a pre-existing live Pulse, a 17.7 ms correlated maximum frame, and no forced knockout hook.
+- [x] (2026-09-01) Verified the genuine four-hit/four-ring-out browser lifecycle with a pre-existing live Pulse, a 24.1 ms correlated maximum frame, and no forced knockout hook.
 - [ ] Run a post-change LAN A/B gate and proceed to a WebRTC data-channel design only if TCP transport remains the measured bottleneck.
-- [x] (2026-09-01) Passed focused tests, 452-test full Vitest suite, eight-client load gate, production build, all 9 Playwright scenarios, and desktop/mobile browser acceptance.
+- [x] (2026-09-01) Passed focused tests, 454-test full Vitest suite, eight-client load gate, production build, all 9 Playwright scenarios, and desktop/mobile browser acceptance.
 - [x] (2026-09-01) Completed final review and updated outcomes for publication to `main`.
+- [x] (2026-09-01) Simplified every roster row to Ping/RTT only and made late post-result input frames silent.
 
 ## Surprises & Discoveries
 
@@ -45,9 +47,9 @@ prerequisite for proving the lower-latency Socket.IO path.
 - Observation: Server combat computation is not a material latency source.
   Evidence: An eight-player `stepMatch` benchmark measured 0.0227 ms mean and 0.0299 ms p95 against a 16.67 ms tick budget.
 - Observation: Four genuinely simultaneous combat hits and their four credited boundary ring-outs no longer reproduce the old presentation hitch, even while an already-live Pulse continues in flight.
-  Evidence: The production-path browser scenario observed four `HIT` events at tick 296, four `KNOCKOUT` events at tick 298, retained the same pre-existing projectile id, and measured a 17.7 ms maximum frame across the full 72-frame ring-out effect window.
+  Evidence: The production-path browser scenario observed four `HIT` events at tick 298, four `KNOCKOUT` events at tick 300, retained the same pre-existing projectile id, and measured a 24.1 ms maximum frame across the full 72-frame ring-out effect window.
 - Observation: A rollback frame is measurable without adding rollback netcode: it is the count of unacknowledged local input frames replayed after an authoritative snapshot reconciliation.
-  Evidence: The prediction buffer publishes its pending replay count through the scoped presentation bridge, and the live two-client HUD displayed `Rollback 0f` to `1f` while receiving 60 Hz snapshots.
+  Evidence: The prediction buffer publishes its pending replay count through the scoped presentation bridge and its focused tests, while the player-facing HUD intentionally omits this diagnostic.
 
 ## Decision Log
 
@@ -74,14 +76,15 @@ prerequisite for proving the lower-latency Socket.IO path.
 
 Stage A is implemented and locally accepted. The server now advances and publishes
 at 60 Hz, remote presentation delay stays within 16–40 ms, and the compact HUD
-shows each opponent's current `Ping` and median `RTT` while each player sees their
-own Delay and real replayed-frame count. The network snapshot still retains jitter
-and active transport for diagnostics. A real combat browser test
+shows every player's latest application RTT sample as `Ping` and the rolling
+median of those samples as `RTT`, with no Delay or Rollback
+fields. The network snapshot still retains jitter and active transport, while the
+presentation bridge retains delay and replay-frame diagnostics internally. A real combat browser test
 drives four attacker/target pairs through normal input, contact resolution, and
 boundary knockout while preserving a Pulse spawned through normal match input;
-its latest full-suite run measured a 17.7 ms correlated and global maximum frame.
+its latest full-suite run measured a 24.1 ms correlated and global maximum frame.
 
-The complete verification pass contains 53 Vitest files and 452 tests, the
+The complete verification pass contains 53 Vitest files and 454 tests, the
 eight-client load gate, client/server production builds, and 9 Playwright flows
 covering invite, lobby settings, keyboard combat, reconnect, rematch, result
 status, mobile touch, polling fallback, eight-player rendering, and the genuine
@@ -89,8 +92,10 @@ ring-out burst. A live desktop and 844×390 browser check showed the telemetry
 without arena obstruction and produced no console errors.
 
 The only remaining latency acceptance is intentionally physical: another device
-must join over the representative Wi-Fi/LAN so the new metrics can distinguish
-real network RTT from presentation delay and prediction replay. WebRTC remains a
+must join over the representative Wi-Fi/LAN while parallel ICMP and browser
+profiling are recorded. The two HUD fields alone cannot distinguish wire latency
+from browser scheduling and ordered Socket.IO queueing because both come from the
+same application-level round trip. WebRTC remains a
 conditional Stage B experiment, not an unverified migration claim.
 
 ## Context and Orientation
@@ -138,10 +143,12 @@ and knockout audio bursts without removing the readable score and announcement.
 
 Fourth, add tests for a 60 Hz outer room scheduler and snapshot publisher, an
 interpolation delay bounded between 16 and 40 ms, and a compact HUD that presents
-RTT, jitter, transport, and the local presentation buffer as distinct values. Watch
+the latest and median samples from the same application RTT probe while the
+diagnostic model retains jitter, transport, and
+the local presentation buffer as distinct values. Watch
 them fail, then update the snapshot cadence, timeline, presentation bridge, and
-roster while retaining polling as a visible fallback rather than mislabeling it as
-WebSocket.
+roster while retaining polling as a diagnostic fallback rather than mislabeling it
+as WebSocket.
 
 Fifth, run a two-client A/B acceptance that records transport, RTT median, jitter,
 presentation buffer, snapshot cadence, and frame time. If WebSocket remains the
@@ -174,14 +181,14 @@ Final local transcript:
 
     npm run verify
     Test Files  53 passed (53)
-    Tests       452 passed (452)
+    Tests       454 passed (454)
     Load tests  1 passed (1)
     Client/server production build passed
 
     npx playwright test --workers=1
     Tests       9 passed (9)
-    Eight-player p95 frame time  17.6 ms
-    Four-hit/four-ring-out correlated max frame  17.7 ms
+    Eight-player p95 frame time  9.3 ms
+    Four-hit/four-ring-out correlated max frame  24.1 ms
 
 ## Validation and Acceptance
 
@@ -200,9 +207,10 @@ a new frame over 50 ms attributable to ring-out presentation.
 
 The server scheduler and snapshot publication tests must both observe 60 Hz pacing.
 Interpolation must settle near 16 ms on regular arrivals and never leave the
-16–40 ms range under jitter. The roster must separately show opponent `Ping/RTT`
-and local Delay/Rollback frames without increasing its footprint enough to cover
-the arena. The network snapshot must retain transport and jitter so the Stage A
+16–40 ms range under jitter. Every roster row must show only the latest application
+RTT sample as `Ping` and its rolling median as `RTT` without increasing its footprint
+enough to cover the arena. The
+network snapshot must retain transport and jitter so the Stage A
 browser A/B can record them before any WebRTC migration is considered complete.
 
 ## Idempotence and Recovery

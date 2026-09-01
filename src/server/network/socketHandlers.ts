@@ -303,6 +303,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         socket.emit('server:error', INVALID_PAYLOAD);
         return;
       }
+      if (rooms.isInResult(socket.id)) return;
       if (!limiter.consumeInput()) {
         return;
       }

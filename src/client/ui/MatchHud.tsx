@@ -77,24 +77,6 @@ function useConnection(bridge: GamePresentationBridge): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
-function usePresentationDelay(bridge: GamePresentationBridge): number | null {
-  const subscribe = useCallback(
-    (notify: () => void) => bridge.subscribePresentationDelay?.(() => notify()) ?? (() => undefined),
-    [bridge]
-  );
-  const getSnapshot = useCallback(() => bridge.getPresentationDelayMs?.() ?? null, [bridge]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-
-function useRollbackFrames(bridge: GamePresentationBridge): number | null {
-  const subscribe = useCallback(
-    (notify: () => void) => bridge.subscribeRollbackFrames?.(() => notify()) ?? (() => undefined),
-    [bridge]
-  );
-  const getSnapshot = useCallback(() => bridge.getRollbackFrames?.() ?? null, [bridge]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
-}
-
 function PhaseAnnouncement({
   announcement,
   variant = 'center'
@@ -165,14 +147,10 @@ function pingPresentation(network: PlayerNetworkStatus | undefined): Readonly<{
 
 function PlayerRoster({
   snapshot,
-  localPlayerId,
-  presentationDelayFrames,
-  rollbackFrames
+  localPlayerId
 }: Readonly<{
   snapshot: MatchSnapshot;
   localPlayerId: string;
-  presentationDelayFrames: number | null;
-  rollbackFrames: number | null;
 }>) {
   const ranking = [...snapshot.players].sort((left, right) => {
     const scoreDifference = (snapshot.scores[right.playerId] ?? 0) - (snapshot.scores[left.playerId] ?? 0);
@@ -192,8 +170,6 @@ function PlayerRoster({
           const local = player.playerId === localPlayerId;
           const score = snapshot.scores[player.playerId] ?? 0;
           const ping = pingPresentation(snapshot.network[player.playerId]);
-          const delayValue = presentationDelayFrames === null ? null : `${presentationDelayFrames.toFixed(1)}f`;
-          const rollbackValue = rollbackFrames === null ? null : `${Math.max(0, Math.round(rollbackFrames))}f`;
           const accentStyle = { '--player-accent': ACCENTS[player.accent] } as CSSProperties;
           return (
             <li key={player.playerId} className={local ? 'is-local' : undefined} style={accentStyle}>
@@ -205,13 +181,11 @@ function PlayerRoster({
                 {score}
               </strong>
               <span
-                className={`match-hud__telemetry is-${local ? 'local' : ping.tier}`}
-                aria-label={local
-                  ? `${player.name} yerel telemetrisi: Delay ${delayValue ?? 'ölçülüyor'}, RB ${rollbackValue ?? 'ölçülüyor'}`
-                  : `${player.name} ağ telemetrisi: ${ping.accessibleValue}`}
+                className={`match-hud__telemetry is-${ping.tier}`}
+                aria-label={`${player.name} ağ telemetrisi: ${ping.accessibleValue}`}
               >
-                <span>{local ? `Delay ${delayValue ?? '—'}` : ping.pingLabel}</span>
-                <span>{local ? `RB ${rollbackValue ?? '—'}` : ping.rttLabel}</span>
+                <span>{ping.pingLabel}</span>
+                <span>{ping.rttLabel}</span>
               </span>
             </li>
           );
@@ -235,11 +209,6 @@ function ControlsHint() {
 export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
   const snapshot = useMatchSnapshot(bridge);
   const connected = useConnection(bridge);
-  const presentationDelayMs = usePresentationDelay(bridge);
-  const rollbackFrames = useRollbackFrames(bridge);
-  const presentationDelayFrames = presentationDelayMs === null
-    ? null
-    : presentationDelayMs * GAME.tickRate / 1_000;
   const localPlayer = snapshot?.players.find((player) => player.playerId === localPlayerId) ?? null;
   const announcement = snapshot ? phaseAnnouncement(snapshot) : null;
   const overload = localPlayer ? Math.round(clamp(localPlayer.overload, 0, GAME.maxOverload)) : 0;
@@ -264,11 +233,6 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
             <strong className="match-hud__rule" aria-label="Kazanma hedefi">
               İlk {snapshot.settings.knockoutTarget} knockout
             </strong>
-            {presentationDelayMs !== null && presentationDelayFrames !== null ? (
-              <small className="match-hud__presentation" role="status" aria-label="Sunum arabelleği">
-                Delay {Math.round(presentationDelayMs)} ms · {presentationDelayFrames.toFixed(1)}f · Rollback {rollbackFrames ?? 0}f
-              </small>
-            ) : null}
             {contractionWarning ? (
               <strong className="match-hud__contraction" role="status" aria-label="Arena daralma uyarısı">
                 ARENA DARALIYOR
@@ -279,8 +243,6 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
           <PlayerRoster
             snapshot={snapshot}
             localPlayerId={localPlayerId}
-            presentationDelayFrames={presentationDelayFrames}
-            rollbackFrames={rollbackFrames}
           />
 
           {localPlayer ? (
