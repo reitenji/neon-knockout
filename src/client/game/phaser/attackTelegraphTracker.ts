@@ -13,6 +13,7 @@ type ProvisionalAttack = Readonly<{
   facing: Vec2;
   startedAtMs: number;
   lastProgress: number;
+  acknowledged: boolean;
 }>;
 
 type AuthoritativeAttack = Readonly<{
@@ -77,6 +78,7 @@ export class AttackTelegraphTracker {
     if (isLocal) this.capturePrediction(playerId, predictedAction, presentationFacing, nowMs);
     const authoritative = this.authoritativeTelegraph(previousPlayer, currentPlayer);
     const provisional = isLocal ? this.provisionalTelegraph(playerId, currentPlayer, nowMs) : null;
+    const tracked = this.provisionalByPlayerId.get(playerId) ?? null;
 
     if (!authoritative) {
       if (!isLocal) this.provisionalByPlayerId.delete(playerId);
@@ -86,7 +88,10 @@ export class AttackTelegraphTracker {
       this.provisionalByPlayerId.delete(playerId);
       return authoritative;
     }
-    if (provisional && this.shouldHoldProvisional(provisional, authoritative)) return provisional;
+    if (provisional && tracked && this.matchesAcknowledgedAttack(tracked, authoritative)) {
+      this.provisionalByPlayerId.set(playerId, { ...tracked, acknowledged: true });
+      return provisional;
+    }
     this.provisionalByPlayerId.delete(playerId);
     return authoritative;
   }
@@ -149,7 +154,8 @@ export class AttackTelegraphTracker {
       profileId,
       facing,
       startedAtMs: nowMs,
-      lastProgress: 0
+      lastProgress: 0,
+      acknowledged: false
     });
   }
 
@@ -180,8 +186,8 @@ export class AttackTelegraphTracker {
     };
   }
 
-  private shouldHoldProvisional(
-    provisional: AttackTelegraph,
+  private matchesAcknowledgedAttack(
+    provisional: ProvisionalAttack,
     authoritative: AuthoritativeAttack
   ): boolean {
     return authoritative.profileId === provisional.profileId &&
@@ -190,7 +196,7 @@ export class AttackTelegraphTracker {
   }
 
   private predictionInvalidated(provisional: ProvisionalAttack, action: MatchAction): boolean {
-    if (action.kind === null || action.charging) return false;
+    if (action.kind === null || action.charging) return provisional.acknowledged;
     if (action.kind === provisional.kind) return false;
     return true;
   }
