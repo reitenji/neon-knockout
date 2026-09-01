@@ -15,8 +15,9 @@ type AppProps = Readonly<{
   gameFactory?: NeonGameFactory;
 }>;
 
-function viewportIsPortrait(): boolean {
-  return window.innerHeight > window.innerWidth;
+function viewportNeedsRotation(): boolean {
+  const touchCapable = (window.matchMedia?.('(pointer: coarse)').matches ?? false) || navigator.maxTouchPoints > 0;
+  return touchCapable && window.innerWidth < 900 && window.innerHeight > window.innerWidth;
 }
 
 function subscribeToViewport(listener: () => void): () => void {
@@ -29,7 +30,7 @@ function subscribeToViewport(listener: () => void): () => void {
 }
 
 function usePortraitViewport(): boolean {
-  return useSyncExternalStore(subscribeToViewport, viewportIsPortrait, () => false);
+  return useSyncExternalStore(subscribeToViewport, viewportNeedsRotation, () => false);
 }
 
 export function App({ store, gameFactory }: AppProps) {

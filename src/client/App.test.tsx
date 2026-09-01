@@ -79,15 +79,21 @@ function setViewport(width: number, height: number): void {
   Object.defineProperty(window, 'innerHeight', { configurable: true, value: height });
 }
 
+function setTouchPoints(count: number): void {
+  Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: count });
+}
+
 describe('App', () => {
   afterEach(() => {
     cleanup();
     setViewport(1024, 768);
+    setTouchPoints(0);
     gameFactory.mockClear();
     vi.restoreAllMocks();
   });
 
   it('keeps the complete landing flow available on a portrait phone', () => {
+    setTouchPoints(5);
     setViewport(390, 844);
     render(<App store={storeFor(landing)} />);
 
@@ -98,6 +104,7 @@ describe('App', () => {
   });
 
   it('keeps the match mounted under a portrait rotate prompt, then clears it in landscape', () => {
+    setTouchPoints(5);
     setViewport(390, 844);
     const addListener = vi.spyOn(window, 'addEventListener');
     const removeListener = vi.spyOn(window, 'removeEventListener');
