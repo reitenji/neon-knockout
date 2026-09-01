@@ -128,6 +128,41 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
     }
   }
 
+  function deleteHighestEvent(events: Map<number, GameEvent>): void {
+    const highestEventId = Math.max(...events.keys());
+    if (Number.isFinite(highestEventId)) {
+      events.delete(highestEventId);
+    }
+  }
+
+  function admitAtCapacity(publication: MatchEventPublication, events: Map<number, GameEvent>): boolean {
+    if (activeEpoch !== null && publication.matchEpoch === activeEpoch && publication.event.eventId === nextEventId) {
+      const currentEpoch = activeEpoch;
+      const futureEpochs = [...pendingEvents.keys()].filter((epoch) => epoch > currentEpoch).sort((left, right) => right - left);
+      const futureEpoch = futureEpochs[0];
+      if (futureEpoch !== undefined) {
+        const futureEvents = pendingEvents.get(futureEpoch);
+        if (futureEvents !== undefined) {
+          deleteHighestEvent(futureEvents);
+          if (futureEvents.size === 0) {
+            pendingEvents.delete(futureEpoch);
+          }
+          return true;
+        }
+      }
+    }
+
+    if (events.size === 0) {
+      return false;
+    }
+    const highestEventId = Math.max(...events.keys());
+    if (publication.event.eventId < highestEventId) {
+      events.delete(highestEventId);
+      return true;
+    }
+    return false;
+  }
+
   function acceptStarted(publication: MatchStartedPublication): void {
     if (disposed || startedEpochs.has(publication.matchEpoch)) {
       return;
@@ -186,17 +221,14 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
       return;
     }
 
-    if (bufferedEventCount() >= MAX_BUFFERED_EVENTS) {
-      const highestEventId = Math.max(...events.keys());
-      if (Number.isFinite(highestEventId) && publication.event.eventId < highestEventId) {
-        events.delete(highestEventId);
-      } else {
-        return;
-      }
+    if (bufferedEventCount() >= MAX_BUFFERED_EVENTS && !admitAtCapacity(publication, events)) {
+      return;
     }
 
     events.set(publication.event.eventId, publication.event);
-    publishContiguousEvents(publication.matchEpoch);
+    if (activeEpoch === publication.matchEpoch) {
+      publishContiguousEvents(publication.matchEpoch);
+    }
     refreshGapTimer();
   }
 

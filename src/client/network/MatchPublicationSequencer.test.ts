@@ -162,6 +162,32 @@ describe('match publication sequencer', () => {
     expect(harness.publishedSnapshots.map((value) => value.tick)).toEqual([5]);
   });
 
+  it('does not publish a future-epoch event before its matching start', () => {
+    const harness = createHarness();
+
+    harness.sequencer.acceptStarted(started({ matchEpoch: 4, eventCursor: 0 }));
+    harness.sequencer.acceptEvent(eventPublication(5, event(1)));
+
+    expect(harness.publishedEvents).toHaveLength(0);
+
+    harness.sequencer.acceptStarted(started({ matchEpoch: 5, eventCursor: 0 }));
+
+    expect(harness.publishedEvents.map((value) => value.eventId)).toEqual([1]);
+  });
+
+  it('admits an active epoch gap event when another epoch fills the buffer cap', () => {
+    const harness = createHarness();
+
+    harness.sequencer.acceptStarted(started({ matchEpoch: 4, eventCursor: 0 }));
+    for (let eventId = 1_001; eventId <= 1_256; eventId += 1) {
+      harness.sequencer.acceptEvent(eventPublication(5, event(eventId)));
+    }
+
+    harness.sequencer.acceptEvent(eventPublication(4, event(1)));
+
+    expect(harness.publishedEvents.map((value) => value.eventId)).toEqual([1]);
+  });
+
   it('calls the transport-gap fallback after an unresolved two-second gap', () => {
     const harness = createHarness();
 
