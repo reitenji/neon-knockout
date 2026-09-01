@@ -15,7 +15,19 @@ function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
 }
 
 function snapshot(local = player()): MatchSnapshot {
-  return { tick: 1, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0, settings: DEFAULT_ROOM_SETTINGS, scores: { 'p-local': 0 }, pingMs: { 'p-local': null }, players: [local], pulses: [], winnerPlayerId: null, resultReason: null };
+  return {
+    tick: 1,
+    phase: 'REGULATION',
+    remainingMs: 100_000,
+    platformProgress: 0,
+    settings: DEFAULT_ROOM_SETTINGS,
+    scores: { 'p-local': 0 },
+    network: { 'p-local': { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' } },
+    players: [local],
+    pulses: [],
+    winnerPlayerId: null,
+    resultReason: null
+  };
 }
 
 class Bridge implements GamePresentationBridge {
@@ -23,6 +35,7 @@ class Bridge implements GamePresentationBridge {
   current: MatchSnapshot | null = snapshot();
   private nextInputSequence = 0;
   readonly sent: InputFrame[] = [];
+  readonly rollbackFrames: Array<number | null> = [];
   readonly snapshotListeners = new Set<(value: MatchSnapshot) => void>();
   readonly connectionListeners = new Set<(value: boolean) => void>();
   readonly eventListeners = new Set<(value: GameEvent) => void>();
@@ -33,6 +46,7 @@ class Bridge implements GamePresentationBridge {
   subscribeConnected = (listener: (value: boolean) => void): (() => void) => { this.connectionListeners.add(listener); listener(this.connected); return () => this.connectionListeners.delete(listener); };
   subscribeEvent = (listener: (value: GameEvent) => void): (() => void) => { this.eventListeners.add(listener); return () => this.eventListeners.delete(listener); };
   subscribeMuted = (listener: (value: boolean) => void): (() => void) => { this.mutedListeners.add(listener); return () => this.mutedListeners.delete(listener); };
+  publishRollbackFrames = (frames: number | null): void => { this.rollbackFrames.push(frames); };
   reserveInputSequence = (minimum: number): number => {
     const sequence = Math.max(this.nextInputSequence, minimum);
     this.nextInputSequence = sequence + 1;
@@ -119,6 +133,27 @@ describe('ArenaSession', () => {
     now += 17;
     session.step(16);
     expect(bridge.sent.at(-1)?.heavy).toBe(true);
+  });
+
+  it('publishes the local replay span as rollback frames on each authoritative snapshot', () => {
+    const bridge = new Bridge();
+    const source = controls();
+    let now = 0;
+    const session = new ArenaSession(bridge, 'p-local', new ArenaInput(source), () => now);
+    session.start();
+
+    source.movementHeld.right = true;
+    now += 16;
+    session.step(16);
+    expect(bridge.rollbackFrames.at(-1)).toBe(0);
+
+    bridge.current = snapshot(player({ lastProcessedInputSeq: -1 }));
+    for (const listener of bridge.snapshotListeners) listener(bridge.current);
+    expect(bridge.rollbackFrames.at(-1)).toBe(1);
+
+    bridge.current = snapshot(player({ lastProcessedInputSeq: 0 }));
+    for (const listener of bridge.snapshotListeners) listener(bridge.current);
+    expect(bridge.rollbackFrames.at(-1)).toBe(0);
   });
 
   it('subscribes once, disposes connection and snapshot listeners, and never sends after disposal', () => {

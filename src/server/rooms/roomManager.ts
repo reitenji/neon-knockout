@@ -6,6 +6,8 @@ import type {
   GameEvent,
   InputFrame,
   MatchSnapshot,
+  PlayerNetworkStatus,
+  PlayerNetworkTransport,
   PlayerAccent,
   PlayerStats,
   ResultPlayer,
@@ -23,7 +25,7 @@ import {
   snapshotMatch,
   stepMatch
 } from '../game/simulation.js';
-import { createMatchState, createPlayerStats, type MatchState } from '../game/state.js';
+import { createEmptyInput, createMatchState, createPlayerStats, type MatchState } from '../game/state.js';
 import { clearPulses, removePulsesOwnedBy } from '../game/projectiles.js';
 import { DomainError } from './domainError.js';
 
@@ -33,6 +35,8 @@ const SNAPSHOT_INTERVAL_MS = 1_000 / GAME.snapshotRate;
 const MAX_ELAPSED_MS = 250;
 const MAX_STEPS_PER_ADVANCE = 5;
 const TIMER_EPSILON_MS = 1e-7;
+const NETWORK_SAMPLE_LIMIT = 8;
+const MAX_TEST_COMBAT_STEPS = 240;
 
 export type RoomPublication =
   | { type: 'ROOM_STATE'; roomCode: string; state: RoomState }
@@ -74,9 +78,18 @@ type Room = {
   nextPlayerOrder: number;
   match: MatchState | null;
   resultPlayers: Map<string, ResultPlayerRecord> | null;
+  network: Map<string, PlayerNetworkRuntime>;
   inputs: Map<string, InputFrame>;
   accumulatorMs: number;
   snapshotAccumulatorMs: number;
+};
+
+type PlayerNetworkRuntime = {
+  currentMs: number | null;
+  medianMs: number | null;
+  jitterMs: number | null;
+  transport: PlayerNetworkTransport;
+  samples: number[];
 };
 
 type ConnectionSession = Readonly<{ roomCode: string; playerId: string }>;
@@ -88,8 +101,27 @@ type RoomManagerDependencies = Readonly<{
   bindTestHarness?: (harness: RoomManagerTestHarness) => void;
 }>;
 
+export type TestCombatPlayerStage = Readonly<{
+  playerId: string;
+  position: Vec2;
+  facing: Vec2;
+  overload: number;
+}>;
+
+export type TestCombatStep = Readonly<{
+  elapsedMs: number;
+  inputs?: readonly Readonly<{ playerId: string; input: InputFrame }>[];
+}>;
+
+export type TestCombatScript = Readonly<{
+  preservePulses?: boolean;
+  players: readonly TestCombatPlayerStage[];
+  steps: readonly TestCombatStep[];
+}>;
+
 export type RoomManagerTestHarness = Readonly<{
   placePlayer(roomCode: string, playerId: string, position: Vec2, facing: Vec2): void;
+  runCombatScript(roomCode: string, script: TestCombatScript): void;
 }>;
 
 export type DebugRoom = Readonly<{
@@ -109,6 +141,31 @@ function emptyStats(): PlayerStats {
   return { ...createPlayerStats() };
 }
 
+function createNetworkRuntime(transport: PlayerNetworkTransport = 'polling'): PlayerNetworkRuntime {
+  return { currentMs: null, medianMs: null, jitterMs: null, transport, samples: [] };
+}
+
+function roundMedian(values: readonly number[]): number | null {
+  if (values.length === 0) return null;
+  const sorted = [...values].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return Math.round(sorted.length % 2 === 0 ? (sorted[middle - 1] + sorted[middle]) / 2 : sorted[middle]);
+}
+
+function pushBounded(values: number[], next: number): void {
+  values.push(next);
+  if (values.length > NETWORK_SAMPLE_LIMIT) values.splice(0, values.length - NETWORK_SAMPLE_LIMIT);
+}
+
+function networkStatus(runtime: PlayerNetworkRuntime): PlayerNetworkStatus {
+  return {
+    currentMs: runtime.currentMs,
+    medianMs: runtime.medianMs,
+    jitterMs: runtime.jitterMs,
+    transport: runtime.transport
+  };
+}
+
 export class RoomManager {
   private readonly rooms = new Map<string, Room>();
   private readonly connections = new Map<string, ConnectionSession>();
@@ -116,7 +173,8 @@ export class RoomManager {
   constructor(private readonly deps: RoomManagerDependencies) {
     deps.bindTestHarness?.({
       placePlayer: (roomCode, playerId, position, facing) =>
-        this.placePlayerForTesting(roomCode, playerId, position, facing)
+        this.placePlayerForTesting(roomCode, playerId, position, facing),
+      runCombatScript: (roomCode, script) => this.runCombatScriptForTesting(roomCode, script)
     });
   }
 
@@ -156,6 +214,7 @@ export class RoomManager {
       nextPlayerOrder: 1,
       match: null,
       resultPlayers: null,
+      network: new Map([[playerId, createNetworkRuntime()]]),
       inputs: new Map(),
       accumulatorMs: 0,
       snapshotAccumulatorMs: 0
@@ -190,6 +249,7 @@ export class RoomManager {
       expiresAt: null,
       reconnectAnchor: null
     });
+    room.network.set(playerId, createNetworkRuntime());
     this.connections.set(connectionId, { roomCode: room.roomCode, playerId });
     this.publishRoom(room);
     return { playerId, roomCode: room.roomCode, resumeToken: bytesToHex(resumeToken), resumed: false };
@@ -262,8 +322,8 @@ export class RoomManager {
       removePulsesOwnedBy(room.match, player.playerId);
       delete room.match.players[player.playerId];
       delete room.match.scores[player.playerId];
-      delete room.match.pingMs[player.playerId];
     }
+    room.network.delete(player.playerId);
     if (leavingHost) this.reassignHost(room);
     if (room.players.size === 0) {
       if (room.match) clearPulses(room.match);
@@ -307,13 +367,21 @@ export class RoomManager {
       accent: candidate.accent,
       connected: candidate.connected
     })), this.deps.now(), room.settings);
+    for (const candidate of room.players.values()) {
+      const runtime = room.network.get(candidate.playerId) ?? createNetworkRuntime();
+      runtime.currentMs = null;
+      runtime.medianMs = null;
+      runtime.jitterMs = null;
+      runtime.samples = [];
+      room.network.set(candidate.playerId, runtime);
+    }
     room.resultPlayers = null;
     room.phase = 'COUNTDOWN';
     room.inputs.clear();
     room.accumulatorMs = 0;
     room.snapshotAccumulatorMs = 0;
     this.publishRoom(room);
-    this.deps.publish({ type: 'MATCH_STARTED', roomCode: room.roomCode, snapshot: snapshotMatch(room.match) });
+    this.deps.publish({ type: 'MATCH_STARTED', roomCode: room.roomCode, snapshot: this.snapshotForRoom(room) });
   }
 
   applyInput(connectionId: string, input: InputFrame): void {
@@ -334,8 +402,21 @@ export class RoomManager {
     const { room, player } = this.requireConnectedPlayer(connectionId);
     if (!room.match || (room.phase !== 'COUNTDOWN' && room.phase !== 'MATCH')) return;
     const normalized = Math.round(Math.max(0, Math.min(GAME.maxPingMs, pingMs)));
-    if (room.match.pingMs[player.playerId] === normalized) return;
-    room.match.pingMs[player.playerId] = normalized;
+    const runtime = room.network.get(player.playerId) ?? createNetworkRuntime();
+    runtime.currentMs = normalized;
+    pushBounded(runtime.samples, normalized);
+    runtime.medianMs = roundMedian(runtime.samples);
+    runtime.jitterMs = roundMedian(runtime.samples.slice(1).map((sample, index) =>
+      Math.abs(sample - runtime.samples[index]!)
+    )) ?? 0;
+    room.network.set(player.playerId, runtime);
+  }
+
+  setTransport(connectionId: string, transport: PlayerNetworkTransport): void {
+    const { room, player } = this.requireConnectedPlayer(connectionId);
+    const runtime = room.network.get(player.playerId) ?? createNetworkRuntime(transport);
+    runtime.transport = transport;
+    room.network.set(player.playerId, runtime);
   }
 
   isInActiveMatch(connectionId: string): boolean {
@@ -424,8 +505,8 @@ export class RoomManager {
           if (room.match) {
             delete room.match.players[player.playerId];
             delete room.match.scores[player.playerId];
-            delete room.match.pingMs[player.playerId];
           }
+          room.network.delete(player.playerId);
           if (expiredHost) this.reassignHost(room);
           membershipChanged = true;
         }
@@ -474,9 +555,6 @@ export class RoomManager {
       }
       if (Math.abs(room.accumulatorMs) < TIMER_EPSILON_MS) room.accumulatorMs = 0;
       if (Math.abs(room.snapshotAccumulatorMs) < TIMER_EPSILON_MS) room.snapshotAccumulatorMs = 0;
-      if (steps === MAX_STEPS_PER_ADVANCE && room.accumulatorMs + TIMER_EPSILON_MS >= SIMULATION_STEP_MS) {
-        room.accumulatorMs = 0;
-      }
     }
   }
 
@@ -569,7 +647,7 @@ export class RoomManager {
 
   private publishSnapshot(room: Room): void {
     if (!room.match) return;
-    this.deps.publish({ type: 'MATCH_SNAPSHOT', roomCode: room.roomCode, snapshot: snapshotMatch(room.match) });
+    this.deps.publish({ type: 'MATCH_SNAPSHOT', roomCode: room.roomCode, snapshot: this.snapshotForRoom(room) });
   }
 
   private enterResult(room: Room): void {
@@ -610,6 +688,102 @@ export class RoomManager {
       .filter((player) => !player.connected && player.expiresAt !== null && player.expiresAt > now)
       .map((player) => player.expiresAt! - now);
     return deadlines.length > 0 ? Math.max(...deadlines) : null;
+  }
+
+  private runCombatScriptForTesting(roomCode: string, script: TestCombatScript): void {
+    const room = this.requireRoom(roomCode);
+    if (!room.match || room.phase !== 'MATCH' ||
+      (room.match.phase !== 'REGULATION' && room.match.phase !== 'SUDDEN_DEATH')) {
+      throw new Error('Test combat script requires an active match.');
+    }
+    const matchPlayerIds = Object.keys(room.match.players).sort();
+    const stagedPlayerIds = script.players.map((player) => player.playerId).sort();
+    if (matchPlayerIds.length !== stagedPlayerIds.length ||
+      matchPlayerIds.some((playerId, index) => playerId !== stagedPlayerIds[index])) {
+      throw new Error('Test combat script must stage every active match player exactly once.');
+    }
+    if (script.steps.length === 0 || script.steps.length > MAX_TEST_COMBAT_STEPS) {
+      throw new RangeError(`Test combat script requires 1-${MAX_TEST_COMBAT_STEPS} steps.`);
+    }
+
+    const normalizedStages = script.players.map((stage) => {
+      const withinBounds = stage.position.x >= 0 && stage.position.x <= ARENA.width &&
+        stage.position.y >= 0 && stage.position.y <= ARENA.height;
+      const facingLength = Math.hypot(stage.facing.x, stage.facing.y);
+      if (!Number.isFinite(stage.position.x) || !Number.isFinite(stage.position.y) || !withinBounds ||
+        !Number.isFinite(facingLength) || facingLength === 0 || !Number.isFinite(stage.overload) ||
+        stage.overload < 0 || stage.overload > GAME.maxOverload) {
+        throw new RangeError('Test combat script requires bounded position, facing, and overload values.');
+      }
+      return {
+        ...stage,
+        facing: { x: stage.facing.x / facingLength, y: stage.facing.y / facingLength }
+      };
+    });
+
+    const inputSequences = new Map(matchPlayerIds.map((playerId) => [playerId, -1]));
+    for (const step of script.steps) {
+      if (!Number.isFinite(step.elapsedMs) || step.elapsedMs < 0 || step.elapsedMs > MAX_ELAPSED_MS) {
+        throw new RangeError(`Test combat step duration must be between 0 and ${MAX_ELAPSED_MS} ms.`);
+      }
+      const stepPlayerIds = new Set<string>();
+      for (const entry of step.inputs ?? []) {
+        if (!room.match.players[entry.playerId] || stepPlayerIds.has(entry.playerId)) {
+          throw new Error('Test combat step inputs require unique active player ids.');
+        }
+        const input = entry.input;
+        if (!Number.isSafeInteger(input.seq) || input.seq <= inputSequences.get(entry.playerId)! ||
+          !Number.isFinite(input.moveX) || !Number.isFinite(input.moveY) ||
+          !Number.isFinite(input.aimX) || !Number.isFinite(input.aimY) ||
+          typeof input.quick !== 'boolean' || typeof input.heavy !== 'boolean' || typeof input.dash !== 'boolean') {
+          throw new RangeError('Test combat step inputs must be finite, monotonic input frames.');
+        }
+        stepPlayerIds.add(entry.playerId);
+        inputSequences.set(entry.playerId, input.seq);
+      }
+    }
+
+    if (!script.preservePulses) clearPulses(room.match);
+    room.inputs.clear();
+    room.accumulatorMs = 0;
+    room.snapshotAccumulatorMs = 0;
+    for (const stage of normalizedStages) {
+      const player = room.match.players[stage.playerId];
+      player.position = { ...stage.position };
+      player.velocity = { x: 0, y: 0 };
+      player.facing = { ...stage.facing };
+      player.overload = stage.overload;
+      player.comboStep = 0;
+      player.attack = null;
+      player.chargeMs = 0;
+      player.charging = false;
+      player.perfectDodgeConsumed = false;
+      player.dashRemainingMs = 0;
+      player.dashInvulnerabilityRemainingMs = 0;
+      player.dashCooldownRemainingMs = 0;
+      player.dashDirection = { ...stage.facing };
+      player.hitstunRemainingMs = 0;
+      player.respawnRemainingMs = 0;
+      player.resetOverloadOnRespawn = false;
+      player.protectionRemainingMs = 0;
+      player.lastProcessedInputSeq = -1;
+      player.latestInput = { ...createEmptyInput(), aimX: stage.facing.x, aimY: stage.facing.y };
+      player.previousQuick = false;
+      player.previousHeavy = false;
+      player.previousDash = false;
+      player.bufferedQuick = false;
+      player.lastAttackerId = null;
+      player.lastAttackerAtMs = null;
+    }
+
+    for (const step of script.steps) {
+      for (const entry of step.inputs ?? []) room.inputs.set(entry.playerId, entry.input);
+      let events = [...stepMatch(room.match, room.inputs, step.elapsedMs)];
+      events = this.finalizeReconnectAnchors(room, events);
+      this.publishMatchEvents(room, events);
+      this.publishSnapshot(room);
+      if (events.some((event) => event.type === 'RESULT')) break;
+    }
   }
 
   private placePlayerForTesting(roomCode: string, playerId: string, position: Vec2, facing: Vec2): void {
@@ -770,5 +944,18 @@ export class RoomManager {
         }))
       }
     });
+  }
+
+  private snapshotForRoom(room: Room): MatchSnapshot {
+    const network = Object.fromEntries(
+      Object.keys(room.match!.players)
+        .sort()
+        .map((playerId) => [playerId, networkStatus(room.network.get(playerId) ?? createNetworkRuntime())])
+    );
+    const snapshot = snapshotMatch(room.match!, network);
+    return {
+      ...snapshot,
+      network
+    };
   }
 }

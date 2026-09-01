@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { GAME } from '../../shared/constants.js';
 import type { InputFrame, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import {
-  INTERPOLATION_DELAY_MS,
   REMOTE_SNAP_DISTANCE,
   PredictionBuffer,
   SnapshotTimeline,
@@ -35,7 +33,11 @@ function snapshot(tick: number, players: readonly MatchPlayer[]): MatchSnapshot 
     tick, phase: 'REGULATION', remainingMs: 100_000, platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
     scores: Object.fromEntries(players.map((value) => [value.playerId, 0])),
-    pingMs: Object.fromEntries(players.map((value) => [value.playerId, null])), players, pulses: [],
+    network: Object.fromEntries(players.map((value) => [
+      value.playerId,
+      { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' as const }
+    ])),
+    players, pulses: [],
     winnerPlayerId: null, resultReason: null
   };
 }
@@ -53,6 +55,7 @@ describe('PredictionBuffer', () => {
 
     const reconciled = prediction.reconcile(player({ lastProcessedInputSeq: 0 }), 16);
     expect(prediction.pendingSequences()).toEqual([1]);
+    expect(prediction.rollbackFrames()).toBe(1);
     expect(reconciled.position.x).toBeGreaterThan(100);
     expect(reconciled.facing).toEqual({ x: 0, y: -1 });
   });
@@ -292,17 +295,70 @@ describe('PredictionBuffer', () => {
 });
 
 describe('SnapshotTimeline', () => {
-  it('renders remote snapshots seventy milliseconds behind receipt time', () => {
+  it('settles at a 16 ms presentation buffer for regular 60 Hz LAN arrivals', () => {
     const timeline = new SnapshotTimeline();
-    const previous = snapshot(1, [player({ position: { x: 100, y: 100 } })]);
-    const current = snapshot(2, [player({ position: { x: 200, y: 100 } })]);
-    timeline.push(previous, 1_000);
-    timeline.push(current, 1_100);
-    const sampled = timeline.sample(1_000 + INTERPOLATION_DELAY_MS + 50)!;
-    expect(sampled.previous).toBe(previous);
-    expect(sampled.current).toBe(current);
-    expect(sampled.alpha).toBe(0.5);
-    expect(INTERPOLATION_DELAY_MS).toBe(70);
+    const first = snapshot(1, [player({ position: { x: 100, y: 100 } })]);
+    const previous = snapshot(2, [player({ position: { x: 200, y: 100 } })]);
+    const current = snapshot(3, [player({ position: { x: 300, y: 100 } })]);
+    timeline.push(first, 1_000);
+    timeline.push(previous, 1_016 + 2 / 3);
+    timeline.push(current, 1_033 + 1 / 3);
+
+    expect(timeline.delayMs()).toBe(16);
+    const sampled = timeline.sample(1_041)!;
+    expect(sampled).toMatchObject({ previous, current });
+    expect(sampled.alpha).toBeCloseTo(0.5, 10);
+  });
+
+  it('raises delay within the 16 to 40 ms bounds when arrivals become jittery', () => {
+    const timeline = new SnapshotTimeline();
+    const first = snapshot(1, [player()]);
+    const second = snapshot(2, [player()]);
+    const third = snapshot(3, [player()]);
+    timeline.push(first, 1_000);
+    timeline.push(second, 1_016 + 2 / 3);
+    timeline.push(third, 1_160);
+
+    expect(timeline.delayMs()).toBeGreaterThan(16);
+    expect(timeline.delayMs()).toBeLessThanOrEqual(40);
+  });
+
+  it('keeps delay bounded for every arrival interval', () => {
+    const timeline = new SnapshotTimeline();
+    const arrivals = [1_000, 1_016 + 2 / 3, 1_016 + 2 / 3, 1_160, 1_163, 1_500, 1_516 + 2 / 3];
+
+    for (const [index, receivedAtMs] of arrivals.entries()) {
+      timeline.push(snapshot(index, [player()]), receivedAtMs);
+      expect(timeline.delayMs()).toBeGreaterThanOrEqual(16);
+      expect(timeline.delayMs()).toBeLessThanOrEqual(40);
+    }
+  });
+
+  it('never regresses its render target when a jittery arrival increases delay', () => {
+    const timeline = new SnapshotTimeline();
+    timeline.push(snapshot(1, [player()]), 1_000);
+    timeline.push(snapshot(2, [player()]), 1_016 + 2 / 3);
+    timeline.sample(1_100);
+    const before = timeline.targetTimeMs();
+
+    timeline.push(snapshot(3, [player()]), 1_200);
+    timeline.sample(1_100);
+
+    expect(timeline.targetTimeMs()).toBeGreaterThanOrEqual(before!);
+  });
+
+  it('clears samples, jitter, delay, and render-target state', () => {
+    const timeline = new SnapshotTimeline();
+    timeline.push(snapshot(1, [player()]), 1_000);
+    timeline.push(snapshot(2, [player()]), 1_016 + 2 / 3);
+    timeline.push(snapshot(3, [player()]), 1_200);
+    timeline.sample(1_250);
+
+    timeline.clear();
+
+    expect(timeline.sample(1_250)).toBeNull();
+    expect(timeline.delayMs()).toBe(16);
+    expect(timeline.targetTimeMs()).toBeNull();
   });
 
   it('interpolates the outer remote position but snaps above the named threshold', () => {

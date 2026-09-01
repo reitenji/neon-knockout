@@ -4,8 +4,8 @@ import type { FighterView } from './FighterView.js';
 import type { ImpactFxAdapter } from './ImpactFx.js';
 
 export class PhaserImpactAdapter implements ImpactFxAdapter {
-  private static readonly KNOCKOUT_POOL_SIZE = 2;
-  private static readonly KNOCKOUT_SHARD_COUNT = 12;
+  private static readonly KNOCKOUT_POOL_SIZE = 8;
+  private static readonly KNOCKOUT_SHARD_COUNT = 6;
   private readonly objects = new Set<Phaser.GameObjects.GameObject>();
   private readonly tweens = new Set<Phaser.Tweens.Tween>();
   private readonly touchedContent = new Set<Phaser.GameObjects.Container>();
@@ -14,13 +14,17 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
   private disposed = false;
   private nextKnockoutSlotIndex = 0;
   private activeKnockoutSlot: KnockoutSlot | null = null;
-  private cameraTween: Phaser.Tweens.Tween | null = null;
-  private lastCameraNudgeAtMs: number | null = null;
+  private knockoutCameraTween: Phaser.Tweens.Tween | null = null;
+  private lastKnockoutCameraTick: number | null = null;
 
   constructor(
     private readonly scene: Phaser.Scene,
     private readonly viewById: (playerId: string) => FighterView | null
-  ) {}
+  ) {
+    for (let index = 0; index < PhaserImpactAdapter.KNOCKOUT_POOL_SIZE; index += 1) {
+      this.createKnockoutSlot(index);
+    }
+  }
 
   flashTarget(playerId: string, strength: number): void {
     const content = this.content(playerId);
@@ -168,11 +172,22 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
   }
 
   nudgeCamera(direction: Vec2, strength: number): void {
-    const nowMs = this.scene.time?.now ?? 0;
-    if (this.cameraTween && this.lastCameraNudgeAtMs === nowMs) return;
     const camera = this.scene.cameras.main;
-    this.lastCameraNudgeAtMs = nowMs;
-    this.cameraTween = this.replaceTween(camera, {
+    this.addTween({
+      targets: camera,
+      scrollX: camera.scrollX + direction.x * strength * 8,
+      scrollY: camera.scrollY + direction.y * strength * 8,
+      duration: 42,
+      yoyo: true,
+      ease: 'Sine.Out'
+    });
+  }
+
+  nudgeKnockoutCamera(tick: number, direction: Vec2, strength: number): void {
+    if (this.lastKnockoutCameraTick === tick) return;
+    this.lastKnockoutCameraTick = tick;
+    const camera = this.scene.cameras.main;
+    this.knockoutCameraTween = this.replaceTween(camera, {
       targets: camera,
       scrollX: camera.scrollX + direction.x * strength * 8,
       scrollY: camera.scrollY + direction.y * strength * 8,
@@ -180,7 +195,7 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
       yoyo: true,
       ease: 'Sine.Out'
     }, () => {
-      this.cameraTween = null;
+      this.knockoutCameraTween = null;
     });
   }
 
@@ -197,7 +212,7 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
       });
     }
     this.animateKnockoutShards(slot, position, 92 + strength * 24);
-    slot.label.setText('RING OUT').setPosition(position.x, position.y - 28).setScale(1).setAlpha(1);
+    slot.label.setPosition(position.x, position.y - 28).setScale(1).setAlpha(1);
     this.tweenPooledObject(slot.label, {
       y: position.y - 62,
       alpha: 0,
@@ -222,11 +237,12 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
   }
 
   pulseScore(playerId: string, score: number): void {
+    void score;
     const slot = this.activeKnockoutSlot ?? this.beginKnockoutSlot();
     const view = this.viewById(playerId);
     const x = view?.outer.x ?? 640;
     const y = (view?.outer.y ?? 360) - slot.index * 22;
-    slot.score.setText(`+1  ${score}`).setPosition(x, y - 82).setScale(0.72).setAlpha(1);
+    slot.score.setPosition(x, y - 82).setScale(0.72).setAlpha(1);
     this.tweenPooledObject(slot.score, {
       y: y - 118,
       scaleX: 1.25,
@@ -267,7 +283,8 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
     for (const tween of this.tweens) tween.remove();
     this.tweens.clear();
     this.objectTweens.clear();
-    this.cameraTween = null;
+    this.knockoutCameraTween = null;
+    this.lastKnockoutCameraTick = null;
     this.activeKnockoutSlot = null;
     for (const object of this.objects) object.destroy();
     this.objects.clear();
@@ -340,9 +357,7 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
   }
 
   private beginKnockoutSlot(): KnockoutSlot {
-    const slot = this.knockoutSlots.length < PhaserImpactAdapter.KNOCKOUT_POOL_SIZE
-      ? this.createKnockoutSlot(this.knockoutSlots.length)
-      : this.knockoutSlots[this.nextKnockoutSlotIndex % this.knockoutSlots.length]!;
+    const slot = this.knockoutSlots[this.nextKnockoutSlotIndex % this.knockoutSlots.length]!;
     this.nextKnockoutSlotIndex = (this.nextKnockoutSlotIndex + 1) % PhaserImpactAdapter.KNOCKOUT_POOL_SIZE;
     this.activeKnockoutSlot = slot;
     return slot;
@@ -364,25 +379,25 @@ export class PhaserImpactAdapter implements ImpactFxAdapter {
       )
     );
     const label = this.trackPooledObject(
-      this.scene.add.text(0, 0, '', {
+      this.scene.add.text(0, 0, 'RING OUT', {
         color: '#FFF0D8', fontFamily: 'Inter, system-ui, sans-serif', fontSize: '19px',
         fontStyle: '900', stroke: '#071018', strokeThickness: 6
-      }).setOrigin(0.5).setDepth(36).setAlpha(0)
+      }).setOrigin(0.5).setFixedSize(150, 36).setDepth(36).setAlpha(0)
     );
     const streak = this.trackPooledObject(
       this.scene.add.rectangle(0, 0, 110, 8, 0xff8a5b, 0).setDepth(29)
     );
     const score = this.trackPooledObject(
-      this.scene.add.text(0, 0, '', {
+      this.scene.add.text(0, 0, '+1', {
         color: '#F6D743', fontFamily: 'Inter, system-ui, sans-serif', fontSize: '22px',
         fontStyle: '900', stroke: '#071018', strokeThickness: 6
-      }).setOrigin(0.5).setDepth(38).setScale(0.72).setAlpha(0)
+      }).setOrigin(0.5).setFixedSize(96, 38).setDepth(38).setScale(0.72).setAlpha(0)
     );
     const announcer = this.trackPooledObject(
-      this.scene.add.text(640, 112, '', {
+      this.scene.add.text(640, 112, 'PLAYER 8  >  PLAYER 7', {
         color: '#F4F7FB', fontFamily: 'Inter, system-ui, sans-serif', fontSize: '25px',
         fontStyle: '900', stroke: '#071018', strokeThickness: 8
-      }).setOrigin(0.5).setDepth(40).setScale(0.86).setAlpha(0)
+      }).setOrigin(0.5).setFixedSize(480, 50).setDepth(40).setScale(0.86).setAlpha(0)
     );
     const slot = { index, rings, shards, label, streak, score, announcer };
     this.knockoutSlots.push(slot);

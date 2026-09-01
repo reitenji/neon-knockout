@@ -174,6 +174,22 @@ describe('shared-shape melee resolution', () => {
     expect(missState.players.p2.overload).toBe(0);
   });
 
+  it('reports melee hit contact on the defender boundary instead of the center', () => {
+    const state = createState();
+    const runtime = attack(state, 'p1', 1, 'QUICK_1');
+
+    expect(resolveMeleeInteractions(state, [
+      shape('p1', runtime, { x: 600, y: 360 }, { x: 640, y: 360 })
+    ])).toEqual([
+      expect.objectContaining({
+        type: 'HIT',
+        attackerId: 'p1',
+        targetId: 'p2',
+        impactPosition: { x: 626, y: 360 }
+      })
+    ]);
+  });
+
   it('resolves one target once per attack and every overlapping target in stable player-id order', () => {
     const state = createState();
     state.players.p3.position = { x: 650, y: 360 };
@@ -465,6 +481,24 @@ describe('shared-shape melee resolution', () => {
     expect(pulse.position).toEqual({ x: 780, y: 360 });
     expect(resolveSurvivingContacts(state, [])).toEqual([
       expect.objectContaining({ type: 'HIT', targetId: 'p2', attack: 'NEON_PULSE' })
+    ]);
+  });
+
+  it('reports neon pulse hit contact on the defender boundary instead of the center', () => {
+    const state = createState();
+    const origin = attack(state, 'p1', 1, 'HEAVY');
+    const pulse = spawnNeonPulse(state, state.players.p1, origin)!.pulse;
+    pulse.previousPosition = { x: 600, y: 360 };
+    pulse.position = { x: 800, y: 360 };
+    state.players.p2.position = { x: 680, y: 372 };
+
+    expect(resolveSurvivingContacts(state, [])).toEqual([
+      expect.objectContaining({
+        type: 'HIT',
+        targetId: 'p2',
+        attack: 'NEON_PULSE',
+        impactPosition: { x: 680, y: 348 }
+      })
     ]);
   });
 });

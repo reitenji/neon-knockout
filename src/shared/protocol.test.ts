@@ -176,7 +176,7 @@ describe('shared input boundary protocol', () => {
       platformProgress: 0,
       settings: DEFAULT_ROOM_SETTINGS,
       scores: { p1: 1 },
-      pingMs: { p1: null },
+      network: { p1: { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' } },
       players: [
         {
           playerId: 'p1', name: 'Ada', chassis: 'RIFT', accent: 0,
@@ -326,7 +326,7 @@ describe('shared input boundary protocol', () => {
 
   it('exports the approved cadence, protection, palette, and arena geometry', () => {
     expect(GAME).toMatchObject({
-      tickRate: 60, snapshotRate: 30, regulationMs: 120_000, targetScore: 5, minPlayers: 2,
+      tickRate: 60, snapshotRate: 60, regulationMs: 120_000, targetScore: 5, minPlayers: 2,
       maxInputFramesPerSecond: 60, inputRateLimitPerSecond: 90,
       knockoutToControlMs: 600, respawnProtectionMs: 650
     });

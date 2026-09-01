@@ -20,7 +20,7 @@ export const ACCENTS = Object.freeze([
 
 export const GAME = Object.freeze({
   tickRate: 60,
-  snapshotRate: 30,
+  snapshotRate: 60,
   countdownMs: 3_000,
   regulationMs: 120_000,
   contractionWarningRemainingMs: 78_000,

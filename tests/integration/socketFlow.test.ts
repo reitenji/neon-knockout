@@ -14,6 +14,7 @@ type AckEvent = Exclude<keyof ClientToServerEvents, 'match:input'>;
 const ACK_TIMEOUT_MS = 1_500;
 const EVENT_TIMEOUT_MS = 5_000;
 const STEP_MS = 1_000 / GAME.tickRate;
+const PARTIAL_HEAVY_CHARGE_MS = Math.floor(GAME.heavyMaxChargeMs / 2);
 
 type StartedMatch = Readonly<{
   roomCode: string;
@@ -311,18 +312,23 @@ describe('Socket.IO FFA game server flow', () => {
   it('promptly measures RTT after a match starts and ignores forged client latency events', async () => {
     const match = await startMatch();
     await waitFor(
-      () => snapshot(match.roomCode).pingMs[match.host.playerId] !== null,
+      () => snapshot(match.roomCode).network[match.host.playerId]?.medianMs !== null,
       'first server-issued RTT sample after match start',
       750
     );
     const measured = snapshot(match.roomCode);
-    expect(measured.pingMs[match.host.playerId]).toEqual(expect.any(Number));
-    expect(measured.pingMs[match.host.playerId]).toBeLessThan(GAME.maxPingMs);
+    expect(measured.network[match.host.playerId]).toMatchObject({
+      currentMs: expect.any(Number),
+      medianMs: expect.any(Number),
+      jitterMs: expect.any(Number),
+      transport: 'websocket'
+    });
+    expect(measured.network[match.host.playerId]?.medianMs).toBeLessThan(GAME.maxPingMs);
 
     const emit = match.hostClient.emit.bind(match.hostClient) as (event: string, payload: unknown) => void;
     emit('network:latency', { pingMs: GAME.maxPingMs });
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(snapshot(match.roomCode).pingMs[match.host.playerId]).not.toBe(GAME.maxPingMs);
+    expect(snapshot(match.roomCode).network[match.host.playerId]?.currentMs).not.toBe(GAME.maxPingMs);
   });
 
   it('leaves the Socket.IO room, clears the connection mapping, invalidates resume, and reuses the same socket', async () => {
@@ -502,7 +508,7 @@ describe('Socket.IO FFA game server flow', () => {
     );
     marker = eventMarker(match.roomCode);
     await charge(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 0, y: 1 } }]);
-    advanceBy(match.roomCode, GAME.heavyEnterChargeMs + 40);
+    advanceBy(match.roomCode, PARTIAL_HEAVY_CHARGE_MS);
     await submitFrames(match, [
       { client: match.hostClient, playerId: match.host.playerId, overrides: { aimX: 0, aimY: 1 } },
       { client: match.guestClient, playerId: match.guest.playerId, overrides: { aimX: 0, aimY: 1, quick: true } }
@@ -528,7 +534,7 @@ describe('Socket.IO FFA game server flow', () => {
       { client: match.guestClient, playerId: match.guest.playerId, aim: { x: 0, y: -1 } }
     ] as const;
     await charge(match, heavyEntries);
-    advanceBy(match.roomCode, GAME.heavyEnterChargeMs + 40);
+    advanceBy(match.roomCode, PARTIAL_HEAVY_CHARGE_MS);
     await releaseHeavy(match, heavyEntries);
     const heavyClash = advanceToEvent(match, marker, 'CLASH', 400);
     expect(heavyClash.strength).toBe('HEAVY');
@@ -588,7 +594,7 @@ describe('Socket.IO FFA game server flow', () => {
     await prepare(match);
     marker = eventMarker(match.roomCode);
     await charge(match, [{ client: match.guestClient, playerId: match.guest.playerId, aim: { x: -1, y: 0 } }]);
-    advanceBy(match.roomCode, GAME.heavyEnterChargeMs + 40);
+    advanceBy(match.roomCode, PARTIAL_HEAVY_CHARGE_MS);
     expect(player(snapshot(match.roomCode), match.guest.playerId).action.charging).toBe(true);
     await quick(match, [{ client: match.hostClient, playerId: match.host.playerId, aim: { x: 1, y: 0 } }]);
     advanceToEvent(match, marker, 'HIT', 400, (event) => event.targetId === match.guest.playerId);

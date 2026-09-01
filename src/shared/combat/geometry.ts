@@ -33,6 +33,15 @@ function pointToSegmentDistanceSquared(point: Vec2, from: Vec2, to: Vec2): numbe
   return distanceSquared(point, { x: from.x + x * progress, y: from.y + y * progress });
 }
 
+function closestPointOnSegment(point: Vec2, from: Vec2, to: Vec2): Vec2 {
+  const x = to.x - from.x;
+  const y = to.y - from.y;
+  const lengthSquared = x * x + y * y;
+  if (lengthSquared === 0) return from;
+  const progress = Math.max(0, Math.min(1, ((point.x - from.x) * x + (point.y - from.y) * y) / lengthSquared));
+  return { x: from.x + x * progress, y: from.y + y * progress };
+}
+
 function orientation(from: Vec2, to: Vec2, point: Vec2): number {
   return (to.x - from.x) * (point.y - from.y) - (to.y - from.y) * (point.x - from.x);
 }
@@ -74,4 +83,41 @@ export function capsuleIntersectsCircle(capsule: SweptCapsule, circle: HurtCircl
 export function capsulesIntersect(left: SweptCapsule, right: SweptCapsule): boolean {
   const radius = left.radius + right.radius;
   return segmentDistanceSquared(left.from, left.to, right.from, right.to) <= radius * radius;
+}
+
+export function nearestCircleBoundaryPointToCapsule(capsule: SweptCapsule, circle: HurtCircle): Vec2 {
+  const nearestAxisPoint = closestPointOnSegment(circle.center, capsule.from, capsule.to);
+  let normalX = nearestAxisPoint.x - circle.center.x;
+  let normalY = nearestAxisPoint.y - circle.center.y;
+
+  if (distanceSquared(nearestAxisPoint, circle.center) === 0) {
+    const axisX = capsule.to.x - capsule.from.x;
+    const axisY = capsule.to.y - capsule.from.y;
+    if (axisX === 0 && axisY === 0) {
+      normalX = 1;
+      normalY = 0;
+    } else {
+      const magnitude = Math.hypot(axisX, axisY);
+      const directionX = axisX / magnitude;
+      const directionY = axisY / magnitude;
+      const backward = {
+        x: circle.center.x - directionX * circle.radius,
+        y: circle.center.y - directionY * circle.radius
+      };
+      const forward = {
+        x: circle.center.x + directionX * circle.radius,
+        y: circle.center.y + directionY * circle.radius
+      };
+      const backwardDistance = pointToSegmentDistanceSquared(backward, capsule.from, capsule.to);
+      const forwardDistance = pointToSegmentDistanceSquared(forward, capsule.from, capsule.to);
+      if (backwardDistance <= forwardDistance) return backward;
+      return forward;
+    }
+  }
+
+  const magnitude = Math.hypot(normalX, normalY);
+  return {
+    x: circle.center.x + (normalX / magnitude) * circle.radius,
+    y: circle.center.y + (normalY / magnitude) * circle.radius
+  };
 }

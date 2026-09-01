@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GameEvent, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
-import type { PlayerPresentation } from '../prediction.js';
+import { SnapshotTimeline, type PlayerPresentation } from '../prediction.js';
 import type { ArenaInputSource } from './ArenaInput.js';
 
 const probes = vi.hoisted(() => ({
@@ -158,7 +158,9 @@ function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
   return {
     tick: 10, phase: 'REGULATION', remainingMs: 82_000, platformProgress: 0.35,
     settings: DEFAULT_ROOM_SETTINGS,
-    scores: { p1: 0 }, pingMs: { p1: null }, players: [player()], pulses: [], winnerPlayerId: null, resultReason: null,
+    scores: { p1: 0 },
+    network: { p1: { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' } },
+    players: [player()], pulses: [], winnerPlayerId: null, resultReason: null,
     ...overrides
   };
 }
@@ -237,9 +239,12 @@ describe('ArenaScene live presentation integration', () => {
 
   it('wires live arena state, canonical feedback/audio, persisted mute, reduced motion, and idempotent teardown', () => {
     const bridge = new Bridge();
-    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), true);
+    const scopedBridge = scopeBridgeToPlayer(bridge, 'p1');
+    const scene = new ArenaScene(scopedBridge, true);
     scene.create();
     scene.update();
+
+    expect(scopedBridge.getPresentationDelayMs?.()).toBe(new SnapshotTimeline().delayMs());
 
     expect(probes.arenaApply).toHaveBeenCalledWith(
       {
@@ -384,7 +389,7 @@ describe('ArenaScene live presentation integration', () => {
         facing: { x: 0, y: -1 },
         actionStart: null
       });
-    const nowSpy = vi.spyOn(performance, 'now')
+    vi.spyOn(performance, 'now')
       .mockReturnValueOnce(0)
       .mockReturnValueOnce(80);
     const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
@@ -431,7 +436,7 @@ describe('ArenaScene live presentation integration', () => {
         facing: { x: 0, y: -1 },
         actionStart: null
       });
-    const nowSpy = vi.spyOn(performance, 'now')
+    vi.spyOn(performance, 'now')
       .mockReturnValueOnce(0)
       .mockReturnValueOnce(150);
     const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);

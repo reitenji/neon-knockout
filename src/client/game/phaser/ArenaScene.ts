@@ -11,7 +11,6 @@ import { ArenaSession } from './ArenaSession.js';
 import { createArenaView, type ArenaView } from './ArenaView.js';
 import {
   createFighterView,
-  type AttackTelegraph,
   type ChargeIndicatorState,
   type FighterView
 } from './FighterView.js';
@@ -27,19 +26,6 @@ const INPUT_STEP_MS = 1_000 / 60;
 
 function playerById(snapshot: MatchSnapshot, playerId: string): MatchPlayer | null {
   return snapshot.players.find((player) => player.playerId === playerId) ?? null;
-}
-
-function attackTelegraph(previous: MatchPlayer, current: MatchPlayer): AttackTelegraph | null {
-  const action = current.action;
-  if (action.profileId === null || action.attackId === null) return null;
-  const continuesAttack = previous.action.attackId === action.attackId && previous.action.profileId === action.profileId;
-  return {
-    profileId: action.profileId,
-    facing: action.lockedFacing ?? current.facing,
-    previousProgress: continuesAttack ? previous.action.activeProgress : 0,
-    currentProgress: action.activeProgress,
-    active: action.phase === 'ACTIVE'
-  };
 }
 
 function chargeIndicator(
@@ -157,6 +143,7 @@ export class ArenaScene extends Phaser.Scene {
   private renderPresentation(nowMs: number): void {
     const frame = this.timeline.sample(nowMs);
     if (!frame) return;
+    this.bridge.publishPresentationDelay?.(this.timeline.delayMs());
     this.arenaView?.apply({
       phase: frame.current.phase,
       remainingMs: frame.current.remainingMs,

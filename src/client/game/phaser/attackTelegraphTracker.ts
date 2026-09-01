@@ -88,7 +88,7 @@ export class AttackTelegraphTracker {
       this.provisionalByPlayerId.delete(playerId);
       return authoritative;
     }
-    if (provisional && tracked && this.matchesAcknowledgedAttack(tracked, authoritative)) {
+    if (tracked && this.matchesAcknowledgedAttack(tracked, authoritative)) {
       this.provisionalByPlayerId.set(playerId, { ...tracked, acknowledged: true });
       return provisional;
     }

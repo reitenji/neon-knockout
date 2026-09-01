@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ACCENTS, GAME } from '../../shared/constants.js';
-import type { MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
+import type { MatchPhase, MatchPlayer, MatchSnapshot, PlayerNetworkStatus } from '../../shared/model.js';
 import { matchTimingFor } from '../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../game/GamePresentationBridge.js';
 
@@ -77,6 +77,24 @@ function useConnection(bridge: GamePresentationBridge): boolean {
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
 
+function usePresentationDelay(bridge: GamePresentationBridge): number | null {
+  const subscribe = useCallback(
+    (notify: () => void) => bridge.subscribePresentationDelay?.(() => notify()) ?? (() => undefined),
+    [bridge]
+  );
+  const getSnapshot = useCallback(() => bridge.getPresentationDelayMs?.() ?? null, [bridge]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
+function useRollbackFrames(bridge: GamePresentationBridge): number | null {
+  const subscribe = useCallback(
+    (notify: () => void) => bridge.subscribeRollbackFrames?.(() => notify()) ?? (() => undefined),
+    [bridge]
+  );
+  const getSnapshot = useCallback(() => bridge.getRollbackFrames?.() ?? null, [bridge]);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+}
+
 function PhaseAnnouncement({
   announcement,
   variant = 'center'
@@ -117,21 +135,45 @@ function SuddenDeathAnnouncement() {
   ) : null;
 }
 
-function pingPresentation(pingMs: number | null | undefined): Readonly<{
-  label: string;
+function pingPresentation(network: PlayerNetworkStatus | undefined): Readonly<{
+  pingLabel: string;
+  rttLabel: string;
   accessibleValue: string;
   tier: 'pending' | 'good' | 'medium' | 'high';
 }> {
-  if (pingMs === null || pingMs === undefined) {
-    return { label: '—', accessibleValue: 'ölçülüyor', tier: 'pending' };
-  }
-
-  const roundedPing = Math.max(0, Math.round(pingMs));
-  const tier = roundedPing <= 60 ? 'good' : roundedPing <= 120 ? 'medium' : 'high';
-  return { label: `${roundedPing} ms`, accessibleValue: `${roundedPing} ms`, tier };
+  const current = network?.currentMs === null || network?.currentMs === undefined
+    ? null
+    : Math.max(0, Math.round(network.currentMs));
+  const median = network?.medianMs === null || network?.medianMs === undefined
+    ? null
+    : Math.max(0, Math.round(network.medianMs));
+  const displayedLatency = current === null ? median : median === null ? current : Math.max(current, median);
+  const tier = displayedLatency === null
+    ? 'pending'
+    : displayedLatency <= 20
+      ? 'good'
+      : displayedLatency <= 80
+        ? 'medium'
+        : 'high';
+  return {
+    pingLabel: current === null ? 'Ping —' : `Ping ${current} ms`,
+    rttLabel: median === null ? 'RTT —' : `RTT ${median} ms`,
+    accessibleValue: `Ping ${current === null ? 'ölçülüyor' : `${current} ms`}, RTT ${median === null ? 'ölçülüyor' : `${median} ms`}`,
+    tier
+  };
 }
 
-function PlayerRoster({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSnapshot; localPlayerId: string }>) {
+function PlayerRoster({
+  snapshot,
+  localPlayerId,
+  presentationDelayFrames,
+  rollbackFrames
+}: Readonly<{
+  snapshot: MatchSnapshot;
+  localPlayerId: string;
+  presentationDelayFrames: number | null;
+  rollbackFrames: number | null;
+}>) {
   const ranking = [...snapshot.players].sort((left, right) => {
     const scoreDifference = (snapshot.scores[right.playerId] ?? 0) - (snapshot.scores[left.playerId] ?? 0);
     if (scoreDifference !== 0) return scoreDifference;
@@ -143,26 +185,33 @@ function PlayerRoster({ snapshot, localPlayerId }: Readonly<{ snapshot: MatchSna
       <div className="match-hud__roster-heading">
         <span>OYUNCULAR</span>
         <span>KO</span>
-        <span>PING</span>
+        <span>PING/RTT</span>
       </div>
       <ol className="match-hud__ranking" aria-label="Oyuncu sıralaması">
         {ranking.map((player) => {
           const local = player.playerId === localPlayerId;
           const score = snapshot.scores[player.playerId] ?? 0;
-          const ping = pingPresentation(snapshot.pingMs[player.playerId]);
+          const ping = pingPresentation(snapshot.network[player.playerId]);
+          const delayValue = presentationDelayFrames === null ? null : `${presentationDelayFrames.toFixed(1)}f`;
+          const rollbackValue = rollbackFrames === null ? null : `${Math.max(0, Math.round(rollbackFrames))}f`;
           const accentStyle = { '--player-accent': ACCENTS[player.accent] } as CSSProperties;
           return (
             <li key={player.playerId} className={local ? 'is-local' : undefined} style={accentStyle}>
               <span className="match-hud__swatch" aria-hidden="true" />
-              <span className="match-hud__name">{player.name}{local ? <small>Sen</small> : null}</span>
+              <span className="match-hud__name">
+                <span>{player.name}{local ? <small>Sen</small> : null}</span>
+              </span>
               <strong className="match-hud__score" aria-label={`${player.name} skoru: ${score} knockout`}>
                 {score}
               </strong>
               <span
-                className={`match-hud__ping is-${ping.tier}`}
-                aria-label={`${player.name} pingi: ${ping.accessibleValue}`}
+                className={`match-hud__telemetry is-${local ? 'local' : ping.tier}`}
+                aria-label={local
+                  ? `${player.name} yerel telemetrisi: Delay ${delayValue ?? 'ölçülüyor'}, RB ${rollbackValue ?? 'ölçülüyor'}`
+                  : `${player.name} ağ telemetrisi: ${ping.accessibleValue}`}
               >
-                {ping.label}
+                <span>{local ? `Delay ${delayValue ?? '—'}` : ping.pingLabel}</span>
+                <span>{local ? `RB ${rollbackValue ?? '—'}` : ping.rttLabel}</span>
               </span>
             </li>
           );
@@ -186,6 +235,11 @@ function ControlsHint() {
 export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
   const snapshot = useMatchSnapshot(bridge);
   const connected = useConnection(bridge);
+  const presentationDelayMs = usePresentationDelay(bridge);
+  const rollbackFrames = useRollbackFrames(bridge);
+  const presentationDelayFrames = presentationDelayMs === null
+    ? null
+    : presentationDelayMs * GAME.tickRate / 1_000;
   const localPlayer = snapshot?.players.find((player) => player.playerId === localPlayerId) ?? null;
   const announcement = snapshot ? phaseAnnouncement(snapshot) : null;
   const overload = localPlayer ? Math.round(clamp(localPlayer.overload, 0, GAME.maxOverload)) : 0;
@@ -210,6 +264,11 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
             <strong className="match-hud__rule" aria-label="Kazanma hedefi">
               İlk {snapshot.settings.knockoutTarget} knockout
             </strong>
+            {presentationDelayMs !== null && presentationDelayFrames !== null ? (
+              <small className="match-hud__presentation" role="status" aria-label="Sunum arabelleği">
+                Delay {Math.round(presentationDelayMs)} ms · {presentationDelayFrames.toFixed(1)}f · Rollback {rollbackFrames ?? 0}f
+              </small>
+            ) : null}
             {contractionWarning ? (
               <strong className="match-hud__contraction" role="status" aria-label="Arena daralma uyarısı">
                 ARENA DARALIYOR
@@ -217,7 +276,12 @@ export function MatchHud({ bridge, localPlayerId }: MatchHudProps) {
             ) : null}
           </header>
 
-          <PlayerRoster snapshot={snapshot} localPlayerId={localPlayerId} />
+          <PlayerRoster
+            snapshot={snapshot}
+            localPlayerId={localPlayerId}
+            presentationDelayFrames={presentationDelayFrames}
+            rollbackFrames={rollbackFrames}
+          />
 
           {localPlayer ? (
             <section className="match-hud__combat" aria-label="Yerel dövüş durumu">

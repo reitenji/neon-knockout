@@ -89,6 +89,7 @@ export class ArenaSession {
     const localPlayer = playerById(snapshot, this.localPlayerId);
     if (!localPlayer) {
       this.prediction.reset();
+      this.bridge.publishRollbackFrames?.(null);
       this.localPresentation = null;
       return;
     }
@@ -98,12 +99,14 @@ export class ArenaSession {
       1_000 / 60,
       snapshot.platformProgress
     );
+    this.bridge.publishRollbackFrames?.(this.prediction.rollbackFrames());
   }
 
   private releaseHeldInput(requireRelease: boolean): void {
     this.input.clearHeld(requireRelease);
     const localPlayer = this.latestSnapshot ? playerById(this.latestSnapshot, this.localPlayerId) : null;
     this.prediction.reset(localPlayer ?? undefined);
+    this.bridge.publishRollbackFrames?.(localPlayer ? 0 : null);
     this.localPresentation = localPlayer
       ? {
           position: localPlayer.position,

@@ -16,6 +16,7 @@ export interface ImpactFxAdapter {
   emitPulseSpawn(position: Vec2): void;
   emitPulseBreak(position: Vec2): void;
   nudgeCamera(direction: Vec2, strength: number): void;
+  nudgeKnockoutCamera(tick: number, direction: Vec2, strength: number): void;
   emitKnockoutBurst(position: Vec2, strength: number): void;
   emitEdgeStreak(position: Vec2, direction: Vec2): void;
   pulseScore(playerId: string, score: number): void;
@@ -111,7 +112,7 @@ export class ImpactFx {
       this.adapter.pulseScore(event.scoreAwardedTo, event.scores[event.scoreAwardedTo] ?? 0);
     }
     this.adapter.announceKnockout(attacker?.name ?? null, target?.name ?? event.targetId);
-    if (!this.reducedMotion) this.adapter.nudgeCamera(direction, 1);
+    if (!this.reducedMotion) this.adapter.nudgeKnockoutCamera(event.tick, direction, 1);
   }
 }
 

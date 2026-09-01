@@ -115,6 +115,15 @@ export type MatchPlayer = Readonly<{
   stats: PlayerStats;
 }>;
 
+export type PlayerNetworkTransport = 'websocket' | 'polling';
+
+export type PlayerNetworkStatus = Readonly<{
+  currentMs: number | null;
+  medianMs: number | null;
+  jitterMs: number | null;
+  transport: PlayerNetworkTransport;
+}>;
+
 export type MatchSnapshot = Readonly<{
   tick: number;
   phase: MatchPhase;
@@ -122,7 +131,7 @@ export type MatchSnapshot = Readonly<{
   platformProgress: number;
   settings: RoomSettings;
   scores: Readonly<Record<string, number>>;
-  pingMs: Readonly<Record<string, number | null>>;
+  network: Readonly<Record<string, PlayerNetworkStatus>>;
   players: readonly MatchPlayer[];
   pulses: readonly MatchPulse[];
   winnerPlayerId: string | null;

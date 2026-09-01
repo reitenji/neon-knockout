@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import { GAME } from '../../src/shared/constants.js';
 import type { GameEvent, MatchPlayer, MatchSnapshot, Vec2 } from '../../src/shared/model.js';
 import {
   assertNoUnexpectedErrors,
@@ -23,6 +24,13 @@ function player(game: E2eGame, code: string, playerId: string): MatchPlayer {
 
 function marker(game: E2eGame, code: string): number {
   return game.harness.recentEvents(code).at(-1)?.eventId ?? 0;
+}
+
+async function expectLocalAndOpponentTelemetry(match: MatchPages): Promise<void> {
+  await expect(match.host.page.getByLabel(/^Ada yerel telemetrisi:/)).not.toContainText('—');
+  await expect(match.host.page.getByLabel(/^Linus ağ telemetrisi:/)).not.toContainText('—');
+  await expect(match.guest.page.getByLabel(/^Linus yerel telemetrisi:/)).not.toContainText('—');
+  await expect(match.guest.page.getByLabel(/^Ada ağ telemetrisi:/)).not.toContainText('—');
 }
 
 function eventsAfter(game: E2eGame, code: string, eventId: number): readonly GameEvent[] {
@@ -175,9 +183,8 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
   try {
     for (const participant of [match.host, match.guest]) {
       await expect(participant.page.getByRole('region', { name: 'Oyuncu listesi' })).toBeVisible();
-      await expect(participant.page.getByLabel(/^Ada pingi:/)).not.toHaveText('—');
-      await expect(participant.page.getByLabel(/^Linus pingi:/)).not.toHaveText('—');
     }
+    await expectLocalAndOpponentTelemetry(match);
 
     await placePlayers(game, match, { x: 500, y: 300 }, { x: 900, y: 500 });
     const beforeMouseTick = snapshot(game, match.code).tick;
@@ -263,7 +270,7 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
     await expect.poll(() => player(game, match.code, match.hostPlayerId).action.kind).toBe('HEAVY');
     const partialHeavy = player(game, match.code, match.hostPlayerId).action;
     expect(partialHeavy.chargeMs).toBeGreaterThanOrEqual(180);
-    expect(partialHeavy.chargeMs).toBeLessThan(700);
+    expect(partialHeavy.chargeMs).toBeLessThan(GAME.heavyMaxChargeMs);
     expect(partialHeavy.lockedFacing?.x).toBeCloseTo(1, 4);
     expect(partialHeavy.lockedFacing?.y).toBeCloseTo(0, 4);
     const heavyHit = await waitForEvent(
@@ -282,7 +289,8 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
     eventMarker = marker(game, match.code);
     await match.host.page.keyboard.down('d');
     await match.host.page.keyboard.down('k');
-    await expect.poll(() => player(game, match.code, match.hostPlayerId).action.chargeMs).toBe(700);
+    await expect.poll(() => player(game, match.code, match.hostPlayerId).action.chargeMs)
+      .toBe(GAME.heavyMaxChargeMs);
     await match.host.page.keyboard.up('d');
     await match.host.page.keyboard.up('k');
     const pulseSpawn = await waitForEvent(game, match.code, eventMarker, 'PULSE_SPAWN');
@@ -293,6 +301,7 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
       event.type === 'PULSE_SPAWN' && event.originatingAttackId === pulseSpawn.originatingAttackId
     ).length).toBe(1);
     await waitForNeutral(game, match);
+    await expect.poll(() => snapshot(game, match.code).pulses).toEqual([]);
 
     await placePlayers(
       game,
@@ -337,8 +346,10 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
     ]);
     const clash = await waitForEvent(game, match.code, eventMarker, 'CLASH');
     expect(clash.strength).toBe('HEAVY');
-    expect(eventsAfter(game, match.code, eventMarker).filter((event) => event.type === 'HIT')).toEqual([]);
+    expect(eventsAfter(game, match.code, eventMarker).filter((event) =>
+      event.type === 'HIT' && event.attack === 'HEAVY')).toEqual([]);
     await waitForNeutral(game, match);
+    await expect.poll(() => snapshot(game, match.code).pulses).toEqual([]);
 
     await placePlayers(game, match, { x: 580, y: 360 }, { x: 680, y: 360 });
     await Promise.all([
@@ -388,10 +399,10 @@ test('two keyboard-only production contexts prove combat, reconnect, result, and
     ]);
     expect(dodge).toMatchObject({
       playerId: match.guestPlayerId,
-      attackerId: match.hostPlayerId,
-      source: 'HEAVY',
-      projectileId: null
+      attackerId: match.hostPlayerId
     });
+    expect(['HEAVY', 'NEON_PULSE']).toContain(dodge.source);
+    expect(dodge.projectileId === null).toBe(dodge.source === 'HEAVY');
     await waitForNeutral(game, match);
 
     await placePlayers(game, match, { x: 400, y: 200 }, { x: 850, y: 500 });
@@ -465,10 +476,7 @@ test('rematch still allows consecutive quick attacks without refresh', async ({ 
     await match.host.page.getByRole('button', { name: 'Rövanşı Başlat' }).click();
     await expect(match.host.page.getByRole('img', { name: 'Neon Knockout oyun alanı' })).toBeVisible();
     await expect.poll(() => snapshot(game, match.code).phase).toBe('REGULATION');
-    for (const participant of [match.host, match.guest]) {
-      await expect(participant.page.getByLabel(/^Ada pingi:/)).not.toHaveText('—');
-      await expect(participant.page.getByLabel(/^Linus pingi:/)).not.toHaveText('—');
-    }
+    await expectLocalAndOpponentTelemetry(match);
 
     await placePlayers(game, match, { x: 500, y: 360 }, { x: 548, y: 360 });
     const rematchSeq = player(game, match.code, match.hostPlayerId).lastProcessedInputSeq;

@@ -22,7 +22,10 @@ function snapshot(): MatchSnapshot {
     tick: 30, phase: 'REGULATION', remainingMs: 90_000, platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
     scores: { attacker: 2, target: 0 },
-    pingMs: { attacker: null, target: null },
+    network: {
+      attacker: { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' },
+      target: { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' }
+    },
     players: [player('attacker', 'Ada', { x: 200, y: 360 }), player('target', 'Bora', { x: 300, y: 360 })],
     pulses: [],
     winnerPlayerId: null, resultReason: null
@@ -51,6 +54,9 @@ class RecordingAdapter implements ImpactFxAdapter {
   emitPulseSpawn(...args: Parameters<ImpactFxAdapter['emitPulseSpawn']>): void { this.record('emitPulseSpawn', args); }
   emitPulseBreak(...args: Parameters<ImpactFxAdapter['emitPulseBreak']>): void { this.record('emitPulseBreak', args); }
   nudgeCamera(...args: Parameters<ImpactFxAdapter['nudgeCamera']>): void { this.record('nudgeCamera', args); }
+  nudgeKnockoutCamera(...args: Parameters<ImpactFxAdapter['nudgeKnockoutCamera']>): void {
+    this.record('nudgeKnockoutCamera', args);
+  }
   emitKnockoutBurst(...args: Parameters<ImpactFxAdapter['emitKnockoutBurst']>): void {
     this.record('emitKnockoutBurst', args);
   }
@@ -169,7 +175,118 @@ describe('ImpactFx', () => {
       { method: 'emitEdgeStreak', args: [{ x: 300, y: 360 }, { x: -1, y: 0 }] },
       { method: 'pulseScore', args: ['attacker', 3] },
       { method: 'announceKnockout', args: ['Ada', 'Bora'] },
-      { method: 'nudgeCamera', args: [{ x: -1, y: 0 }, 1] }
+      { method: 'nudgeKnockoutCamera', args: [31, { x: -1, y: 0 }, 1] }
+    ]);
+  });
+
+  it('presents every same-tick knockout at its own ring-out boundary', () => {
+    const adapter = new RecordingAdapter();
+    const effects = new ImpactFx(adapter);
+    const ringOuts = [
+      { targetId: 'right', position: { x: 1_198, y: 360 }, direction: { x: 1, y: 0 } },
+      { targetId: 'left', position: { x: 82, y: 360 }, direction: { x: -1, y: 0 } },
+      { targetId: 'top', position: { x: 640, y: 32 }, direction: { x: 0, y: -1 } },
+      { targetId: 'bottom', position: { x: 640, y: 688 }, direction: { x: 0, y: 1 } }
+    ] as const;
+    const match = {
+      ...snapshot(),
+      players: [
+        player('attacker', 'Ada', { x: 640, y: 360 }),
+        ...ringOuts.map(({ targetId, position }) => player(targetId, targetId, position))
+      ]
+    };
+
+    for (const [index, { targetId }] of ringOuts.entries()) {
+      effects.ingest({
+        eventId: 42 + index, tick: 30, type: 'KNOCKOUT', attackerId: 'attacker', targetId,
+        scoreAwardedTo: 'attacker', scores: { attacker: 3 + index, [targetId]: 0 }
+      }, match);
+    }
+
+    expect(adapter.calls.filter(({ method }) => method === 'emitKnockoutBurst')).toEqual(
+      ringOuts.map(({ position }) => ({ method: 'emitKnockoutBurst', args: [position, 1] }))
+    );
+    expect(adapter.calls.filter(({ method }) => method === 'emitEdgeStreak')).toEqual(
+      ringOuts.map(({ position, direction }) => ({ method: 'emitEdgeStreak', args: [position, direction] }))
+    );
+    expect(adapter.calls.filter(({ method }) => method === 'nudgeKnockoutCamera')).toEqual([
+      { method: 'nudgeKnockoutCamera', args: [30, { x: 1, y: 0 }, 1] },
+      { method: 'nudgeKnockoutCamera', args: [30, { x: -1, y: 0 }, 1] },
+      { method: 'nudgeKnockoutCamera', args: [30, { x: 0, y: -1 }, 1] },
+      { method: 'nudgeKnockoutCamera', args: [30, { x: 0, y: 1 }, 1] }
+    ]);
+  });
+
+  it('keeps the full burst path across knockout ticks and fresh instances', () => {
+    const adapter = new RecordingAdapter();
+    const effects = new ImpactFx(adapter);
+
+    effects.ingest({
+      eventId: 50, tick: 30, type: 'KNOCKOUT', attackerId: 'attacker', targetId: 'target',
+      scoreAwardedTo: 'attacker', scores: { attacker: 3, target: 0 }
+    }, snapshot());
+    effects.ingest({
+      eventId: 51, tick: 31, type: 'KNOCKOUT', attackerId: 'attacker', targetId: 'target',
+      scoreAwardedTo: 'attacker', scores: { attacker: 4, target: 0 }
+    }, snapshot());
+    effects.dispose();
+
+    const resetAdapter = new RecordingAdapter();
+    const resetEffects = new ImpactFx(resetAdapter);
+    resetEffects.ingest({
+      eventId: 52, tick: 30, type: 'KNOCKOUT', attackerId: 'attacker', targetId: 'target',
+      scoreAwardedTo: 'attacker', scores: { attacker: 5, target: 0 }
+    }, snapshot());
+
+    expect(adapter.calls.filter(({ method }) => method === 'emitKnockoutBurst')).toEqual([
+      { method: 'emitKnockoutBurst', args: [{ x: 300, y: 360 }, 1] },
+      { method: 'emitKnockoutBurst', args: [{ x: 300, y: 360 }, 1] }
+    ]);
+    expect(adapter.calls.filter(({ method }) => method === 'emitEdgeStreak')).toEqual([
+      { method: 'emitEdgeStreak', args: [{ x: 300, y: 360 }, { x: -1, y: 0 }] },
+      { method: 'emitEdgeStreak', args: [{ x: 300, y: 360 }, { x: -1, y: 0 }] }
+    ]);
+    expect(resetAdapter.calls.filter(({ method }) => method === 'emitKnockoutBurst')).toEqual([
+      { method: 'emitKnockoutBurst', args: [{ x: 300, y: 360 }, 1] }
+    ]);
+    expect(resetAdapter.calls.filter(({ method }) => method === 'emitEdgeStreak')).toEqual([
+      { method: 'emitEdgeStreak', args: [{ x: 300, y: 360 }, { x: -1, y: 0 }] }
+    ]);
+  });
+
+  it('keeps same-frame hit and clash camera nudges separate while routing same-tick knockouts through the knockout-specific camera path', () => {
+    const adapter = new RecordingAdapter();
+    const effects = new ImpactFx(adapter);
+
+    effects.ingest(hit(40), snapshot());
+    effects.ingest({
+      eventId: 41, tick: 30, type: 'CLASH', playerIds: ['attacker', 'target'], attackIds: [10, 11],
+      impactPosition: { x: 250, y: 360 }, strength: 'QUICK'
+    }, snapshot());
+    effects.ingest({
+      eventId: 42, tick: 30, type: 'KNOCKOUT', attackerId: 'attacker', targetId: 'target',
+      scoreAwardedTo: 'attacker', scores: { attacker: 3, target: 0 }
+    }, snapshot());
+    effects.ingest({
+      eventId: 43, tick: 30, type: 'KNOCKOUT', attackerId: 'attacker', targetId: 'target',
+      scoreAwardedTo: 'attacker', scores: { attacker: 4, target: 0 }
+    }, snapshot());
+
+    expect(adapter.calls.filter(({ method }) => method === 'nudgeCamera')).toEqual([
+      { method: 'nudgeCamera', args: [{ x: 1, y: 0 }, 0.5] },
+      { method: 'nudgeCamera', args: [{ x: 1, y: 0 }, 0.41759999999999997] }
+    ]);
+    expect(adapter.calls.filter(({ method }) => method === 'nudgeKnockoutCamera')).toEqual([
+      { method: 'nudgeKnockoutCamera', args: [30, { x: -1, y: 0 }, 1] },
+      { method: 'nudgeKnockoutCamera', args: [30, { x: -1, y: 0 }, 1] }
+    ]);
+    expect(adapter.calls.filter(({ method }) => method === 'emitKnockoutBurst')).toEqual([
+      { method: 'emitKnockoutBurst', args: [{ x: 300, y: 360 }, 1] },
+      { method: 'emitKnockoutBurst', args: [{ x: 300, y: 360 }, 1] }
+    ]);
+    expect(adapter.calls.filter(({ method }) => method === 'emitEdgeStreak')).toEqual([
+      { method: 'emitEdgeStreak', args: [{ x: 300, y: 360 }, { x: -1, y: 0 }] },
+      { method: 'emitEdgeStreak', args: [{ x: 300, y: 360 }, { x: -1, y: 0 }] }
     ]);
   });
 

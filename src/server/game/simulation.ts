@@ -2,7 +2,7 @@ import { GAME } from '../../shared/constants.js';
 import { profileForAttack } from '../../shared/combat/profiles.js';
 import { normalizeAim, normalizeAxes } from '../../shared/kinematics.js';
 import { matchTimingFor } from '../../shared/roomSettings.js';
-import type { GameEvent, InputFrame, MatchPhase, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
+import type { GameEvent, InputFrame, MatchPhase, MatchPlayer, MatchSnapshot, PlayerNetworkStatus } from '../../shared/model.js';
 import { advanceCombatTimers, startActions } from './combat.js';
 import {
   buildActiveAttackShapes,
@@ -325,7 +325,18 @@ function snapshotPlayer(player: MutableMatchPlayer): MatchPlayer {
   };
 }
 
-export function snapshotMatch(state: MatchState): MatchSnapshot {
+function emptyNetworkFor(state: MatchState): Record<string, PlayerNetworkStatus> {
+  return Object.fromEntries(
+    Object.keys(state.players)
+      .sort(compareStableIds)
+      .map((playerId) => [playerId, { currentMs: null, medianMs: null, jitterMs: null, transport: 'polling' as const }])
+  );
+}
+
+export function snapshotMatch(
+  state: MatchState,
+  network: Readonly<Record<string, PlayerNetworkStatus>> = emptyNetworkFor(state)
+): MatchSnapshot {
   return {
     tick: state.tick,
     phase: state.phase,
@@ -333,7 +344,7 @@ export function snapshotMatch(state: MatchState): MatchSnapshot {
     platformProgress: state.contraction,
     settings: { ...state.settings },
     scores: { ...state.scores },
-    pingMs: { ...state.pingMs },
+    network: { ...network },
     players: Object.keys(state.players)
       .filter((playerId) => state.players[playerId].connected)
       .sort(compareStableIds)

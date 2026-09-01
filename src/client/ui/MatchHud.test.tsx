@@ -52,7 +52,10 @@ function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
     platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
     scores: { 'p-local': 2, 'p-rival': 4 },
-    pingMs: { 'p-local': null, 'p-rival': 48 },
+    network: {
+      'p-local': { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' },
+      'p-rival': { currentMs: 48, medianMs: 48, jitterMs: 3, transport: 'websocket' }
+    },
     players: [local, rival],
     pulses: [],
     winnerPlayerId: null,
@@ -64,8 +67,12 @@ function snapshot(overrides: Partial<MatchSnapshot> = {}): MatchSnapshot {
 class PresentationBridge implements GamePresentationBridge {
   current: MatchSnapshot | null = snapshot();
   connected = true;
+  presentationDelayMs: number | null = null;
+  rollbackFrames: number | null = null;
   readonly snapshotListeners = new Set<(value: MatchSnapshot) => void>();
   readonly connectionListeners = new Set<(connected: boolean) => void>();
+  readonly presentationDelayListeners = new Set<(delayMs: number | null) => void>();
+  readonly rollbackFrameListeners = new Set<(frames: number | null) => void>();
 
   getSnapshot = (): MatchSnapshot | null => this.current;
   isConnected = (): boolean => this.connected;
@@ -76,6 +83,16 @@ class PresentationBridge implements GamePresentationBridge {
   subscribeConnected = (listener: (connected: boolean) => void): (() => void) => {
     this.connectionListeners.add(listener);
     return () => this.connectionListeners.delete(listener);
+  };
+  getPresentationDelayMs = (): number | null => this.presentationDelayMs;
+  getRollbackFrames = (): number | null => this.rollbackFrames;
+  subscribePresentationDelay = (listener: (delayMs: number | null) => void): (() => void) => {
+    this.presentationDelayListeners.add(listener);
+    return () => this.presentationDelayListeners.delete(listener);
+  };
+  subscribeRollbackFrames = (listener: (frames: number | null) => void): (() => void) => {
+    this.rollbackFrameListeners.add(listener);
+    return () => this.rollbackFrameListeners.delete(listener);
   };
   subscribeEvent = (): (() => void) => () => undefined;
   subscribeMuted = (): (() => void) => () => undefined;
@@ -89,6 +106,16 @@ class PresentationBridge implements GamePresentationBridge {
   setConnected(next: boolean): void {
     this.connected = next;
     for (const listener of this.connectionListeners) listener(next);
+  }
+
+  setPresentationDelay(next: number | null): void {
+    this.presentationDelayMs = next;
+    for (const listener of this.presentationDelayListeners) listener(next);
+  }
+
+  setRollbackFrames(next: number | null): void {
+    this.rollbackFrames = next;
+    for (const listener of this.rollbackFrameListeners) listener(next);
   }
 }
 
@@ -118,13 +145,15 @@ describe('MatchHud', () => {
 
     const ranking = screen.getByRole('list', { name: 'Oyuncu sıralaması' });
     const rows = within(ranking).getAllByRole('listitem');
-    expect(rows[0]).toHaveTextContent('Linus448 ms');
-    expect(rows[1]).toHaveTextContent('AdaSen2—');
+    expect(rows[0]).toHaveTextContent('Linus');
+    expect(within(rows[0]).getByLabelText('Linus skoru: 4 knockout')).toHaveTextContent('4');
+    expect(rows[1]).toHaveTextContent('AdaSen');
+    expect(within(rows[1]).getByLabelText('Ada skoru: 2 knockout')).toHaveTextContent('2');
 
     expect(screen.getByRole('meter', { name: 'Overload' })).toHaveAttribute('aria-valuenow', '84');
     expect(screen.getByText('84%')).toBeVisible();
     expect(screen.getByRole('meter', { name: 'Dash dolumu' })).toHaveAttribute('aria-valuenow', '50');
-    expect(screen.getByText('ŞARJ 50%')).toBeVisible();
+    expect(screen.getByText('ŞARJ 78%')).toBeVisible();
     expect(screen.getByRole('status', { name: 'Bağlantı durumu' })).toHaveTextContent('Bağlı');
 
     const controls = screen.getByLabelText('Kontroller');
@@ -135,7 +164,7 @@ describe('MatchHud', () => {
     expect(controls).not.toHaveTextContent(/oklar|shift|tık|fare|mouse/i);
   });
 
-  it('shows every match player with rank, knockout score, and accessible latency tiers', () => {
+  it('shows a PING/RTT column with opponent current Ping and median RTT while reserving local telemetry for Delay and RB', () => {
     const bridge = new PresentationBridge();
     bridge.current = snapshot({
       players: [
@@ -145,7 +174,12 @@ describe('MatchHud', () => {
         player({ playerId: 'p-high', name: 'Kerem', accent: 3 })
       ],
       scores: { 'p-local': 2, 'p-rival': 4, 'p-medium': 3, 'p-high': 1 },
-      pingMs: { 'p-local': null, 'p-rival': 42, 'p-medium': 96, 'p-high': 184 }
+      network: {
+        'p-local': { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' },
+        'p-rival': { currentMs: 20, medianMs: 18, jitterMs: 4, transport: 'websocket' },
+        'p-medium': { currentMs: 51, medianMs: 42, jitterMs: 12, transport: 'polling' },
+        'p-high': { currentMs: 144, medianMs: 109, jitterMs: 30, transport: 'websocket' }
+      }
     });
 
     render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
@@ -153,12 +187,91 @@ describe('MatchHud', () => {
     const roster = screen.getByRole('region', { name: 'Oyuncu listesi' });
     expect(within(roster).getAllByRole('listitem')).toHaveLength(4);
     expect(within(roster).getByText('KO')).toBeVisible();
-    expect(within(roster).getByText('PING')).toBeVisible();
-    expect(screen.getByLabelText('Ada pingi: ölçülüyor')).toHaveTextContent('—');
-    expect(screen.getByLabelText('Linus pingi: 42 ms')).toHaveClass('is-good');
-    expect(screen.getByLabelText('Mina pingi: 96 ms')).toHaveClass('is-medium');
-    expect(screen.getByLabelText('Kerem pingi: 184 ms')).toHaveClass('is-high');
+    expect(within(roster).getByText('PING/RTT')).toBeVisible();
+    expect(within(roster).queryByText('MEDYAN')).not.toBeInTheDocument();
+
+    const localTelemetry = screen.getByLabelText('Ada yerel telemetrisi: Delay ölçülüyor, RB ölçülüyor');
+    expect(within(localTelemetry).getByText('Delay —')).toBeVisible();
+    expect(within(localTelemetry).getByText('RB —')).toBeVisible();
+    expect(localTelemetry).not.toHaveTextContent(/Ping|RTT/);
+
+    const goodTelemetry = screen.getByLabelText('Linus ağ telemetrisi: Ping 20 ms, RTT 18 ms');
+    expect(within(goodTelemetry).getByText('Ping 20 ms')).toBeVisible();
+    expect(within(goodTelemetry).getByText('RTT 18 ms')).toBeVisible();
+    expect(goodTelemetry).toHaveClass('is-good');
+
+    const mediumTelemetry = screen.getByLabelText('Mina ağ telemetrisi: Ping 51 ms, RTT 42 ms');
+    expect(within(mediumTelemetry).getByText('Ping 51 ms')).toBeVisible();
+    expect(within(mediumTelemetry).getByText('RTT 42 ms')).toBeVisible();
+    expect(mediumTelemetry).toHaveClass('is-medium');
+
+    const highTelemetry = screen.getByLabelText('Kerem ağ telemetrisi: Ping 144 ms, RTT 109 ms');
+    expect(within(highTelemetry).getByText('Ping 144 ms')).toBeVisible();
+    expect(within(highTelemetry).getByText('RTT 109 ms')).toBeVisible();
+    expect(highTelemetry).toHaveClass('is-high');
     expect(screen.getByLabelText('Linus skoru: 4 knockout')).toBeVisible();
+  });
+
+  it('marks a timed-out current Ping as high even when the rolling RTT median is still good', () => {
+    const bridge = new PresentationBridge();
+    bridge.current = snapshot({
+      network: {
+        'p-local': { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' },
+        'p-rival': { currentMs: 2_000, medianMs: 18, jitterMs: 4, transport: 'websocket' }
+      }
+    });
+
+    render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
+
+    const telemetry = screen.getByLabelText('Linus ağ telemetrisi: Ping 2000 ms, RTT 18 ms');
+    expect(telemetry).toHaveClass('is-high');
+  });
+
+  it('uses each client bridge for its own Delay and RB frames while the same players remain opponent Ping/RTT rows elsewhere', () => {
+    const sharedSnapshot = snapshot({
+      network: {
+        'p-local': { currentMs: 47, medianMs: 42, jitterMs: 6, transport: 'polling' },
+        'p-rival': { currentMs: 21, medianMs: 18, jitterMs: 4, transport: 'websocket' }
+      }
+    });
+    const adaBridge = new PresentationBridge();
+    adaBridge.current = sharedSnapshot;
+    adaBridge.setPresentationDelay(16);
+    adaBridge.setRollbackFrames(3);
+    const linusBridge = new PresentationBridge();
+    linusBridge.current = sharedSnapshot;
+    linusBridge.setPresentationDelay(40);
+    linusBridge.setRollbackFrames(1);
+
+    const adaClient = render(<MatchHud bridge={adaBridge} localPlayerId="p-local" />);
+    const linusClient = render(<MatchHud bridge={linusBridge} localPlayerId="p-rival" />);
+
+    const adaLocalTelemetry = within(adaClient.container).getByLabelText(
+      'Ada yerel telemetrisi: Delay 1.0f, RB 3f'
+    );
+    expect(within(adaLocalTelemetry).getByText('Delay 1.0f')).toBeVisible();
+    expect(within(adaLocalTelemetry).getByText('RB 3f')).toBeVisible();
+    expect(within(adaClient.container).getByLabelText('Linus ağ telemetrisi: Ping 21 ms, RTT 18 ms')).toBeVisible();
+    expect(within(adaClient.container).getByRole('status', { name: 'Sunum arabelleği' })).toHaveTextContent(
+      'Delay 16 ms · 1.0f · Rollback 3f'
+    );
+
+    const linusLocalTelemetry = within(linusClient.container).getByLabelText(
+      'Linus yerel telemetrisi: Delay 2.4f, RB 1f'
+    );
+    expect(within(linusLocalTelemetry).getByText('Delay 2.4f')).toBeVisible();
+    expect(within(linusLocalTelemetry).getByText('RB 1f')).toBeVisible();
+    expect(within(linusClient.container).getByLabelText('Ada ağ telemetrisi: Ping 47 ms, RTT 42 ms')).toBeVisible();
+    expect(within(linusClient.container).getByRole('status', { name: 'Sunum arabelleği' })).toHaveTextContent(
+      'Delay 40 ms · 2.4f · Rollback 1f'
+    );
+
+    act(() => {
+      adaBridge.setPresentationDelay(24);
+      adaBridge.setRollbackFrames(4);
+    });
+    expect(within(adaClient.container).getByLabelText('Ada yerel telemetrisi: Delay 1.4f, RB 4f')).toBeVisible();
+    expect(within(linusClient.container).getByLabelText('Linus yerel telemetrisi: Delay 2.4f, RB 1f')).toBeVisible();
   });
 
   it('shows exact charge readiness and the authoritative 78-second contraction warning', () => {
@@ -212,7 +325,7 @@ describe('MatchHud', () => {
     expect(screen.getByRole('status', { name: 'Arena daralma uyarısı' })).toBeVisible();
   });
 
-  it('tracks live phase, combat, and transport changes without remounting the arena', () => {
+  it('tracks live phase, combat, and connection changes without remounting the arena', () => {
     const bridge = new PresentationBridge();
     const createGame = vi.fn(() => ({ destroy() {} }));
     const view = render(
@@ -224,14 +337,14 @@ describe('MatchHud', () => {
       remainingMs: 119_650,
       players: [player({ action: idleAction, overload: 120, dashCooldownRemainingMs: 0 })],
       scores: { 'p-local': 3 },
-      pingMs: { 'p-local': 109 }
+      network: { 'p-local': { currentMs: 132, medianMs: 109, jitterMs: 18, transport: 'polling' } }
     })));
 
     expect(screen.getByRole('status', { name: 'Raunt başlangıcı' })).toHaveTextContent('FIGHT');
     expect(screen.getByRole('timer', { name: 'Kalan süre' })).toHaveTextContent('02:00');
     expect(screen.getByText('Hazır')).toBeVisible();
     expect(screen.getByText('Beklemede')).toBeVisible();
-    expect(screen.getByLabelText('Ada pingi: 109 ms')).toHaveClass('is-medium');
+    expect(screen.getByLabelText('Ada yerel telemetrisi: Delay ölçülüyor, RB ölçülüyor')).toBeVisible();
     expect(createGame).toHaveBeenCalledOnce();
 
     act(() => bridge.setConnected(false));

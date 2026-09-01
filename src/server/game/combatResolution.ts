@@ -2,6 +2,7 @@ import {
   buildAttackCapsule,
   capsuleIntersectsCircle,
   capsulesIntersect,
+  nearestCircleBoundaryPointToCapsule,
   type SweptCapsule
 } from '../../shared/combat/geometry.js';
 import { profileForAttack, type AttackProfile } from '../../shared/combat/profiles.js';
@@ -274,6 +275,7 @@ function applyHit(
   attacker: MutableMatchPlayer,
   target: MutableMatchPlayer,
   attack: AttackRuntime | null,
+  impactPosition: Readonly<{ x: number; y: number }>,
   pulseDirection: Readonly<{ x: number; y: number }> | null,
   overloadGain: number,
   baseImpulse: number,
@@ -300,7 +302,7 @@ function applyHit(
     attackerId: attacker.playerId,
     targetId: target.playerId,
     attack: attack?.kind ?? 'NEON_PULSE',
-    impactPosition: { ...target.position },
+    impactPosition: { ...impactPosition },
     impulse,
     resultingOverload: target.overload
   });
@@ -354,6 +356,10 @@ export function resolveSurvivingContacts(
 
     for (const target of targets) {
       attack.resolvedPlayerIds.add(target.playerId);
+      const impactPosition = nearestCircleBoundaryPointToCapsule(shape.capsule, {
+        center: target.position,
+        radius: GAME.collisionRadius
+      });
       if (target.dashInvulnerabilityRemainingMs > 0) {
         applyPerfectDodge(target, {
           type: 'PERFECT_DODGE',
@@ -368,7 +374,7 @@ export function resolveSurvivingContacts(
         continue;
       }
 
-      applyHit(state, attacker, target, attack, null, effects.overloadGain, effects.baseImpulse, hits);
+      applyHit(state, attacker, target, attack, impactPosition, null, effects.overloadGain, effects.baseImpulse, hits);
     }
   }
 
@@ -402,6 +408,10 @@ export function resolveSurvivingContacts(
     if (!target) continue;
 
     removePulse(state, projectileId);
+    const impactPosition = nearestCircleBoundaryPointToCapsule(capsule, {
+      center: target.position,
+      radius: GAME.collisionRadius
+    });
     if (target.dashInvulnerabilityRemainingMs > 0) {
       applyPerfectDodge(target, {
         type: 'PERFECT_DODGE',
@@ -424,6 +434,7 @@ export function resolveSurvivingContacts(
       attacker,
       target,
       null,
+      impactPosition,
       normalize(pulse.velocity, { x: 1, y: 0 }),
       GAME.pulseOverloadGain,
       GAME.pulseBaseImpulse,

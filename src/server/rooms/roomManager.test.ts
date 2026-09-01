@@ -3,7 +3,7 @@ import { GAME } from '../../shared/constants.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import type { Chassis, InputFrame, MatchSnapshot, RoomState } from '../../shared/model.js';
 import { DomainError } from './domainError.js';
-import { RoomManager, type RoomPublication } from './roomManager.js';
+import { RoomManager, type RoomManagerTestHarness, type RoomPublication } from './roomManager.js';
 
 class FakeClock {
   private value = 1_000;
@@ -37,13 +37,20 @@ function fixture(): {
   clock: FakeClock;
   bytes: DeterministicBytes;
   publications: RoomPublication[];
+  harness: RoomManagerTestHarness;
   roomState: (roomCode: string) => RoomState;
   snapshot: (roomCode: string) => MatchSnapshot;
 } {
   const clock = new FakeClock();
   const bytes = new DeterministicBytes();
   const publications: RoomPublication[] = [];
-  const manager = new RoomManager({ now: clock.now, randomBytes: bytes.next, publish: (event) => publications.push(event) });
+  let harness: RoomManagerTestHarness | null = null;
+  const manager = new RoomManager({
+    now: clock.now,
+    randomBytes: bytes.next,
+    publish: (event) => publications.push(event),
+    bindTestHarness: (boundHarness) => { harness = boundHarness; }
+  });
   const roomState = (roomCode: string): RoomState => {
     const event = [...publications].reverse().find(
       (candidate): candidate is Extract<RoomPublication, { type: 'ROOM_STATE' }> =>
@@ -60,7 +67,8 @@ function fixture(): {
     if (!event) throw new Error(`No match snapshot published for ${roomCode}`);
     return event.snapshot;
   };
-  return { manager, clock, bytes, publications, roomState, snapshot };
+  if (!harness) throw new Error('Room manager test harness was not bound.');
+  return { manager, clock, bytes, publications, harness, roomState, snapshot };
 }
 
 function expectErrorCode(action: () => unknown, code: string): void {
@@ -204,31 +212,54 @@ describe('RoomManager FFA lifecycle', () => {
     expect(subject.roomState(roomCode).settings).toEqual(DEFAULT_ROOM_SETTINGS);
   });
 
-  it('publishes rounded and bounded player ping samples only while a match exists', () => {
+  it('publishes bounded network telemetry with median consecutive-sample jitter and transport only while a match exists', () => {
     const subject = fixture();
     const host = subject.manager.createRoom('c-1', 'Ada');
     const guest = subject.manager.joinRoom('c-2', host.roomCode, 'Linus');
     const publicationsBeforeLobbySample = subject.publications.length;
     subject.manager.setPing('c-1', 41.6);
+    subject.manager.setTransport('c-1', 'websocket');
     expect(subject.publications).toHaveLength(publicationsBeforeLobbySample);
 
     subject.manager.setReady('c-1', true);
     subject.manager.setReady('c-2', true);
     subject.manager.startMatch('c-1');
     expect(subject.manager.isInActiveMatch('c-1')).toBe(true);
-    expect(subject.snapshot(host.roomCode).pingMs).toEqual({
-      [host.playerId]: null,
-      [guest.playerId]: null
+    expect(subject.snapshot(host.roomCode).network).toEqual({
+      [host.playerId]: { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' },
+      [guest.playerId]: { currentMs: null, medianMs: null, jitterMs: null, transport: 'polling' }
     });
 
     const publicationsBeforeSamples = subject.publications.length;
-    subject.manager.setPing('c-1', 41.6);
+    subject.manager.setPing('c-1', 10);
+    subject.manager.setPing('c-1', 10);
+    subject.manager.setPing('c-1', 10);
+    subject.manager.setPing('c-1', 100);
+    subject.manager.setPing('c-2', 10);
+    subject.manager.setPing('c-2', 30);
+    subject.manager.setPing('c-2', 70);
     subject.manager.setPing('c-2', GAME.maxPingMs + 500);
     expect(subject.publications).toHaveLength(publicationsBeforeSamples);
     subject.manager.advance(40);
-    expect(subject.snapshot(host.roomCode).pingMs).toEqual({
-      [host.playerId]: 42,
-      [guest.playerId]: GAME.maxPingMs
+    expect(subject.snapshot(host.roomCode).network).toEqual({
+      [host.playerId]: { currentMs: 100, medianMs: 10, jitterMs: 0, transport: 'websocket' },
+      [guest.playerId]: { currentMs: GAME.maxPingMs, medianMs: 50, jitterMs: 40, transport: 'polling' }
+    });
+  });
+
+  it('computes jitter only from consecutive samples inside the bounded RTT window', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject);
+
+    for (const sample of [10, 10, 110, 210, 310, 410, 410, 410, 410]) {
+      subject.manager.setPing('c-1', sample);
+    }
+    subject.manager.advance(40);
+
+    expect(subject.snapshot(roomCode).network[players[0].playerId]).toMatchObject({
+      currentMs: 410,
+      medianMs: 360,
+      jitterMs: 100
     });
   });
 
@@ -443,7 +474,7 @@ describe('RoomManager FFA lifecycle', () => {
     }
   });
 
-  it('simulates at 60 Hz, publishes at 30 Hz, and keeps only monotonic input', () => {
+  it('simulates and publishes authoritative snapshots at 60 Hz while keeping only monotonic input', () => {
     const subject = fixture();
     const { roomCode, players } = readyAndStart(subject);
     subject.publications.length = 0;
@@ -456,10 +487,31 @@ describe('RoomManager FFA lifecycle', () => {
       (publication): publication is Extract<RoomPublication, { type: 'MATCH_SNAPSHOT' }> =>
         publication.type === 'MATCH_SNAPSHOT'
     );
-    expect(snapshots).toHaveLength(90);
+    expect(snapshots).toHaveLength(180);
     expect(snapshots.at(-1)?.snapshot.tick).toBe(180);
     expect(snapshots.at(-1)?.snapshot.players.find((player) => player.playerId === players[0].playerId)?.lastProcessedInputSeq).toBe(5);
     expect(subject.roomState(roomCode).phase).toBe('MATCH');
+  });
+
+  it('preserves a 250 ms stall for bounded catch-up without dropping authoritative snapshots', () => {
+    const subject = fixture();
+    const { roomCode } = readyAndStart(subject);
+    advanceCountdown(subject);
+    subject.publications.length = 0;
+    const startingTick = subject.manager.debugRoom(roomCode)!.tick!;
+
+    subject.manager.advance(250);
+    expect(subject.manager.debugRoom(roomCode)?.tick).toBe(startingTick + 5);
+    subject.manager.advance(0);
+    expect(subject.manager.debugRoom(roomCode)?.tick).toBe(startingTick + 10);
+    subject.manager.advance(0);
+    expect(subject.manager.debugRoom(roomCode)?.tick).toBe(startingTick + 15);
+
+    const snapshotTicks = subject.publications.flatMap((publication) =>
+      publication.type === 'MATCH_SNAPSHOT' ? [publication.snapshot.tick] : []);
+    expect(snapshotTicks).toEqual(
+      Array.from({ length: 15 }, (_value, index) => startingTick + index + 1)
+    );
   });
 
   it('preserves unprocessed quick and dash pulses through newer neutral frames and consumes each once', () => {
@@ -723,6 +775,128 @@ describe('RoomManager FFA lifecycle', () => {
     expect(subject.roomState(roomCode).players.every((player) =>
       !player.ready && Object.values(player.stats).every((value) => value === 0)
     )).toBe(true);
+  });
+
+  it('runs eight staged players through ordinary combat for four same-tick hits and resulting ring-outs', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject, 8);
+    advanceCountdown(subject);
+    subject.publications.length = 0;
+    subject.harness.runCombatScript(roomCode, {
+      players: [
+        {
+          playerId: players[0].playerId,
+          position: { x: 1_139, y: 360 },
+          facing: { x: 1, y: 0 },
+          overload: 0
+        },
+        {
+          playerId: players[1].playerId,
+          position: { x: 1_198, y: 360 },
+          facing: { x: 1, y: 0 },
+          overload: GAME.maxOverload
+        },
+        {
+          playerId: players[2].playerId,
+          position: { x: 141, y: 360 },
+          facing: { x: -1, y: 0 },
+          overload: 0
+        },
+        {
+          playerId: players[3].playerId,
+          position: { x: 82, y: 360 },
+          facing: { x: -1, y: 0 },
+          overload: GAME.maxOverload
+        },
+        {
+          playerId: players[4].playerId,
+          position: { x: 640, y: 91 },
+          facing: { x: 0, y: -1 },
+          overload: 0
+        },
+        {
+          playerId: players[5].playerId,
+          position: { x: 640, y: 32 },
+          facing: { x: 0, y: -1 },
+          overload: GAME.maxOverload
+        },
+        {
+          playerId: players[6].playerId,
+          position: { x: 640, y: 629 },
+          facing: { x: 0, y: 1 },
+          overload: 0
+        },
+        {
+          playerId: players[7].playerId,
+          position: { x: 640, y: 688 },
+          facing: { x: 0, y: 1 },
+          overload: GAME.maxOverload
+        }
+      ],
+      steps: [
+        {
+          elapsedMs: 0,
+          inputs: players.map((player, index) => {
+            const facing = index < 2 ? { x: 1, y: 0 }
+              : index < 4 ? { x: -1, y: 0 }
+                : index < 6 ? { x: 0, y: -1 }
+                  : { x: 0, y: 1 };
+            return {
+              playerId: player.playerId,
+              input: {
+                ...idleInput(0),
+                aimX: facing.x,
+                aimY: facing.y,
+                quick: index % 2 === 0
+              }
+            };
+          })
+        },
+        {
+          elapsedMs: 70,
+          inputs: players.map((player, index) => {
+            const facing = index < 2 ? { x: 1, y: 0 }
+              : index < 4 ? { x: -1, y: 0 }
+                : index < 6 ? { x: 0, y: -1 }
+                  : { x: 0, y: 1 };
+            return {
+              playerId: player.playerId,
+              input: { ...idleInput(1), aimX: facing.x, aimY: facing.y }
+            };
+          })
+        },
+        { elapsedMs: 1_000 / GAME.tickRate },
+        { elapsedMs: 1_000 / GAME.tickRate },
+        { elapsedMs: 1_000 / GAME.tickRate }
+      ]
+    });
+
+    const events = subject.publications.flatMap((publication) =>
+      publication.type === 'MATCH_EVENT' ? [publication.event] : []);
+    const hits = events.filter((event): event is Extract<(typeof events)[number], { type: 'HIT' }> =>
+      event.type === 'HIT');
+    const knockouts = events.filter((event): event is Extract<(typeof events)[number], { type: 'KNOCKOUT' }> =>
+      event.type === 'KNOCKOUT');
+    const attackers = players.filter((_player, index) => index % 2 === 0).map((player) => player.playerId);
+    const targets = players.filter((_player, index) => index % 2 === 1).map((player) => player.playerId);
+    expect(hits).toHaveLength(4);
+    expect(new Set(hits.map((event) => event.tick)).size).toBe(1);
+    expect(hits.map((event) => event.attackerId)).toEqual(attackers);
+    expect(hits.map((event) => event.targetId)).toEqual(targets);
+    expect(hits.every((event) =>
+      event.attack === 'QUICK_1' && event.impulse > 0 && event.resultingOverload === GAME.maxOverload
+    )).toBe(true);
+    expect(knockouts).toHaveLength(4);
+    expect(new Set(knockouts.map((event) => event.tick)).size).toBe(1);
+    expect(knockouts[0]!.tick).toBeGreaterThan(hits[0]!.tick);
+    expect(knockouts.map((event) => event.attackerId)).toEqual(attackers);
+    expect(knockouts.map((event) => event.targetId)).toEqual(targets);
+    expect(knockouts.map((event) => event.scoreAwardedTo)).toEqual(attackers);
+    expect(subject.publications.filter((publication) => publication.type === 'MATCH_SNAPSHOT')).toHaveLength(5);
+    expect(subject.snapshot(roomCode)).toMatchObject({
+      tick: expect.any(Number),
+      scores: Object.fromEntries(players.map((player, index) => [player.playerId, index % 2 === 0 ? 1 : 0]))
+    });
   });
 
   it('returns debug copies without tokens or deadlines and closes an empty room at the exact deadline', () => {

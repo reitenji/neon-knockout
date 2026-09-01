@@ -87,6 +87,17 @@
   letter-spacing: 0.06em;
 }
 
+.match-hud__presentation {
+  max-width: 188px;
+  color: #9fc5d2;
+  font-size: 0.5rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+  text-align: center;
+  text-wrap: balance;
+}
+
 .match-hud__contraction {
   color: #ffd982;
   font-size: 0.58rem;
@@ -98,7 +109,7 @@
 .match-hud__roster {
   top: 12px;
   left: 12px;
-  width: min(178px, 20%);
+  width: min(198px, 24%);
   padding: 4px;
   background: rgb(3 8 12 / 0.58);
   box-shadow: none;
@@ -108,7 +119,7 @@
 .match-hud__roster-heading,
 .match-hud__ranking li {
   display: grid;
-  grid-template-columns: 5px minmax(0, 1fr) 18px 42px;
+  grid-template-columns: 5px minmax(0, 1fr) 18px 62px;
   align-items: center;
   gap: 4px;
 }
@@ -165,11 +176,19 @@
   min-width: 0;
   overflow: hidden;
   display: flex;
-  align-items: baseline;
-  gap: 3px;
+  flex-direction: column;
+  gap: 1px;
   font-family: var(--font-ui);
   font-size: 0.68rem;
   font-weight: 650;
+}
+
+.match-hud__name > span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -189,27 +208,36 @@
   text-align: right;
 }
 
-.match-hud__ping {
+.match-hud__telemetry {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 1px;
   color: #a8bdc5;
-  font-size: 0.53rem;
+  font-size: 0.42rem;
   font-weight: 700;
+  line-height: 1.1;
   text-align: right;
   white-space: nowrap;
 }
 
-.match-hud__ping.is-good {
+.match-hud__telemetry.is-local {
+  color: var(--player-accent);
+}
+
+.match-hud__telemetry.is-good {
   color: #9bd9c4;
 }
 
-.match-hud__ping.is-medium {
+.match-hud__telemetry.is-medium {
   color: #ead29a;
 }
 
-.match-hud__ping.is-high {
+.match-hud__telemetry.is-high {
   color: #efa5ac;
 }
 
-.match-hud__ping.is-pending {
+.match-hud__telemetry.is-pending {
   color: #8299a3;
 }
 
@@ -712,16 +740,21 @@
     font-size: 0.48rem;
   }
 
+  .match-hud__presentation {
+    max-width: 112px;
+    font-size: 0.43rem;
+  }
+
   .match-hud__roster {
     top: max(5px, env(safe-area-inset-top));
     left: max(5px, env(safe-area-inset-left));
-    width: clamp(126px, 20vw, 156px);
+    width: clamp(170px, 24vw, 190px);
     padding: 3px;
   }
 
   .match-hud__roster-heading,
   .match-hud__ranking li {
-    grid-template-columns: 4px minmax(0, 1fr) 15px 35px;
+    grid-template-columns: 4px minmax(0, 1fr) 15px 54px;
     gap: 3px;
   }
 
@@ -747,8 +780,9 @@
     font-size: 0.62rem;
   }
 
-  .match-hud__ping {
-    font-size: 0.45rem;
+  .match-hud__telemetry {
+    font-size: 0.38rem;
+    line-height: 1.05;
   }
 
   .match-hud__connection {
@@ -832,6 +866,20 @@
 
   .match-hud__combat {
     width: 224px;
+  }
+
+  .match-hud__roster {
+    width: 170px;
+  }
+
+  .match-hud__ranking li {
+    min-height: 15px;
+    padding-block: 0;
+  }
+
+  .match-hud__telemetry {
+    gap: 0;
+    font-size: 0.36rem;
   }
 }
 

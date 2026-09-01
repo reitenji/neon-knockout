@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { buildAttackCapsule, capsuleIntersectsCircle, capsulesIntersect } from './geometry.js';
+import {
+  buildAttackCapsule,
+  capsuleIntersectsCircle,
+  capsulesIntersect,
+  nearestCircleBoundaryPointToCapsule
+} from './geometry.js';
 import { profileForAttack, sampleWeaponPoint } from './profiles.js';
 
 describe('shared combat geometry', () => {
@@ -58,5 +63,33 @@ describe('shared combat geometry', () => {
       { from: { x: 3, y: 4 }, to: { x: 3, y: 4 }, radius: 2 },
       { center: { x: 6.5, y: 4 }, radius: 1.5 },
     )).toBe(true);
+  });
+
+  it('returns the hurt-circle boundary point nearest the swept capsule axis', () => {
+    expect(nearestCircleBoundaryPointToCapsule(
+      { from: { x: 0, y: 0 }, to: { x: 10, y: 0 }, radius: 2 },
+      { center: { x: 5, y: 10 }, radius: 4 }
+    )).toEqual({ x: 5, y: 6 });
+  });
+
+  it('uses a deterministic boundary fallback when the capsule axis crosses the circle center', () => {
+    expect(nearestCircleBoundaryPointToCapsule(
+      { from: { x: 0, y: 0 }, to: { x: 10, y: 0 }, radius: 2 },
+      { center: { x: 5, y: 0 }, radius: 4 }
+    )).toEqual({ x: 1, y: 0 });
+  });
+
+  it('uses the nearest boundary point when the circle center sits on a segment endpoint', () => {
+    expect(nearestCircleBoundaryPointToCapsule(
+      { from: { x: 5, y: 0 }, to: { x: 10, y: 0 }, radius: 2 },
+      { center: { x: 5, y: 0 }, radius: 4 }
+    )).toEqual({ x: 9, y: 0 });
+  });
+
+  it('uses a deterministic positive-x boundary point for a degenerate centered capsule', () => {
+    expect(nearestCircleBoundaryPointToCapsule(
+      { from: { x: 5, y: 7 }, to: { x: 5, y: 7 }, radius: 2 },
+      { center: { x: 5, y: 7 }, radius: 4 }
+    )).toEqual({ x: 9, y: 7 });
   });
 });

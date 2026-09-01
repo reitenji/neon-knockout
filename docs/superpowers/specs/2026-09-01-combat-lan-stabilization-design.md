@@ -1,6 +1,6 @@
 # Neon Knockout Combat and LAN Stabilization
 
-**Status:** Approved
+**Status:** Stage A implemented; representative multi-device LAN A/B pending
 **Date:** 2026-09-01
 **Scope:** Existing Knockout FFA mode and its direct host-to-guest LAN runtime
 
@@ -22,14 +22,21 @@ Several ring-outs in one moment must not allocate an unbounded collection of
 text, shape, sound, camera, and tween objects. Reusable presentation resources
 and same-frame coalescing keep the effect readable without a visible hitch.
 
-The game keeps its direct, host-authoritative Socket.IO topology. It does not
-migrate to WebRTC in this package. The server advances rooms at 60 Hz while
-snapshots remain 30 Hz. Remote interpolation adapts between 35 and 70 ms based
-on recent snapshot arrival jitter. The compact player roster reports the active
-transport plus median round-trip time, current round-trip time, and jitter without
-hiding raw spikes. A healthy foreground client on the same router should normally
-show a median of 20 ms or less, but the UI must not claim an absolute Wi-Fi
-guarantee.
+Stage A keeps the direct, host-authoritative Socket.IO topology. The server
+advances rooms and publishes snapshots at 60 Hz. Remote interpolation adapts
+between 16 and 40 ms based on recent snapshot arrival jitter. The compact player
+roster reports each opponent's current `Ping` and median `RTT`, while every player
+sees their own presentation Delay and the number of unacknowledged local input
+frames replayed during the latest authoritative reconciliation. Transport and
+jitter remain in the authoritative network snapshot for diagnostics. Raw spikes
+remain visible and the worse of current/median latency controls the warning tier. A healthy
+foreground client on the same router should normally show a median of 20 ms or
+less, but the UI must not claim an absolute Wi-Fi guarantee.
+
+Stage B is conditional: only a post-Stage-A LAN A/B report that still identifies
+WebSocket/TCP queueing as the load-bearing delay can open a separately approved
+WebRTC data-channel implementation. Socket.IO remains available for signaling and
+recovery in that future design; this Stage A package does not pre-empt the result.
 
 ## Boundaries
 
@@ -40,8 +47,8 @@ devices that cannot establish WebSocket; the roster labels that fallback rather
 than silently presenting it as equivalent.
 
 No WebRTC signaling, ICE, STUN, TURN, peer mesh, cloud service, new game mode,
-new combat button, or balance system is added. The visual identity, chassis art,
-arena layout, and control map remain intact.
+new combat button, or balance system is added in Stage A. The visual identity,
+chassis art, arena layout, and control map remain intact.
 
 ## Acceptance
 
@@ -51,11 +58,13 @@ still creates one Neon Pulse. Presentation tests must prove that a local predict
 attack produces a non-degenerate shared-geometry sweep before the delayed
 authoritative snapshot and that hit events use a geometry-derived contact point.
 Effect tests must prove repeated and simultaneous ring-outs reuse bounded visual
-and audio resources. Network tests must prove 60 Hz scheduling, bounded adaptive
-interpolation, rolling median/jitter calculation, and explicit WebSocket/polling
-reporting.
+and audio resources. The browser burst must preserve a Pulse created through real
+match input while producing four real hits and boundary knockouts. Network tests
+must prove 60 Hz scheduling and snapshot publication, 16–40 ms bounded adaptive
+interpolation, rolling median/jitter calculation, explicit WebSocket/polling
+reporting, and publication of opponent Ping/RTT plus the local presentation buffer
+and prediction replay-frame count to the HUD.
 
 The focused tests, complete unit/integration suite, load test, lint, typecheck,
 production build, and a live browser match must pass. A live burst scenario must
 show no new long-frame regression when several ring-outs are presented together.
-

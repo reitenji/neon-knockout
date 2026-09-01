@@ -74,7 +74,9 @@ function matchSnapshot(): MatchSnapshot {
   return {
     tick: 180, phase: 'REGULATION', remainingMs: 120_000, platformProgress: 0,
     settings: DEFAULT_ROOM_SETTINGS,
-    scores: { 'p-local': 0 }, pingMs: { 'p-local': null }, players: [matchPlayer()], pulses: [], winnerPlayerId: null, resultReason: null
+    scores: { 'p-local': 0 },
+    network: { 'p-local': { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' } },
+    players: [matchPlayer()], pulses: [], winnerPlayerId: null, resultReason: null
   };
 }
 

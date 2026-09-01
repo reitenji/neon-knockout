@@ -4,9 +4,15 @@ import { networkInterfaces as getNetworkInterfaces } from 'node:os';
 import { resolve } from 'node:path';
 import express from 'express';
 import { Server } from 'socket.io';
+import { GAME } from '../../shared/constants.js';
 import type { GameEvent, MatchSnapshot, SessionWelcome, Vec2 } from '../../shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
-import { RoomManager, type RoomManagerTestHarness, type RoomPublication } from '../rooms/roomManager.js';
+import {
+  RoomManager,
+  type RoomManagerTestHarness,
+  type RoomPublication,
+  type TestCombatScript
+} from '../rooms/roomManager.js';
 import { discoverRuntimeNetworkInfo, type NetworkInterfaces } from '../runtime/lanAddresses.js';
 import { registerSocketHandlers, type GameSocket } from './socketHandlers.js';
 
@@ -18,6 +24,7 @@ export interface GameServer {
     forceKnockout(roomCode: string, attackerId: string, targetId: string): void;
     disconnectPlayer(roomCode: string, playerId: string): void;
     placePlayer(roomCode: string, playerId: string, position: Vec2, facing: Vec2): void;
+    runCombatScript(roomCode: string, script: TestCombatScript): void;
     recentEvents(roomCode: string): readonly GameEvent[];
     matchSnapshot(roomCode: string): MatchSnapshot | null;
   } | null;
@@ -196,7 +203,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
       const current = now();
       rooms.advance(current - lastAdvanceAt);
       lastAdvanceAt = current;
-    }, 1_000 / 30);
+    }, 1_000 / GAME.tickRate);
     return activeAddress;
   };
 
@@ -272,6 +279,10 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
         placePlayer: (roomCode: string, playerId: string, position: Vec2, facing: Vec2): void => {
           if (!roomTestHarness) throw new Error('Test harness was not bound.');
           roomTestHarness.placePlayer(roomCode, playerId, position, facing);
+        },
+        runCombatScript: (roomCode: string, script: TestCombatScript): void => {
+          if (!roomTestHarness) throw new Error('Test harness was not bound.');
+          roomTestHarness.runCombatScript(roomCode, script);
         },
         recentEvents: (roomCode: string): readonly GameEvent[] =>
           structuredClone(testEventHistory?.get(roomCode) ?? []),

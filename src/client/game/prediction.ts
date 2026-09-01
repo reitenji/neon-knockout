@@ -2,10 +2,13 @@ import { ARENA, GAME } from '../../shared/constants.js';
 import { advanceKinematics, normalizeAim, normalizeAxes, type KinematicState } from '../../shared/kinematics.js';
 import type { InputFrame, MatchAction, MatchPlayer, MatchSnapshot, Vec2 } from '../../shared/model.js';
 
-export const INTERPOLATION_DELAY_MS = 70;
+export const MIN_INTERPOLATION_DELAY_MS = 16;
+export const MAX_INTERPOLATION_DELAY_MS = 40;
 export const REMOTE_SNAP_DISTANCE = 180;
 export const LOCAL_CORRECTION_SNAP_DISTANCE = 160;
 const LOCAL_CORRECTION_BLEND = 0.35;
+const INTERVAL_EWMA_ALPHA = 0.2;
+const JITTER_EWMA_ALPHA = 0.25;
 
 export type PlayerPresentation = Readonly<KinematicState & { actionStart: MatchAction | null }>;
 
@@ -262,6 +265,7 @@ export class PredictionBuffer {
   private runtime: PredictionRuntime | null = null;
   private actionStart: MatchAction | null = null;
   private lastPresentedAttackId: number | null = null;
+  private lastRollbackFrames = 0;
 
   constructor(readonly playerId: string) {}
 
@@ -291,6 +295,7 @@ export class PredictionBuffer {
 
     let replay = runtimeOf(authoritativePlayer);
     let replayedAction: MatchAction | null = null;
+    this.lastRollbackFrames = this.pending.length;
     for (const pending of this.pending) {
       const advanced = advanceRuntime(
         replay,
@@ -318,27 +323,41 @@ export class PredictionBuffer {
     return this.pending.map(({ frame }) => frame.seq);
   }
 
+  rollbackFrames(): number {
+    return this.lastRollbackFrames;
+  }
+
   reset(player?: MatchPlayer): void {
     this.pending.length = 0;
     this.runtime = player ? runtimeOf(player) : null;
     this.actionStart = null;
     this.lastPresentedAttackId = null;
+    this.lastRollbackFrames = 0;
   }
 }
 
 export class SnapshotTimeline {
   private readonly samples: TimedSnapshot[] = [];
+  private averageIntervalMs: number | null = null;
+  private jitterMs = 0;
+  private interpolationDelayMs = MIN_INTERPOLATION_DELAY_MS;
+  private lastTargetTimeMs: number | null = null;
 
   push(snapshot: MatchSnapshot, receivedAtMs: number): void {
     const last = this.samples[this.samples.length - 1];
     const timestamp = last ? Math.max(receivedAtMs, last.receivedAtMs) : receivedAtMs;
+    if (last) this.recordArrivalInterval(timestamp - last.receivedAtMs);
     this.samples.push({ snapshot, receivedAtMs: timestamp });
     if (this.samples.length > 8) this.samples.shift();
   }
 
   sample(renderNowMs: number): InterpolationFrame | null {
     if (this.samples.length === 0) return null;
-    const targetTime = renderNowMs - INTERPOLATION_DELAY_MS;
+    const requestedTargetTime = renderNowMs - this.interpolationDelayMs;
+    const targetTime = this.lastTargetTimeMs === null
+      ? requestedTargetTime
+      : Math.max(this.lastTargetTimeMs, requestedTargetTime);
+    this.lastTargetTimeMs = targetTime;
     const first = this.samples[0]!;
     const last = this.samples[this.samples.length - 1]!;
     if (targetTime <= first.receivedAtMs) return { previous: first.snapshot, current: first.snapshot, alpha: 1 };
@@ -359,6 +378,32 @@ export class SnapshotTimeline {
 
   clear(): void {
     this.samples.length = 0;
+    this.averageIntervalMs = null;
+    this.jitterMs = 0;
+    this.interpolationDelayMs = MIN_INTERPOLATION_DELAY_MS;
+    this.lastTargetTimeMs = null;
+  }
+
+  delayMs(): number {
+    return this.interpolationDelayMs;
+  }
+
+  targetTimeMs(): number | null {
+    return this.lastTargetTimeMs;
+  }
+
+  private recordArrivalInterval(intervalMs: number): void {
+    if (this.averageIntervalMs === null) {
+      this.averageIntervalMs = intervalMs;
+      return;
+    }
+    const deviation = Math.abs(intervalMs - this.averageIntervalMs);
+    this.averageIntervalMs += (intervalMs - this.averageIntervalMs) * INTERVAL_EWMA_ALPHA;
+    this.jitterMs += (deviation - this.jitterMs) * JITTER_EWMA_ALPHA;
+    this.interpolationDelayMs = Math.max(
+      MIN_INTERPOLATION_DELAY_MS,
+      Math.min(MAX_INTERPOLATION_DELAY_MS, MIN_INTERPOLATION_DELAY_MS + this.jitterMs)
+    );
   }
 }
 

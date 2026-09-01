@@ -62,6 +62,10 @@ const INTERNAL_ERROR: ServerError = {
 const LATENCY_SAMPLE_INTERVAL_MS = 2_000;
 const LATENCY_IDLE_RECHECK_MS = 200;
 
+function currentTransport(socket: GameSocket): 'websocket' | 'polling' {
+  return socket.conn.transport.name === 'websocket' ? 'websocket' : 'polling';
+}
+
 function domainError(error: DomainError): ServerError {
   return {
     code: error.code,
@@ -153,6 +157,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         if (activeLatencyProbe !== probeId) return;
         activeLatencyProbe = null;
         latencyProbeTimeout = null;
+        rooms.setPing(socket.id, GAME.maxPingMs);
         scheduleLatencySample();
       }, GAME.maxPingMs);
       socket.emit('network:probe', () => {
@@ -213,9 +218,18 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     const establishSession = (welcome: SessionWelcome): void => {
       void socket.join(welcome.roomCode);
       onSession(socket, welcome);
+      rooms.setTransport(socket.id, currentTransport(socket));
       startLatencySampling();
       queueMicrotask(() => socket.emit('session:welcome', welcome));
     };
+
+    socket.conn.on('upgrade', () => {
+      try {
+        rooms.setTransport(socket.id, currentTransport(socket));
+      } catch {
+        // Ignore upgrades before a room session exists or after it was torn down.
+      }
+    });
 
     socket.on('room:create', (payload, callback) => {
       acknowledge(roomCreateSchema, payload, callback, (validated) => rooms.createRoom(socket.id, validated.name), establishSession);

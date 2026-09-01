@@ -8,6 +8,8 @@ class FakeObject {
   scaleY = 1;
   rotation = 0;
   text = '';
+  fixedWidth = 0;
+  fixedHeight = 0;
   destroyed = 0;
 
   constructor(public x = 0, public y = 0, readonly color: number | null = null) {}
@@ -18,6 +20,7 @@ class FakeObject {
   setAlpha(value: number): this { this.alpha = value; return this; }
   setPosition(x: number, y: number): this { this.x = x; this.y = y; return this; }
   setText(value: string): this { this.text = value; return this; }
+  setFixedSize(width: number, height: number): this { this.fixedWidth = width; this.fixedHeight = height; return this; }
   setBlendMode(): this { return this; }
   setDepth(): this { return this; }
   destroy(): void { this.destroyed += 1; }
@@ -53,7 +56,11 @@ function harness() {
       rectangle: (x: number, y: number, _w: number, _h: number, color: number) => addObject('rectangle', x, y, color),
       circle: (x: number, y: number, _radius: number, color: number) => addObject('circle', x, y, color),
       polygon: (x: number, y: number, _points: unknown, color: number) => addObject('polygon', x, y, color),
-      text: (x: number, y: number) => addObject('text', x, y)
+      text: (x: number, y: number, value: string) => {
+        const object = addObject('text', x, y);
+        object.text = value;
+        return object;
+      }
     },
     tweens: {
       add(config: Record<string, unknown>) {
@@ -100,12 +107,22 @@ describe('PhaserImpactAdapter', () => {
     });
   });
 
-  it('coalesces repeated camera nudges that land in the same frame', () => {
+  it('keeps same-frame non-knockout camera nudges separate', () => {
     const stub = harness();
     const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
 
     adapter.nudgeCamera({ x: 1, y: 0 }, 0.75);
     adapter.nudgeCamera({ x: -1, y: 0.5 }, 1);
+
+    expect(stub.tweens).toHaveLength(2);
+  });
+
+  it('coalesces same-frame knockout camera nudges only', () => {
+    const stub = harness();
+    const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+
+    adapter.nudgeKnockoutCamera(10, { x: 1, y: 0 }, 0.75);
+    adapter.nudgeKnockoutCamera(10, { x: -1, y: 0.5 }, 1);
 
     expect(stub.tweens).toHaveLength(1);
   });
@@ -122,6 +139,7 @@ describe('PhaserImpactAdapter', () => {
   it('renders clash, perfect dodge, pulse spawn, and pulse break with distinct bounded palettes', () => {
     const stub = harness();
     const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+    const baseline = stub.objects.length;
 
     adapter.emitClash({ x: 260, y: 360 }, 'HEAVY');
     adapter.emitPerfectDodge({ x: 280, y: 360 });
@@ -133,12 +151,13 @@ describe('PhaserImpactAdapter', () => {
     expect(colors).toContain(0x9ef25b);
     expect(colors).toContain(0x6ee7f2);
     expect(colors).toContain(0xff5fa2);
-    expect(stub.objects.length).toBeLessThanOrEqual(40);
+    expect(stub.objects.length - baseline).toBeLessThanOrEqual(40);
   });
 
   it('renders knockout, score, announcer, and respawn feedback as larger ephemeral layers', () => {
     const stub = harness();
     const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+    const baseline = stub.objects.length;
 
     adapter.emitKnockoutBurst({ x: 300, y: 360 }, 1);
     adapter.emitEdgeStreak({ x: 300, y: 360 }, { x: -1, y: 0 });
@@ -146,14 +165,16 @@ describe('PhaserImpactAdapter', () => {
     adapter.announceKnockout('Ada', 'Bora');
     adapter.emitRespawn('p1', { x: 640, y: 360 });
 
-    expect(stub.objects.filter(({ kind }) => kind === 'circle').length).toBeGreaterThanOrEqual(3);
-    expect(stub.objects.filter(({ kind }) => kind === 'text')).toHaveLength(3);
-    expect(stub.objects.filter(({ kind }) => kind === 'rectangle').length).toBeGreaterThanOrEqual(8);
+    expect(stub.objects.filter(({ kind }) => kind === 'circle').length).toBeGreaterThanOrEqual(16 + 1);
+    expect(stub.objects.filter(({ kind }) => kind === 'text')).toHaveLength(24);
+    expect(stub.objects.filter(({ kind }) => kind === 'rectangle').length).toBeGreaterThanOrEqual(56);
+    expect(stub.objects.length - baseline).toBe(1);
   });
 
-  it('keeps repeated knockout presentations bounded after the reusable pool is saturated', () => {
+  it('keeps three simultaneous knockout presentations readable without overwriting texts', () => {
     const stub = harness();
     const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+    const baseline = stub.objects.length;
 
     for (const [index, x] of [300, 340, 380].entries()) {
       adapter.emitKnockoutBurst({ x, y: 360 }, 1);
@@ -162,10 +183,59 @@ describe('PhaserImpactAdapter', () => {
       adapter.announceKnockout(`Ada ${index + 1}`, `Bora ${index + 1}`);
     }
 
-    expect(stub.objects).toHaveLength(36);
-    expect(stub.objects.filter(({ kind }) => kind === 'text')).toHaveLength(6);
-    expect(stub.objects.filter(({ kind }) => kind === 'circle')).toHaveLength(4);
-    expect(stub.objects.filter(({ kind }) => kind === 'rectangle')).toHaveLength(26);
+    expect(stub.objects).toHaveLength(baseline);
+    expect(stub.objects.filter(({ kind }) => kind === 'text')).toHaveLength(24);
+    expect(stub.objects.filter(({ kind }) => kind === 'circle')).toHaveLength(16);
+    expect(stub.objects.filter(({ kind }) => kind === 'rectangle')).toHaveLength(56);
+    expect(stub.objects.filter(({ kind }) => kind === 'text').slice(0, 9).map(({ object }) => object.text)).toEqual([
+      'RING OUT', '+1', 'Ada 1  >  Bora 1',
+      'RING OUT', '+1', 'Ada 2  >  Bora 2',
+      'RING OUT', '+1', 'Ada 3  >  Bora 3'
+    ]);
+  });
+
+  it('caps simultaneous knockout presentation allocations at the 8-player pool bound', () => {
+    const stub = harness();
+    const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+
+    for (let index = 0; index < 9; index += 1) {
+      adapter.emitKnockoutBurst({ x: 300 + index * 20, y: 360 }, 1);
+      adapter.emitEdgeStreak({ x: 300 + index * 20, y: 360 }, { x: -1, y: 0 });
+      adapter.pulseScore('p1', index + 1);
+      adapter.announceKnockout(`Ada ${index + 1}`, `Bora ${index + 1}`);
+    }
+
+    expect(stub.objects).toHaveLength(96);
+    expect(stub.objects.filter(({ kind }) => kind === 'text')).toHaveLength(24);
+    expect(stub.objects.filter(({ kind }) => kind === 'circle')).toHaveLength(16);
+    expect(stub.objects.filter(({ kind }) => kind === 'rectangle')).toHaveLength(56);
+  });
+
+  it('prewarms the full 8-player knockout pool before gameplay so the first 1-8 knockouts add no new objects', () => {
+    const stub = harness();
+    const adapter = new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+    const prewarmedCount = stub.objects.length;
+
+    expect(prewarmedCount).toBe(96);
+
+    for (let index = 0; index < 8; index += 1) {
+      adapter.emitKnockoutBurst({ x: 300 + index * 20, y: 360 }, 1);
+      adapter.emitEdgeStreak({ x: 300 + index * 20, y: 360 }, { x: -1, y: 0 });
+      adapter.pulseScore('p1', index + 1);
+      adapter.announceKnockout(`Ada ${index + 1}`, `Bora ${index + 1}`);
+    }
+
+    expect(stub.objects).toHaveLength(prewarmedCount);
+  });
+
+  it('prewarms non-empty fixed-size knockout text textures before the first ring-out', () => {
+    const stub = harness();
+    new PhaserImpactAdapter(stub.scene as never, () => stub.view);
+
+    const texts = stub.objects.filter(({ kind }) => kind === 'text').map(({ object }) => object);
+    expect(texts).toHaveLength(24);
+    expect(texts.every(({ text, fixedWidth, fixedHeight }) =>
+      text.length > 0 && fixedWidth > 0 && fixedHeight > 0)).toBe(true);
   });
 
   it('removes live tweens and visuals, restores fighter content, and disposes idempotently', () => {

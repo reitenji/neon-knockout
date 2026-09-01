@@ -2,6 +2,7 @@ import type { Browser } from '@playwright/test';
 import { io, type Socket } from 'socket.io-client';
 import type { Ack, InputFrame, MatchPlayer, ServerError, SessionWelcome } from '../../src/shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../src/shared/protocol.js';
+import { GAME } from '../../src/shared/constants.js';
 import {
   assertNoUnexpectedErrors,
   expect,
@@ -15,10 +16,17 @@ const FRAME_SAMPLES = 181;
 const COMPANION_COUNT = 7;
 const COMPANION_INPUT_MS = 3_800;
 const ACK_TIMEOUT_MS = 2_000;
+const RING_OUT_EFFECT_SAMPLE_FRAMES = 72;
 
 test.use({
   launchOptions: {
-    args: process.platform === 'darwin' ? ['--use-angle=metal'] : [],
+    args: [
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-features=CalculateNativeWinOcclusion',
+      '--disable-renderer-backgrounding',
+      ...(process.platform === 'darwin' ? ['--use-angle=metal'] : [])
+    ],
     headless: process.platform !== 'darwin'
   }
 });
@@ -122,6 +130,56 @@ async function sampleFrameDurations(player: PlayerPage): Promise<number[]> {
   }), FRAME_SAMPLES);
 }
 
+type SampledFrame = Readonly<{
+  index: number;
+  nowMs: number;
+  durationMs: number;
+  visibilityState: string;
+  hasFocus: boolean;
+}>;
+
+async function sampleFrameTimeline(player: PlayerPage): Promise<readonly SampledFrame[]> {
+  return player.page.evaluate((sampleCount) => new Promise<SampledFrame[]>((resolve) => {
+    const frames: SampledFrame[] = [];
+    let previous = performance.now();
+    const sample = (now: number): void => {
+      frames.push({
+        index: frames.length,
+        nowMs: now,
+        durationMs: now - previous,
+        visibilityState: document.visibilityState,
+        hasFocus: document.hasFocus()
+      });
+      previous = now;
+      if (frames.length >= sampleCount) resolve(frames.slice(1));
+      else requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }), FRAME_SAMPLES);
+}
+
+async function markAfterAnimationFrames(
+  player: PlayerPage,
+  frameCount: number
+): Promise<Readonly<{ nowMs: number; visibilityState: string; hasFocus: boolean }>> {
+  return player.page.evaluate((framesToWait) => new Promise((resolve) => {
+    let remaining = framesToWait;
+    const sample = (): void => {
+      remaining -= 1;
+      if (remaining > 0) {
+        requestAnimationFrame(sample);
+        return;
+      }
+      resolve({
+        nowMs: performance.now(),
+        visibilityState: document.visibilityState,
+        hasFocus: document.hasFocus()
+      });
+    };
+    requestAnimationFrame(sample);
+  }), frameCount);
+}
+
 function authoritativePlayer(game: E2eGame, code: string, playerId: string): MatchPlayer {
   const player = game.harness.matchSnapshot(code)?.players.find((candidate) => candidate.playerId === playerId);
   if (!player) throw new Error(`Missing performance player ${playerId}.`);
@@ -184,11 +242,85 @@ async function retainMeasuredAim(game: E2eGame, code: string, measured: PlayerPa
     .toBeGreaterThan(releaseSequence);
 }
 
+async function spawnLivePulseThroughMatchInput(
+  game: E2eGame,
+  code: string,
+  client: GameClient,
+  playerId: string
+): Promise<NonNullable<ReturnType<E2eGame['harness']['matchSnapshot']>>['pulses'][number]> {
+  const heldSequence = authoritativePlayer(game, code, playerId).lastProcessedInputSeq + 1;
+  client.emit('match:input', {
+    seq: heldSequence,
+    moveX: 0,
+    moveY: 0,
+    aimX: 1,
+    aimY: 0,
+    quick: false,
+    heavy: true,
+    dash: false
+  });
+  await expect.poll(() => authoritativePlayer(game, code, playerId).action.chargeMs)
+    .toBe(GAME.heavyMaxChargeMs);
+
+  client.emit('match:input', {
+    seq: heldSequence + 1,
+    moveX: 0,
+    moveY: 0,
+    aimX: 1,
+    aimY: 0,
+    quick: false,
+    heavy: false,
+    dash: false
+  });
+  await expect.poll(() => game.harness.matchSnapshot(code)?.pulses.find(
+    (pulse) => pulse.ownerPlayerId === playerId
+  ) ?? null, { timeout: ACK_TIMEOUT_MS, intervals: [10] }).not.toBeNull();
+
+  const pulse = game.harness.matchSnapshot(code)?.pulses.find((candidate) => candidate.ownerPlayerId === playerId);
+  if (!pulse) throw new Error('Production match input did not leave a live pulse.');
+  return pulse;
+}
+
 function frameMetrics(durations: readonly number[]): Readonly<{ medianFps: number; p95FrameMs: number }> {
   const sorted = [...durations].sort((left, right) => left - right);
   const median = sorted[Math.floor(sorted.length / 2)]!;
   const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]!;
   return { medianFps: 1_000 / median, p95FrameMs: p95 };
+}
+
+function burstFrameMetrics(frames: readonly SampledFrame[]): Readonly<{
+  maxFrameMs: number;
+  maxFrameIndex: number;
+  p95FrameMs: number;
+  medianFps: number;
+  surroundingFrames: readonly SampledFrame[];
+}> {
+  const durations = frames.map((frame) => frame.durationMs);
+  const { medianFps, p95FrameMs } = frameMetrics(durations);
+  let maxFrameIndex = 0;
+  for (let index = 1; index < frames.length; index += 1) {
+    if (frames[index]!.durationMs > frames[maxFrameIndex]!.durationMs) maxFrameIndex = index;
+  }
+  const windowStart = Math.max(0, maxFrameIndex - 3);
+  const windowEnd = Math.min(frames.length, maxFrameIndex + 4);
+  return {
+    maxFrameMs: frames[maxFrameIndex]?.durationMs ?? 0,
+    maxFrameIndex,
+    p95FrameMs,
+    medianFps,
+    surroundingFrames: frames.slice(windowStart, windowEnd)
+  };
+}
+
+function framesOverlappingInterval(
+  frames: readonly SampledFrame[],
+  intervalStartedAtMs: number,
+  intervalFinishedAtMs: number
+): readonly SampledFrame[] {
+  return frames.filter((frame) => {
+    const frameStartedAtMs = frame.nowMs - frame.durationMs;
+    return frameStartedAtMs < intervalFinishedAtMs && frame.nowMs > intervalStartedAtMs;
+  });
 }
 
 test('holds one LAN viewport frame budget while eight authoritative players fight', async ({ browser, game }, testInfo) => {
@@ -247,6 +379,204 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     console.info(`PERFORMANCE_METRICS ${JSON.stringify(metrics)}`);
     expect(medianFps).toBeGreaterThanOrEqual(58);
     expect(p95FrameMs).toBeLessThan(25);
+    expect(companionErrors).toEqual([]);
+    await assertNoUnexpectedErrors(game, match.measured);
+  } finally {
+    for (const companion of match.companions) companion.disconnect();
+    await match.measured.context.close();
+  }
+}, 60_000);
+
+test('holds browser frame time below 50 ms through four simultaneous hit-driven ring-out effects', async ({ browser, game }, testInfo) => {
+  const companionErrors: ServerError[] = [];
+  const match = await createEightPlayerMatch(browser, game, companionErrors);
+  try {
+    const initial = game.harness.matchSnapshot(match.code);
+    if (!initial) throw new Error('Eight-player ring-out burst snapshot was not available.');
+    const attackerA = initial.players.find((player) => player.name === 'Player 1')?.playerId;
+    if (!attackerA) throw new Error('Measured browser attacker was missing.');
+    const companionIds = match.welcomes.map((welcome) => welcome.playerId);
+    if (companionIds.length !== 7) {
+      throw new Error(`Expected 7 companion players, received ${match.welcomes.length}.`);
+    }
+    await expect(match.measured.page.getByRole('list', { name: 'Oyuncu sıralaması' }).getByRole('listitem')).toHaveCount(8);
+
+    const eventMarker = game.harness.recentEvents(match.code).at(-1)?.eventId ?? 0;
+    const pulseOwnerId = companionIds[0]!;
+    const safePositions = [
+      { x: 360, y: 180 },
+      { x: 360, y: 540 },
+      { x: 520, y: 180 },
+      { x: 520, y: 540 },
+      { x: 760, y: 180 },
+      { x: 760, y: 540 },
+      { x: 920, y: 180 }
+    ] as const;
+    game.harness.placePlayer(match.code, pulseOwnerId, { x: 360, y: 360 }, { x: 1, y: 0 });
+    [attackerA, ...companionIds.filter((playerId) => playerId !== pulseOwnerId)].forEach((playerId, index) => {
+      game.harness.placePlayer(match.code, playerId, safePositions[index]!, { x: 1, y: 0 });
+    });
+    const livePulse = await spawnLivePulseThroughMatchInput(
+      game,
+      match.code,
+      match.companions[0]!,
+      pulseOwnerId
+    );
+    expect(livePulse.remainingMs).toBeGreaterThan(250);
+
+    const samples = sampleFrameTimeline(match.measured);
+    const pairs = [
+      { attackerId: attackerA, targetId: companionIds[0]!, attacker: { x: 1139, y: 360 }, target: { x: 1198, y: 360 }, facing: { x: 1, y: 0 } },
+      { attackerId: companionIds[1]!, targetId: companionIds[2]!, attacker: { x: 141, y: 360 }, target: { x: 82, y: 360 }, facing: { x: -1, y: 0 } },
+      { attackerId: companionIds[3]!, targetId: companionIds[4]!, attacker: { x: 640, y: 91 }, target: { x: 640, y: 32 }, facing: { x: 0, y: -1 } },
+      { attackerId: companionIds[5]!, targetId: companionIds[6]!, attacker: { x: 640, y: 629 }, target: { x: 640, y: 688 }, facing: { x: 0, y: 1 } }
+    ] as const;
+    const targetIds = new Set(pairs.map((pair) => pair.targetId));
+    const combatants = pairs.flatMap((pair) => [
+      { playerId: pair.attackerId, position: pair.attacker, facing: pair.facing, overload: 0, attacking: true },
+      { playerId: pair.targetId, position: pair.target, facing: pair.facing, overload: GAME.maxOverload, attacking: false }
+    ]);
+    const burstDispatchStarted = await match.measured.page.evaluate(() => ({
+      nowMs: performance.now(),
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus()
+    }));
+
+    game.harness.runCombatScript(match.code, {
+      preservePulses: true,
+      players: combatants.map(({ playerId, position, facing, overload }) => ({
+        playerId,
+        position,
+        facing,
+        overload
+      })),
+      steps: [
+        {
+          elapsedMs: 0,
+          inputs: combatants.map((player) => ({
+            playerId: player.playerId,
+            input: { seq: 0, moveX: 0, moveY: 0, aimX: player.facing.x, aimY: player.facing.y, quick: player.attacking, heavy: false, dash: false }
+          }))
+        },
+        {
+          elapsedMs: 70,
+          inputs: combatants.map((player) => ({
+            playerId: player.playerId,
+            input: { seq: 1, moveX: 0, moveY: 0, aimX: player.facing.x, aimY: player.facing.y, quick: false, heavy: false, dash: false }
+          }))
+        },
+        { elapsedMs: 1_000 / GAME.tickRate },
+        { elapsedMs: 1_000 / GAME.tickRate },
+        { elapsedMs: 1_000 / GAME.tickRate }
+      ]
+    });
+    const pulseAfterBurst = game.harness.matchSnapshot(match.code)?.pulses.find(
+      (pulse) => pulse.projectileId === livePulse.projectileId
+    );
+    expect(pulseAfterBurst).toMatchObject({
+      projectileId: livePulse.projectileId,
+      ownerPlayerId: pulseOwnerId,
+      originatingAttackId: livePulse.originatingAttackId
+    });
+    expect(pulseAfterBurst?.remainingMs).toBeGreaterThan(0);
+    expect(pulseAfterBurst?.remainingMs).toBeLessThan(livePulse.remainingMs);
+    const burstDispatchFinished = await match.measured.page.evaluate(() => ({
+      nowMs: performance.now(),
+      visibilityState: document.visibilityState,
+      hasFocus: document.hasFocus()
+    }));
+
+    const attackerNames = pairs.map((pair) => initial.players.find((player) => player.playerId === pair.attackerId)?.name);
+    if (attackerNames.some((name) => !name)) throw new Error('Ring-out attacker name was missing.');
+    for (const name of attackerNames) await expect(match.measured.page.getByLabel(`${name} skoru: 1 knockout`)).toBeVisible();
+    await expect(match.measured.page.locator('.game-stage canvas')).toBeVisible();
+    const ringOutEffectWindowCompleted = await markAfterAnimationFrames(
+      match.measured,
+      RING_OUT_EFFECT_SAMPLE_FRAMES
+    );
+
+    await expect.poll(() => {
+      const events = game.harness.recentEvents(match.code).filter((event) => event.eventId > eventMarker);
+      return events.filter((event) => event.type === 'KNOCKOUT' && targetIds.has(event.targetId)).length;
+    }, { timeout: 12_000 }).toBe(4);
+
+    const frames = await samples;
+    const events = game.harness.recentEvents(match.code).filter((event) => event.eventId > eventMarker);
+    const hits = events.filter((event): event is Extract<(typeof events)[number], { type: 'HIT' }> =>
+      event.type === 'HIT' && targetIds.has(event.targetId));
+    const knockouts = events.filter((event): event is Extract<(typeof events)[number], { type: 'KNOCKOUT' }> =>
+      event.type === 'KNOCKOUT' && targetIds.has(event.targetId));
+    const hitTick = hits[0]?.tick ?? null;
+    const knockoutTick = knockouts[0]?.tick ?? null;
+    const pulseSpawn = events.find((event): event is Extract<(typeof events)[number], { type: 'PULSE_SPAWN' }> =>
+      event.type === 'PULSE_SPAWN' && event.projectileId === livePulse.projectileId);
+    const globalMetrics = burstFrameMetrics(frames);
+    const correlatedFrames = framesOverlappingInterval(
+      frames,
+      burstDispatchStarted.nowMs,
+      ringOutEffectWindowCompleted.nowMs
+    );
+    expect(correlatedFrames).not.toHaveLength(0);
+    const correlatedMetrics = burstFrameMetrics(correlatedFrames);
+
+    const metrics = {
+      browserContexts: 1,
+      authoritativePlayers: 8,
+      preExistingPulseId: livePulse.projectileId,
+      simultaneousHits: hits.length,
+      sameTickRingOuts: knockouts.length,
+      hitTick,
+      knockoutTick,
+      burstDispatchStarted,
+      burstDispatchFinished,
+      ringOutEffectWindowCompleted,
+      ringOutEffectSampleFrames: RING_OUT_EFFECT_SAMPLE_FRAMES,
+      sampledFrames: frames.length,
+      correlatedFrames: correlatedFrames.length,
+      correlatedMaxFrameMs: Number(correlatedMetrics.maxFrameMs.toFixed(2)),
+      correlatedMaxFrameIndex: correlatedMetrics.maxFrameIndex,
+      correlatedSurroundingFrames: correlatedMetrics.surroundingFrames,
+      globalMaxFrameMs: Number(globalMetrics.maxFrameMs.toFixed(2)),
+      globalMaxFrameIndex: globalMetrics.maxFrameIndex,
+      globalP95FrameMs: Number(globalMetrics.p95FrameMs.toFixed(2)),
+      globalMedianFps: Number(globalMetrics.medianFps.toFixed(2)),
+      globalSurroundingFrames: globalMetrics.surroundingFrames
+    };
+    testInfo.annotations.push({ type: 'performance', description: JSON.stringify(metrics) });
+    console.info(`RING_OUT_BURST_METRICS ${JSON.stringify(metrics)}`);
+
+    expect(hits).toHaveLength(4);
+    expect(pulseSpawn).toMatchObject({
+      ownerPlayerId: pulseOwnerId,
+      projectileId: livePulse.projectileId,
+      originatingAttackId: livePulse.originatingAttackId
+    });
+    expect(pulseSpawn?.tick).toBeLessThan(hitTick ?? Number.NEGATIVE_INFINITY);
+    expect(new Set(hits.map((event) => event.tick))).toEqual(new Set([hitTick]));
+    expect(hits.every((event) =>
+      event.attack === 'QUICK_1' && event.resultingOverload === GAME.maxOverload
+    )).toBe(true);
+    expect(new Set(hits.map((event) => event.attackerId))).toEqual(new Set(pairs.map((pair) => pair.attackerId)));
+    expect(new Set(hits.map((event) => event.targetId))).toEqual(new Set(pairs.map((pair) => pair.targetId)));
+    expect(knockouts).toHaveLength(4);
+    expect(events.filter((event) => event.type === 'KNOCKOUT')).toHaveLength(4);
+    expect(new Set(knockouts.map((event) => event.tick))).toEqual(new Set([knockoutTick]));
+    expect(knockoutTick).toBeGreaterThan(hitTick ?? Number.POSITIVE_INFINITY);
+    expect(new Set(knockouts.map((event) => event.attackerId))).toEqual(new Set(pairs.map((pair) => pair.attackerId)));
+    expect(new Set(knockouts.map((event) => event.targetId))).toEqual(new Set(pairs.map((pair) => pair.targetId)));
+    expect(game.harness.matchSnapshot(match.code)?.scores).toMatchObject(
+      Object.fromEntries(pairs.map((pair) => [pair.attackerId, 1]))
+    );
+    expect(events.some((event) => event.type === 'RESULT')).toBe(false);
+    expect(burstDispatchStarted.visibilityState).toBe('visible');
+    expect(burstDispatchStarted.hasFocus).toBe(true);
+    expect(burstDispatchFinished.visibilityState).toBe('visible');
+    expect(burstDispatchFinished.hasFocus).toBe(true);
+    expect(ringOutEffectWindowCompleted.visibilityState).toBe('visible');
+    expect(ringOutEffectWindowCompleted.hasFocus).toBe(true);
+    expect(ringOutEffectWindowCompleted.nowMs).toBeGreaterThanOrEqual(burstDispatchStarted.nowMs);
+    expect(correlatedFrames.every((frame) => frame.visibilityState === 'visible' && frame.hasFocus)).toBe(true);
+    expect(correlatedMetrics.maxFrameMs).toBeLessThan(50);
     expect(companionErrors).toEqual([]);
     await assertNoUnexpectedErrors(game, match.measured);
   } finally {

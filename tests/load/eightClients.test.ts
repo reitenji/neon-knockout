@@ -155,7 +155,7 @@ describe('eight-client delivery load', () => {
     expect(welcomes).toHaveLength(CLIENT_COUNT);
     expect(errors).toEqual([]);
     expect(serverErrors).toEqual([]);
-    expect(snapshotCounts).toSatisfy((counts: number[]) => counts.every((count) => count >= 250));
+    expect(snapshotCounts).toSatisfy((counts: number[]) => counts.every((count) => count >= 500));
     console.info(`LOAD_SNAPSHOT_COUNTS ${JSON.stringify(snapshotCounts)}`);
 
     const runningServer = server;
