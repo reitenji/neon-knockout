@@ -4,6 +4,10 @@ import type { z } from 'zod';
 import type { Ack, ServerError, SessionWelcome } from '../../shared/model.js';
 import { GAME } from '../../shared/constants.js';
 import {
+  rtcActivationRequestSchema,
+  rtcNegotiationRequestSchema
+} from '../../shared/gameplayTransport.js';
+import {
   lobbyChassisSchema,
   lobbyReadySchema,
   lobbySettingsSchema,
@@ -14,12 +18,14 @@ import {
   roomJoinSchema,
   roomLeaveSchema,
   sessionResumeSchema,
+  transportFallbackSchema,
   type ClientToServerEvents,
   type ServerToClientEvents
 } from '../../shared/protocol.js';
 import { DomainError } from '../rooms/domainError.js';
 import type { RoomManager } from '../rooms/roomManager.js';
 import { createMatchInputIngress, type MatchInputIngress } from './matchInputIngress.js';
+import type { GameplayTransportHub } from './gameplayTransport/GameplayTransportHub.js';
 
 export type GameIo = Server<ClientToServerEvents, ServerToClientEvents>;
 export type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -31,6 +37,7 @@ type SocketHandlerOptions = Readonly<{
   rooms: RoomManager;
   now: () => number;
   logger: ErrorLogger;
+  transportHub: GameplayTransportHub;
   onSession: (socket: GameSocket, welcome: SessionWelcome, inputIngress: MatchInputIngress) => void;
   onLeave: (socket: GameSocket, roomCode: string) => void;
   onDisconnect: (socket: GameSocket) => void;
@@ -58,6 +65,16 @@ const INTERNAL_ERROR: ServerError = {
   message: 'Beklenmeyen bir sunucu hatası oluştu.',
   recoverable: true
 };
+
+const TRANSPORT_UNAVAILABLE: ServerError = {
+  code: 'TRANSPORT_UNAVAILABLE',
+  message: 'WebRTC oyun taşıması şu anda kullanılamıyor.',
+  recoverable: true
+};
+
+class SafeSocketActionError {
+  constructor(readonly error: ServerError) {}
+}
 
 const LATENCY_SAMPLE_INTERVAL_MS = 2_000;
 const LATENCY_IDLE_RECHECK_MS = 200;
@@ -106,7 +123,7 @@ class SocketRateLimiter {
 }
 
 export function registerSocketHandlers(options: SocketHandlerOptions): void {
-  const { io, rooms, now, logger, onSession, onLeave, onDisconnect } = options;
+  const { io, rooms, now, logger, transportHub, onSession, onLeave, onDisconnect } = options;
 
   io.on('connection', (socket) => {
     const limiter = new SocketRateLimiter(now);
@@ -116,6 +133,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     let latencyProbeTimeout: ReturnType<typeof setTimeout> | null = null;
     let activeLatencyProbe: number | null = null;
     let nextLatencyProbe = 0;
+    let activePlayerId: string | null = null;
 
     const stopLatencySampling = (): void => {
       latencySampling = false;
@@ -145,7 +163,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         if (activeLatencyProbe !== probeId) return;
         activeLatencyProbe = null;
         latencyProbeTimeout = null;
-        rooms.setPing(socket.id, GAME.maxPingMs);
+        rooms.setPing(socket.id, GAME.maxPingMs, currentTransport(socket), now());
         scheduleLatencySample();
       }, GAME.maxPingMs);
       socket.emit('network:probe', () => {
@@ -153,9 +171,20 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         if (latencyProbeTimeout) clearTimeout(latencyProbeTimeout);
         latencyProbeTimeout = null;
         activeLatencyProbe = null;
-        rooms.setPing(socket.id, now() - startedAt);
+        const sampledAt = now();
+        rooms.setPing(socket.id, sampledAt - startedAt, currentTransport(socket), sampledAt);
         scheduleLatencySample();
       });
+    };
+
+    const sampleLatencyImmediately = (): void => {
+      if (!latencySampling) return;
+      activeLatencyProbe = null;
+      if (latencyTimer) clearTimeout(latencyTimer);
+      if (latencyProbeTimeout) clearTimeout(latencyProbeTimeout);
+      latencyTimer = null;
+      latencyProbeTimeout = null;
+      sampleLatency();
     };
 
     const startLatencySampling = (): void => {
@@ -197,23 +226,87 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
           callback({ ok: false, error: domainError(error) });
           return;
         }
+        if (error instanceof SafeSocketActionError) {
+          callback({ ok: false, error: error.error });
+          return;
+        }
         const correlationId = randomUUID();
         logger.error(`[${correlationId}] Unexpected Socket.IO action failure`, error);
         callback({ ok: false, error: INTERNAL_ERROR });
       }
     };
 
+    const acknowledgeAsync = <TPayload, TData>(
+      schema: z.ZodType<TPayload>,
+      payload: unknown,
+      callback: ((acknowledgement: Ack<TData>) => void) | undefined,
+      action: (validated: TPayload) => Promise<TData>
+    ): void => {
+      if (typeof callback !== 'function') {
+        socket.emit('server:error', INVALID_PAYLOAD);
+        return;
+      }
+      if (!limiter.consumeAction()) {
+        emitRateLimit();
+        callback({ ok: false, error: RATE_LIMITED });
+        return;
+      }
+      const parsed = schema.safeParse(payload);
+      if (!parsed.success) {
+        callback({ ok: false, error: INVALID_PAYLOAD });
+        return;
+      }
+      void action(parsed.data).then(
+        (data) => callback({ ok: true, data }),
+        (error: unknown) => {
+          if (error instanceof DomainError) {
+            callback({ ok: false, error: domainError(error) });
+            return;
+          }
+          if (error instanceof SafeSocketActionError) {
+            callback({ ok: false, error: error.error });
+            return;
+          }
+          const correlationId = randomUUID();
+          logger.error(`[${correlationId}] Unexpected Socket.IO async action failure`, error);
+          callback({ ok: false, error: INTERNAL_ERROR });
+        }
+      );
+    };
+
     const establishSession = (welcome: SessionWelcome): void => {
       void socket.join(welcome.roomCode);
       inputIngress.reset();
+      activePlayerId = welcome.playerId;
+      transportHub.attachSession({
+        socketId: socket.id,
+        playerId: welcome.playerId,
+        roomCode: welcome.roomCode,
+        inputIngress,
+        socketMode: () => currentTransport(socket),
+        emitMode: (notice) => socket.emit('transport:mode', structuredClone(notice)),
+        emitStarted: (publication) => socket.emit('match:started', structuredClone(publication)),
+        emitSnapshot: (publication) => socket.emit('match:snapshot', structuredClone(publication)),
+        emitEvent: (publication) => socket.emit('match:event', structuredClone(publication)),
+        emitError: (error) => socket.emit('server:error', structuredClone(error)),
+        probeFallbackPing: sampleLatencyImmediately,
+        setNetworkMode: (mode) => rooms.setTransport(socket.id, mode),
+        setNetworkSample: (medianMs, sampledAt) => rooms.setPing(socket.id, medianMs, 'webrtc', sampledAt),
+        clearNetworkSample: () => rooms.clearPing(socket.id)
+      });
       onSession(socket, welcome, inputIngress);
       rooms.setTransport(socket.id, currentTransport(socket));
       startLatencySampling();
-      queueMicrotask(() => socket.emit('session:welcome', welcome));
+      queueMicrotask(() => {
+        socket.emit('session:welcome', welcome);
+        const publication = rooms.currentMatchPublication(socket.id);
+        if (publication) transportHub.synchronizeSession(socket.id, publication);
+      });
     };
 
     socket.conn.on('upgrade', () => {
       try {
+        if (activePlayerId && transportHub.modeForPlayer(activePlayerId) === 'webrtc') return;
         rooms.setTransport(socket.id, currentTransport(socket));
       } catch {
         // Ignore upgrades before a room session exists or after it was torn down.
@@ -241,6 +334,29 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         establishSession
       );
     });
+    socket.on('transport:negotiate', (payload, callback) => {
+      acknowledgeAsync(
+        rtcNegotiationRequestSchema,
+        payload,
+        callback,
+        (validated) => transportHub.negotiate(socket.id, validated)
+      );
+    });
+    socket.on('transport:activate', (payload, callback) => {
+      acknowledge(rtcActivationRequestSchema, payload, callback, (validated) => {
+        if (!transportHub.activate(socket.id, validated)) {
+          throw new SafeSocketActionError(TRANSPORT_UNAVAILABLE);
+        }
+        return { generationId: validated.generationId, mode: 'webrtc' } as const;
+      });
+    });
+    socket.on('transport:fallback', (payload) => {
+      if (!transportFallbackSchema.safeParse(payload).success) {
+        socket.emit('server:error', INVALID_PAYLOAD);
+        return;
+      }
+      transportHub.fallback(socket.id);
+    });
     socket.on('lobby:chassis', (payload, callback) => {
       acknowledge(lobbyChassisSchema, payload, callback, (validated) => {
         rooms.setChassis(socket.id, validated.chassis);
@@ -263,6 +379,8 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       acknowledge(roomLeaveSchema, payload, callback, () => {
         const roomCode = rooms.leaveRoom(socket.id);
         stopLatencySampling();
+        activePlayerId = null;
+        void transportHub.detachSession(socket.id);
         void socket.leave(roomCode);
         onLeave(socket, roomCode);
         return null;
@@ -293,6 +411,8 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     socket.on('disconnect', () => {
       stopLatencySampling();
       rooms.disconnect(socket.id);
+      activePlayerId = null;
+      void transportHub.detachSession(socket.id);
       onDisconnect(socket);
     });
   });

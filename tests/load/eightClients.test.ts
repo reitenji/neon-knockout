@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { afterEach, describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
+import type { MatchSnapshotPublication } from '../../src/shared/gameplayTransport.js';
 import type { InputFrame, MatchSnapshot, ServerError, SessionWelcome } from '../../src/shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../src/shared/protocol.js';
 import { createGameServer, type GameServer } from '../../src/server/network/createGameServer.js';
@@ -29,7 +30,8 @@ function emitAck<T>(socket: GameClient, event: AckEvent, payload: unknown): Prom
 
 function waitForSnapshot(socket: GameClient, debug: () => unknown): Promise<MatchSnapshot> {
   return new Promise((resolve, reject) => {
-    const listener = (snapshot: MatchSnapshot): void => {
+    const listener = (publication: MatchSnapshotPublication): void => {
+      const { snapshot } = publication;
       if (snapshot.phase !== 'REGULATION') return;
       clearTimeout(timer);
       socket.off('match:snapshot', listener);

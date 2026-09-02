@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import express from 'express';
 import { Server } from 'socket.io';
 import { GAME } from '../../shared/constants.js';
+import type { GameplayTransportMode } from '../../shared/gameplayTransport.js';
 import type { GameEvent, MatchSnapshot, SessionWelcome, Vec2 } from '../../shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
 import {
@@ -15,7 +16,12 @@ import {
 } from '../rooms/roomManager.js';
 import { discoverRuntimeNetworkInfo, type NetworkInterfaces } from '../runtime/lanAddresses.js';
 import { registerSocketHandlers, type GameSocket } from './socketHandlers.js';
-import type { MatchInputIngress } from './matchInputIngress.js';
+import { GameplayTransportHub } from './gameplayTransport/GameplayTransportHub.js';
+import type { ServerPeerFactory } from './gameplayTransport/ServerPeer.js';
+import {
+  createWeriftServerPeer,
+  readWebRtcUdpPortRange
+} from './gameplayTransport/WeriftServerPeer.js';
 
 export interface GameServer {
   start(): Promise<{ port: number; origin: string }>;
@@ -28,6 +34,8 @@ export interface GameServer {
     runCombatScript(roomCode: string, script: TestCombatScript): void;
     recentEvents(roomCode: string): readonly GameEvent[];
     matchSnapshot(roomCode: string): MatchSnapshot | null;
+    transportMode(playerId: string): GameplayTransportMode | null;
+    dropWebRtc(playerId: string): Promise<void>;
   } | null;
 }
 
@@ -38,6 +46,10 @@ export type CreateGameServerOptions = Readonly<{
   clientDirectory?: string | false;
   logger?: Pick<Console, 'error'>;
   networkInterfaces?: () => NetworkInterfaces;
+  testGameplayTransport?: Readonly<{
+    peerFactory: ServerPeerFactory;
+    udpPortRange: readonly [number, number];
+  }>;
 }>;
 
 type PlayerConnection = Readonly<{ roomCode: string; socketId: string }>;
@@ -73,6 +85,12 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
   const snapshots = new Map<string, MatchSnapshot>();
   const testEventHistory = options.enableTestHarness ? new Map<string, GameEvent[]>() : null;
   const playerConnections = new Map<string, PlayerConnection>();
+  const testTransport = options.enableTestHarness ? options.testGameplayTransport : undefined;
+  const transportHub = new GameplayTransportHub({
+    peerFactory: testTransport?.peerFactory ?? createWeriftServerPeer,
+    udpPortRange: testTransport?.udpPortRange ?? readWebRtcUdpPortRange(process.env),
+    now
+  });
   const pendingPublications = new Set<NodeJS.Immediate>();
   let startedAt = now();
   let scheduler: NodeJS.Timeout | null = null;
@@ -84,9 +102,11 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
 
   const dispatch = (publication: RoomPublication): void => {
     if (publication.type === 'ROOM_STATE') io.to(publication.roomCode).emit('room:state', publication.state);
-    if (publication.type === 'MATCH_STARTED') io.to(publication.roomCode).emit('match:started', publication.snapshot);
-    if (publication.type === 'MATCH_SNAPSHOT') io.to(publication.roomCode).emit('match:snapshot', publication.snapshot);
-    if (publication.type === 'MATCH_EVENT') io.to(publication.roomCode).emit('match:event', publication.event);
+    if (
+      publication.type === 'MATCH_STARTED'
+      || publication.type === 'MATCH_SNAPSHOT'
+      || publication.type === 'MATCH_EVENT'
+    ) transportHub.publish(publication);
   };
 
   const publish = (publication: RoomPublication): void => {
@@ -95,6 +115,11 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
       roomCodes.delete(publication.roomCode);
       snapshots.delete(publication.roomCode);
       testEventHistory?.delete(publication.roomCode);
+      for (const [playerId, connection] of playerConnections) {
+        if (connection.roomCode !== publication.roomCode) continue;
+        playerConnections.delete(playerId);
+        void transportHub.detachSession(connection.socketId);
+      }
     }
     if (publication.type === 'MATCH_STARTED' || publication.type === 'MATCH_SNAPSHOT') {
       if (publication.type === 'MATCH_STARTED') testEventHistory?.delete(publication.roomCode);
@@ -165,7 +190,8 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     rooms,
     now,
     logger,
-    onSession: (socket: GameSocket, welcome: SessionWelcome, _inputIngress: MatchInputIngress) => {
+    transportHub,
+    onSession: (socket: GameSocket, welcome: SessionWelcome) => {
       playerConnections.set(welcome.playerId, { roomCode: welcome.roomCode, socketId: socket.id });
     },
     onLeave: (socket: GameSocket, roomCode: string) => {
@@ -181,6 +207,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
   });
 
   const listen = async (): Promise<{ port: number; origin: string }> => {
+    transportHub.start();
     await new Promise<void>((resolveStart, rejectStart) => {
       const onError = (error: Error): void => {
         httpServer.off('listening', onListening);
@@ -253,6 +280,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
             });
           }
         }
+        await transportHub.stop();
         for (const immediate of pendingPublications) clearImmediate(immediate);
         pendingPublications.clear();
         rooms.reset();
@@ -290,7 +318,9 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
         matchSnapshot: (roomCode: string): MatchSnapshot | null => {
           const snapshot = snapshots.get(roomCode);
           return snapshot ? structuredClone(snapshot) : null;
-        }
+        },
+        transportMode: (playerId: string): GameplayTransportMode | null => transportHub.modeForPlayer(playerId),
+        dropWebRtc: (playerId: string): Promise<void> => transportHub.dropPeerForTest(playerId)
       }
     : null;
 

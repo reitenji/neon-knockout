@@ -4,9 +4,19 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
 import { GAME } from '../../src/shared/constants.js';
+import {
+  GAMEPLAY_PROTOCOL_VERSION,
+  type RtcNegotiationAnswer,
+  type TransportModeNotice
+} from '../../src/shared/gameplayTransport.js';
 import type { Ack, GameEvent, InputFrame, MatchSnapshot, ServerError, SessionWelcome, Vec2 } from '../../src/shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../src/shared/protocol.js';
 import { createGameServer, type GameServer } from '../../src/server/network/createGameServer.js';
+import type {
+  PeerSendResult,
+  ServerPeer,
+  ServerPeerFactory
+} from '../../src/server/network/gameplayTransport/ServerPeer.js';
 
 type GameClient = Socket<ServerToClientEvents, ClientToServerEvents>;
 type AckEvent = Exclude<keyof ClientToServerEvents, 'match:input'>;
@@ -15,6 +25,88 @@ const ACK_TIMEOUT_MS = 1_500;
 const EVENT_TIMEOUT_MS = 5_000;
 const STEP_MS = 1_000 / GAME.tickRate;
 const PARTIAL_HEAVY_CHARGE_MS = Math.floor(GAME.heavyMaxChargeMs / 2);
+const FIRST_GENERATION = '2f8ca1f2-7e6e-4ea7-90e2-e6a955892574';
+const SECOND_GENERATION = '4cf2e59c-3dd7-4a54-8e5d-95eb40efca5c';
+const TEST_UDP_RANGE = [54100, 54131] as const;
+
+class IntegrationPeer implements ServerPeer {
+  readonly fastSent: string[] = [];
+  readonly reliableSent: string[] = [];
+  readonly fastListeners = new Set<(serialized: string) => void>();
+  readonly reliableListeners = new Set<(serialized: string) => void>();
+  readonly closedListeners = new Set<() => void>();
+  ready = true;
+  failNegotiation = false;
+  fastResult: PeerSendResult = 'sent';
+  reliableResult: PeerSendResult = 'sent';
+  rttMs: number | null = 12;
+  closeCalls = 0;
+
+  constructor(readonly generationId: string) {}
+
+  async negotiate() {
+    if (this.failNegotiation) throw new Error('forced negotiation failure');
+    return { type: 'answer' as const, sdp: 'integration-answer' };
+  }
+
+  isReady(): boolean {
+    return this.ready;
+  }
+
+  sendFast(serialized: string): PeerSendResult {
+    if (this.fastResult === 'sent') this.fastSent.push(serialized);
+    return this.fastResult;
+  }
+
+  sendReliable(serialized: string): PeerSendResult {
+    if (this.reliableResult === 'sent') this.reliableSent.push(serialized);
+    return this.reliableResult;
+  }
+
+  async sampleRttMs(): Promise<number | null> {
+    return this.rttMs;
+  }
+
+  onFastMessage(listener: (serialized: string) => void): () => void {
+    this.fastListeners.add(listener);
+    return () => this.fastListeners.delete(listener);
+  }
+
+  onReliableMessage(listener: (serialized: string) => void): () => void {
+    this.reliableListeners.add(listener);
+    return () => this.reliableListeners.delete(listener);
+  }
+
+  onClosed(listener: () => void): () => void {
+    this.closedListeners.add(listener);
+    return () => this.closedListeners.delete(listener);
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1;
+    this.ready = false;
+  }
+
+  receiveFast(message: unknown): void {
+    const serialized = typeof message === 'string' ? message : JSON.stringify(message);
+    for (const listener of [...this.fastListeners]) listener(serialized);
+  }
+}
+
+class IntegrationPeerFactory {
+  readonly peers: IntegrationPeer[] = [];
+  readonly calls: Parameters<ServerPeerFactory>[0][] = [];
+  failNextNegotiation = false;
+
+  readonly create: ServerPeerFactory = (options) => {
+    this.calls.push(options);
+    const peer = new IntegrationPeer(options.generationId);
+    peer.failNegotiation = this.failNextNegotiation;
+    this.failNextNegotiation = false;
+    this.peers.push(peer);
+    return peer;
+  };
+}
 
 type StartedMatch = Readonly<{
   roomCode: string;
@@ -109,9 +201,17 @@ describe('Socket.IO FFA game server flow', () => {
   let origin: string;
   let clients: GameClient[];
   let sequences: Map<GameClient, number>;
+  let peerFactory: IntegrationPeerFactory;
 
   beforeEach(async () => {
-    server = createGameServer({ host: '127.0.0.1', port: 0, enableTestHarness: true, clientDirectory: false });
+    peerFactory = new IntegrationPeerFactory();
+    server = createGameServer({
+      host: '127.0.0.1',
+      port: 0,
+      enableTestHarness: true,
+      clientDirectory: false,
+      testGameplayTransport: { peerFactory: peerFactory.create, udpPortRange: TEST_UDP_RANGE }
+    });
     ({ origin } = await server.start());
     clients = [];
     sequences = new Map();
@@ -240,6 +340,25 @@ describe('Socket.IO FFA game server flow', () => {
     return eventAfter(match.roomCode, marker, type, predicate)!;
   };
 
+  const negotiateAndActivate = async (
+    socket: GameClient,
+    generationId = FIRST_GENERATION
+  ): Promise<IntegrationPeer> => {
+    const answer = await emitSuccess<RtcNegotiationAnswer>(socket, 'transport:negotiate', {
+      generationId,
+      offer: { type: 'offer', sdp: 'integration-offer' }
+    });
+    expect(answer).toEqual({
+      generationId,
+      answer: { type: 'answer', sdp: 'integration-answer' }
+    });
+    const activation = await emitSuccess<TransportModeNotice>(socket, 'transport:activate', { generationId });
+    expect(activation).toEqual({ generationId, mode: 'webrtc' });
+    const peer = peerFactory.peers.at(-1);
+    if (!peer) throw new Error('Expected an integration peer.');
+    return peer;
+  };
+
   const quick = async (
     match: StartedMatch,
     entries: readonly Readonly<{ client: GameClient; playerId: string; aim: Vec2 }>[]
@@ -329,6 +448,149 @@ describe('Socket.IO FFA game server flow', () => {
     emit('network:latency', { pingMs: GAME.maxPingMs });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(snapshot(match.roomCode).network[match.host.playerId]?.currentMs).not.toBe(GAME.maxPingMs);
+  });
+
+  it('keeps invalid and failed WebRTC negotiation on the authenticated Socket.IO session', async () => {
+    const hostClient = await client();
+    const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
+
+    expect(harness().transportMode(host.playerId)).toBe('websocket');
+    expect(await emitAck<RtcNegotiationAnswer>(hostClient, 'transport:negotiate', {
+      generationId: 'not-a-generation',
+      offer: { type: 'offer', sdp: 'invalid' }
+    })).toMatchObject({ ok: false, error: { code: 'INVALID_PAYLOAD' } });
+    expect(peerFactory.peers).toEqual([]);
+
+    peerFactory.failNextNegotiation = true;
+    expect(await emitAck<RtcNegotiationAnswer>(hostClient, 'transport:negotiate', {
+      generationId: FIRST_GENERATION,
+      offer: { type: 'offer', sdp: 'forced-failure' }
+    })).toMatchObject({ ok: false, error: { code: 'INTERNAL_ERROR' } });
+    await waitFor(() => peerFactory.peers[0]?.closeCalls === 1, 'failed peer closure');
+    expect(harness().transportMode(host.playerId)).toBe('websocket');
+  });
+
+  it('accepts one shared sequence across WebRTC and Socket.IO, then immediately falls back a failed snapshot send', async () => {
+    const match = await startMatch();
+    const peer = await negotiateAndActivate(match.hostClient);
+    expect(harness().transportMode(match.host.playerId)).toBe('webrtc');
+
+    peer.receiveFast({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId: FIRST_GENERATION,
+      matchEpoch: 1,
+      kind: 'input',
+      payload: input(40, { aimX: -1, aimY: 0 })
+    });
+    match.hostClient.emit('match:input', input(40, { aimX: 0, aimY: -1 }));
+    await waitFor(
+      () => player(snapshot(match.roomCode), match.host.playerId).lastProcessedInputSeq === 40,
+      'shared ingress sequence 40'
+    );
+    expect(player(snapshot(match.roomCode), match.host.playerId).facing).toEqual({ x: -1, y: 0 });
+
+    peer.fastResult = 'closed';
+    const fallbackSnapshot = expectEvent(
+      match.hostClient,
+      'match:snapshot',
+      (publication) => publication.matchEpoch === 1
+    );
+    server.rooms.advance(STEP_MS);
+    expect((await fallbackSnapshot).snapshot.players.map((candidate) => candidate.playerId)).toContain(match.host.playerId);
+    await waitFor(() => peer.closeCalls === 1, 'failed-send peer closure');
+    expect(harness().transportMode(match.host.playerId)).toBe('websocket');
+    await waitFor(() => {
+      const network = snapshot(match.roomCode).network[match.host.playerId];
+      return network?.transport === 'websocket' && network.medianMs !== null;
+    }, 'fresh immediate Socket.IO fallback Ping', 750);
+    expect(snapshot(match.roomCode).network[match.host.playerId]).toMatchObject({
+      transport: 'websocket',
+      medianMs: expect.any(Number)
+    });
+    await harness().dropWebRtc(match.host.playerId);
+    expect(peer.closeCalls).toBe(1);
+  });
+
+  it('replaces a disconnected peer on resume and emits a fresh epoch boundary before later snapshots', async () => {
+    const match = await startMatch();
+    const oldPeer = await negotiateAndActivate(match.guestClient);
+
+    harness().disconnectPlayer(match.roomCode, match.guest.playerId);
+    await waitFor(() => oldPeer.closeCalls === 1, 'disconnected peer closure');
+    const resumedClient = await client();
+    const publicationOrder: string[] = [];
+    resumedClient.on('match:started', () => publicationOrder.push('started'));
+    resumedClient.on('match:snapshot', () => publicationOrder.push('snapshot'));
+    const cursorBeforeResume = eventMarker(match.roomCode);
+    const boundary = expectEvent(
+      resumedClient,
+      'match:started',
+      (publication) => publication.matchEpoch === 1
+    );
+    const laterSnapshot = expectEvent(
+      resumedClient,
+      'match:snapshot',
+      (publication) => publication.matchEpoch === 1
+    );
+    const resumed = await emitSuccess<SessionWelcome>(resumedClient, 'session:resume', {
+      roomCode: match.roomCode,
+      resumeToken: match.guest.resumeToken
+    });
+
+    expect(resumed).toMatchObject({ playerId: match.guest.playerId, resumed: true });
+    const [boundaryPublication, snapshotPublication] = await Promise.all([boundary, laterSnapshot]);
+    expect(boundaryPublication).toMatchObject({
+      matchEpoch: 1,
+      eventCursor: cursorBeforeResume + 1,
+      snapshot: { players: expect.arrayContaining([expect.objectContaining({ playerId: match.guest.playerId })]) }
+    });
+    expect(snapshotPublication.eventCursor).toBeGreaterThanOrEqual(boundaryPublication.eventCursor);
+    expect(publicationOrder.slice(0, 2)).toEqual(['started', 'snapshot']);
+    const replacement = await negotiateAndActivate(resumedClient, SECOND_GENERATION);
+    expect(replacement).not.toBe(oldPeer);
+    expect(oldPeer.closeCalls).toBe(1);
+    expect(harness().transportMode(match.guest.playerId)).toBe('webrtc');
+  });
+
+  it('closes an attached peer on leave and reactivates the next generation at rematch epoch two', async () => {
+    const disposableClient = await client();
+    const disposable = await emitSuccess<SessionWelcome>(disposableClient, 'room:create', { name: 'Disposable' });
+    const disposablePeer = await negotiateAndActivate(disposableClient);
+    await emitSuccess<null>(disposableClient, 'room:leave', {});
+    await waitFor(() => disposablePeer.closeCalls === 1, 'leave peer closure');
+    expect(harness().transportMode(disposable.playerId)).toBeNull();
+
+    const match = await startMatch();
+    const firstPeer = await negotiateAndActivate(match.hostClient);
+    for (let knockout = 0; knockout < GAME.targetScore; knockout += 1) {
+      const marker = eventMarker(match.roomCode);
+      harness().forceKnockout(match.roomCode, match.host.playerId, match.guest.playerId);
+      const forced = eventAfter(match.roomCode, marker, 'KNOCKOUT');
+      if (!forced) throw new Error(`Rematch setup knockout ${knockout + 1} did not occur.`);
+      if (knockout < GAME.targetScore - 1) {
+        advanceToEvent(match, forced.eventId, 'RESPAWN', GAME.knockoutToControlMs + STEP_MS * 2);
+      }
+    }
+    expect(server.rooms.debugRoom(match.roomCode)?.phase).toBe('RESULT');
+
+    await harness().dropWebRtc(match.host.playerId);
+    expect(firstPeer.closeCalls).toBe(1);
+    const rematchPeer = await negotiateAndActivate(match.hostClient, SECOND_GENERATION);
+    await emitSuccess<null>(match.hostClient, 'result:ready', { ready: true });
+    await emitSuccess<null>(match.guestClient, 'result:ready', { ready: true });
+    const rematchStarted = expectEvent(
+      match.hostClient,
+      'match:started',
+      (publication) => publication.matchEpoch === 2
+    );
+    await emitSuccess<null>(match.hostClient, 'match:start', {});
+
+    await expect(rematchStarted).resolves.toMatchObject({ matchEpoch: 2, eventCursor: 0, snapshot: { tick: 0 } });
+    expect(harness().transportMode(match.host.playerId)).toBe('webrtc');
+    expect(rematchPeer.reliableSent.map((serialized) => JSON.parse(serialized))).toContainEqual(expect.objectContaining({
+      kind: 'started',
+      payload: expect.objectContaining({ matchEpoch: 2, eventCursor: 0 })
+    }));
   });
 
   it('leaves the Socket.IO room, clears the connection mapping, invalidates resume, and reuses the same socket', async () => {
@@ -450,11 +712,13 @@ describe('Socket.IO FFA game server flow', () => {
     const startedPromise = expectEvent(
       hostClient,
       'match:started',
-      (snapshot) => snapshot.settings.durationMs === 180_000 && snapshot.settings.knockoutTarget === 7
+      (publication) => publication.snapshot.settings.durationMs === 180_000
+        && publication.snapshot.settings.knockoutTarget === 7
     );
     await emitSuccess<null>(hostClient, 'match:start', {});
     const started = await startedPromise;
-    expect(started.settings).toEqual({ durationMs: 180_000, knockoutTarget: 7 });
+    expect(started).toMatchObject({ matchEpoch: 1, eventCursor: 0 });
+    expect(started.snapshot.settings).toEqual({ durationMs: 180_000, knockoutTarget: 7 });
   });
 
   it('keeps the socket reusable after an active leave and returns survivors to the lobby with preserved settings', async () => {
@@ -750,10 +1014,14 @@ describe('Socket.IO FFA game server flow', () => {
     const rematchStarted = expectEvent(resumedClient, 'match:started');
     await emitSuccess<null>(match.hostClient, 'match:start', {});
     expect(await rematchStarted).toMatchObject({
-      tick: 0,
-      scores: { [match.host.playerId]: 0, [match.guest.playerId]: 0 },
-      winnerPlayerId: null,
-      resultReason: null
+      matchEpoch: 2,
+      eventCursor: 0,
+      snapshot: {
+        tick: 0,
+        scores: { [match.host.playerId]: 0, [match.guest.playerId]: 0 },
+        winnerPlayerId: null,
+        resultReason: null
+      }
     });
 
     const rematchSnapshot = advanceUntil(
@@ -788,8 +1056,8 @@ describe('Socket.IO FFA game server flow', () => {
     match.hostClient.on('server:error', (error) => errors.push(error));
     for (let seq = 100; seq <= 194; seq += 1) match.hostClient.emit('match:input', input(seq));
     const capped = await expectEvent(match.hostClient, 'match:snapshot',
-      (value) => player(value, match.host.playerId).lastProcessedInputSeq === 159);
-    expect(player(capped, match.host.playerId).lastProcessedInputSeq).toBe(159);
+      (value) => player(value.snapshot, match.host.playerId).lastProcessedInputSeq === 159);
+    expect(player(capped.snapshot, match.host.playerId).lastProcessedInputSeq).toBe(159);
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(errors.filter((error) => error.code === 'RATE_LIMITED')).toHaveLength(0);
 
@@ -797,8 +1065,8 @@ describe('Socket.IO FFA game server flow', () => {
     match.hostClient.emit('match:input', input(200));
     match.hostClient.emit('match:input', input(199, { moveX: -1 }));
     const monotonic = await expectEvent(match.hostClient, 'match:snapshot',
-      (value) => player(value, match.host.playerId).lastProcessedInputSeq === 200);
-    expect(player(monotonic, match.host.playerId).lastProcessedInputSeq).toBe(200);
+      (value) => player(value.snapshot, match.host.playerId).lastProcessedInputSeq === 200);
+    expect(player(monotonic.snapshot, match.host.playerId).lastProcessedInputSeq).toBe(200);
   }, 12_000);
 
   it('silently drops input frames that arrive after the match enters the result phase', async () => {

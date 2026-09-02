@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { TransportModeNotice } from '../../shared/gameplayTransport.js';
+import type {
+  MatchEventPublication,
+  MatchSnapshotPublication,
+  MatchStartedPublication,
+  TransportModeNotice
+} from '../../shared/gameplayTransport.js';
 import type { GameEvent, InputFrame, MatchSnapshot, RoomState, SessionWelcome } from '../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 
@@ -340,14 +345,22 @@ describe('createSocketGameClient', () => {
     expect(gameplayHarness.transport.acceptMode).toHaveBeenCalledWith(notice);
   });
 
-  it('preserves raw Socket.IO match publications until the epoch-bearing Task 7 switch', () => {
+  it('routes epoch-bearing Socket.IO safety publications through the owning gameplay controller', () => {
     const client = createSocketGameClient();
     const startedListener = vi.fn();
     const snapshotListener = vi.fn();
     const eventListener = vi.fn();
-    const startValue = matchSnapshot(1);
-    const snapshotValue = matchSnapshot(2);
-    const eventValue = matchEvent();
+    const startValue: MatchStartedPublication = {
+      matchEpoch: 1,
+      eventCursor: 0,
+      snapshot: matchSnapshot(1)
+    };
+    const snapshotValue: MatchSnapshotPublication = {
+      matchEpoch: 1,
+      eventCursor: 1,
+      snapshot: matchSnapshot(2)
+    };
+    const eventValue: MatchEventPublication = { matchEpoch: 1, event: matchEvent() };
     client.subscribe('match:started', startedListener);
     client.subscribe('match:snapshot', snapshotListener);
     client.subscribe('match:event', eventListener);
@@ -356,12 +369,12 @@ describe('createSocketGameClient', () => {
     socketHarness.trigger('match:snapshot', snapshotValue);
     socketHarness.trigger('match:event', eventValue);
 
-    expect(startedListener).toHaveBeenCalledWith(startValue);
-    expect(snapshotListener).toHaveBeenCalledWith(snapshotValue);
-    expect(eventListener).toHaveBeenCalledWith(eventValue);
-    expect(gameplayHarness.transport.acceptSocketStarted).not.toHaveBeenCalled();
-    expect(gameplayHarness.transport.acceptSocketSnapshot).not.toHaveBeenCalled();
-    expect(gameplayHarness.transport.acceptSocketEvent).not.toHaveBeenCalled();
+    expect(startedListener).not.toHaveBeenCalled();
+    expect(snapshotListener).not.toHaveBeenCalled();
+    expect(eventListener).not.toHaveBeenCalled();
+    expect(gameplayHarness.transport.acceptSocketStarted).toHaveBeenCalledWith(startValue);
+    expect(gameplayHarness.transport.acceptSocketSnapshot).toHaveBeenCalledWith(snapshotValue);
+    expect(gameplayHarness.transport.acceptSocketEvent).toHaveBeenCalledWith(eventValue);
   });
 
   it('disposes on explicit and non-resumable disconnects but waits through recoverable reconnects', () => {

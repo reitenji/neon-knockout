@@ -4,6 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   CLIENT_MESSAGE_LIMIT_BYTES,
   GAMEPLAY_PROTOCOL_VERSION,
+  type MatchEventPublication,
+  type MatchSnapshotPublication,
+  type MatchStartedPublication,
   type RtcOffer
 } from '../../../shared/gameplayTransport.js';
 import type { GameEvent, InputFrame, MatchSnapshot, ServerError } from '../../../shared/model.js';
@@ -186,9 +189,9 @@ type SessionHarness = Readonly<{
   acceptedInputs: InputFrame[];
   emittedErrors: ServerError[];
   emittedModes: Parameters<TransportSession['emitMode']>[0][];
-  emittedStarted: MatchSnapshot[];
-  emittedSnapshots: MatchSnapshot[];
-  emittedEvents: GameEvent[];
+  emittedStarted: MatchStartedPublication[];
+  emittedSnapshots: MatchSnapshotPublication[];
+  emittedEvents: MatchEventPublication[];
   networkModes: Parameters<TransportSession['setNetworkMode']>[0][];
   networkSamples: Array<Readonly<{ medianMs: number; sampledAt: number }>>;
   networkClearTimes: number[];
@@ -199,9 +202,9 @@ function session(overrides: Partial<Pick<TransportSession, 'socketId' | 'playerI
   const acceptedInputs: InputFrame[] = [];
   const emittedErrors: ServerError[] = [];
   const emittedModes: Parameters<TransportSession['emitMode']>[0][] = [];
-  const emittedStarted: MatchSnapshot[] = [];
-  const emittedSnapshots: MatchSnapshot[] = [];
-  const emittedEvents: GameEvent[] = [];
+  const emittedStarted: MatchStartedPublication[] = [];
+  const emittedSnapshots: MatchSnapshotPublication[] = [];
+  const emittedEvents: MatchEventPublication[] = [];
   const networkModes: Parameters<TransportSession['setNetworkMode']>[0][] = [];
   const networkSamples: Array<Readonly<{ medianMs: number; sampledAt: number }>> = [];
   const networkClearTimes: number[] = [];
@@ -252,6 +255,10 @@ function started(roomCode = 'AB2Z', matchEpoch = 2): TransportPublication {
   return { type: 'MATCH_STARTED', roomCode, matchEpoch, eventCursor: 7, snapshot };
 }
 
+function startedSafety(matchEpoch = 2): MatchStartedPublication {
+  return { matchEpoch, eventCursor: 7, snapshot };
+}
+
 function snapshotPublication(
   roomCode = 'AB2Z',
   matchEpoch = 2,
@@ -260,12 +267,23 @@ function snapshotPublication(
   return { type: 'MATCH_SNAPSHOT', roomCode, matchEpoch, eventCursor: 7, snapshot: publishedSnapshot };
 }
 
+function snapshotSafety(
+  matchEpoch = 2,
+  publishedSnapshot: MatchSnapshot = snapshot
+): MatchSnapshotPublication {
+  return { matchEpoch, eventCursor: 7, snapshot: publishedSnapshot };
+}
+
 function eventPublication(
   roomCode = 'AB2Z',
   matchEpoch = 2,
   publishedEvent: GameEvent = event
 ): TransportPublication {
   return { type: 'MATCH_EVENT', roomCode, matchEpoch, event: publishedEvent };
+}
+
+function eventSafety(matchEpoch = 2, publishedEvent: GameEvent = event): MatchEventPublication {
+  return { matchEpoch, event: publishedEvent };
 }
 
 const hubs: GameplayTransportHub[] = [];
@@ -376,7 +394,7 @@ describe('GameplayTransportHub', () => {
       expect(vi.getTimerCount()).toBe(0);
       expect(hub.modeForPlayer('p1')).toBe('websocket');
       hub.publish(snapshotPublication());
-      expect(first.emittedSnapshots).toEqual([snapshot]);
+      expect(first.emittedSnapshots).toEqual([snapshotSafety()]);
     }
   );
 
@@ -390,6 +408,22 @@ describe('GameplayTransportHub', () => {
     peer.receiveFast(fastInput());
 
     expect(first.acceptedInputs).toEqual([input]);
+  });
+
+  it('synchronizes an active-match boundary to only the resumed session and updates its accepted epoch', async () => {
+    const { hub, factory } = createSubject();
+    const resumed = session();
+    const existing = session({ socketId: 's2', playerId: 'p2' });
+    hub.attachSession(resumed.session);
+    hub.attachSession(existing.session);
+    const peer = await negotiateAndActivate(hub, factory);
+
+    hub.synchronizeSession('s1', startedSafety(4));
+    peer.receiveFast(fastInput(FIRST_GENERATION, 4));
+
+    expect(resumed.emittedStarted).toEqual([startedSafety(4)]);
+    expect(existing.emittedStarted).toEqual([]);
+    expect(resumed.acceptedInputs).toEqual([input]);
   });
 
   it('rejects malformed, oversized, wrong-schema, wrong-generation, and wrong-epoch fast input before ingress', async () => {
@@ -488,7 +522,7 @@ describe('GameplayTransportHub', () => {
     hub.publish(snapshotPublication());
     await vi.runAllTicks();
 
-    expect(first.emittedSnapshots).toEqual([snapshot]);
+    expect(first.emittedSnapshots).toEqual([snapshotSafety()]);
     expect(first.fallbackProbeTimes).toHaveLength(1);
     expect(hub.modeForPlayer('p1')).toBe('websocket');
     expect(peer.closeCalls).toBe(1);
@@ -516,12 +550,12 @@ describe('GameplayTransportHub', () => {
         payload: { matchEpoch: 2, event }
       }
     ]);
-    expect(first.emittedStarted).toEqual([snapshot]);
-    expect(first.emittedEvents).toEqual([event]);
+    expect(first.emittedStarted).toEqual([startedSafety()]);
+    expect(first.emittedEvents).toEqual([eventSafety()]);
 
     peer.reliableResult = 'backpressured';
     hub.publish(eventPublication('AB2Z', 2, { ...event, eventId: 8 }));
-    expect(first.emittedEvents).toEqual([event, { ...event, eventId: 8 }]);
+    expect(first.emittedEvents).toEqual([eventSafety(), eventSafety(2, { ...event, eventId: 8 })]);
     expect(hub.modeForPlayer('p1')).toBe('websocket');
   });
 
@@ -649,10 +683,10 @@ describe('GameplayTransportHub', () => {
     firstPeer.disconnect();
     hub.publish(eventPublication('CD3Y'));
 
-    expect(first.emittedStarted).toEqual([snapshot]);
+    expect(first.emittedStarted).toEqual([startedSafety()]);
     expect(first.emittedEvents).toEqual([]);
     expect(second.emittedStarted).toEqual([]);
-    expect(second.emittedEvents).toEqual([event]);
+    expect(second.emittedEvents).toEqual([eventSafety()]);
     expect(hub.modeForPlayer('p1')).toBe('websocket');
     expect(hub.modeForPlayer('p2')).toBe('webrtc');
     expect(second.fallbackProbeTimes).toEqual([]);
@@ -698,6 +732,23 @@ describe('GameplayTransportHub', () => {
     expect(peer.closeCalls).toBe(1);
     expect(hub.modeForPlayer('p1')).toBe('websocket');
     hub.publish(snapshotPublication());
-    expect(first.emittedSnapshots).toEqual([snapshot]);
+    expect(first.emittedSnapshots).toEqual([snapshotSafety()]);
+  });
+
+  it('can restart after an awaited stop without retaining peers or UDP-range ownership', async () => {
+    const { hub, factory } = createSubject();
+    hub.attachSession(session().session);
+    const firstPeer = await negotiateAndActivate(hub, factory);
+
+    await hub.stop();
+    hub.start();
+    hub.attachSession(session({ socketId: 's2', playerId: 'p2' }).session);
+    await hub.negotiate('s2', {
+      generationId: SECOND_GENERATION,
+      offer: { type: 'offer', sdp: 'restart-offer' }
+    });
+
+    expect(firstPeer.closeCalls).toBe(1);
+    expect(factory.calls.map((call) => call.udpPortRange)).toEqual([UDP_PORT_RANGE, UDP_PORT_RANGE]);
   });
 });

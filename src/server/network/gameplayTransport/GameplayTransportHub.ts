@@ -21,7 +21,7 @@ import {
   type ServerReliableMessage,
   type TransportModeNotice
 } from '../../../shared/gameplayTransport.js';
-import type { GameEvent, MatchSnapshot, ServerError } from '../../../shared/model.js';
+import type { ServerError } from '../../../shared/model.js';
 import type { MatchInputIngress } from '../matchInputIngress.js';
 import type { ServerPeer, ServerPeerFactory } from './ServerPeer.js';
 
@@ -34,9 +34,9 @@ export type TransportSession = Readonly<{
   inputIngress: MatchInputIngress;
   socketMode(): SocketGameplayTransportMode;
   emitMode(notice: TransportModeNotice): void;
-  emitStarted(snapshot: MatchSnapshot): void;
-  emitSnapshot(snapshot: MatchSnapshot): void;
-  emitEvent(event: GameEvent): void;
+  emitStarted(publication: MatchStartedPublication): void;
+  emitSnapshot(publication: MatchSnapshotPublication): void;
+  emitEvent(publication: MatchEventPublication): void;
   emitError(error: ServerError): void;
   probeFallbackPing(): void;
   setNetworkMode(mode: GameplayTransportMode): void;
@@ -140,6 +140,10 @@ export class GameplayTransportHub {
     };
     this.sessionsBySocket.set(session.socketId, record);
     this.sessionsByPlayer.set(session.playerId, record);
+  }
+
+  start(): void {
+    this.stopped = false;
   }
 
   async negotiate(socketId: string, request: RtcNegotiationRequest): Promise<RtcNegotiationAnswer> {
@@ -254,6 +258,16 @@ export class GameplayTransportHub {
     }
   }
 
+  synchronizeSession(socketId: string, publication: MatchStartedPublication): void {
+    const record = this.sessionsBySocket.get(socketId);
+    if (!record || record.disposed) return;
+    this.publishToSession(record, {
+      type: 'MATCH_STARTED',
+      roomCode: record.session.roomCode,
+      ...publication
+    });
+  }
+
   async detachSession(socketId: string): Promise<void> {
     const record = this.sessionsBySocket.get(socketId);
     if (!record) return;
@@ -354,37 +368,46 @@ export class GameplayTransportHub {
   private publishToSession(record: SessionRecord, publication: TransportPublication): void {
     if (publication.type === 'MATCH_STARTED') {
       record.matchEpoch = publication.matchEpoch;
-      safeInvoke(() => record.session.emitStarted(publication.snapshot));
+      const payload: MatchStartedPublication = {
+        matchEpoch: publication.matchEpoch,
+        eventCursor: publication.eventCursor,
+        snapshot: publication.snapshot
+      };
+      safeInvoke(() => record.session.emitStarted(payload));
       if (record.mode !== 'webrtc' || !record.peer || !record.generationId) return;
       const message: ServerReliableMessage = {
         version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: record.generationId,
         kind: 'started',
-        payload: {
-          matchEpoch: publication.matchEpoch,
-          eventCursor: publication.eventCursor,
-          snapshot: publication.snapshot
-        }
+        payload
       };
       this.sendReliable(record, message);
       return;
     }
 
     if (publication.type === 'MATCH_EVENT') {
-      safeInvoke(() => record.session.emitEvent(publication.event));
+      const payload: MatchEventPublication = {
+        matchEpoch: publication.matchEpoch,
+        event: publication.event
+      };
+      safeInvoke(() => record.session.emitEvent(payload));
       if (record.mode !== 'webrtc' || !record.peer || !record.generationId) return;
       const message: ServerReliableMessage = {
         version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: record.generationId,
         kind: 'event',
-        payload: { matchEpoch: publication.matchEpoch, event: publication.event }
+        payload
       };
       this.sendReliable(record, message);
       return;
     }
 
     if (record.mode !== 'webrtc' || !record.peer || !record.generationId) {
-      safeInvoke(() => record.session.emitSnapshot(publication.snapshot));
+      safeInvoke(() => record.session.emitSnapshot({
+        matchEpoch: publication.matchEpoch,
+        eventCursor: publication.eventCursor,
+        snapshot: publication.snapshot
+      }));
       return;
     }
 
@@ -407,7 +430,11 @@ export class GameplayTransportHub {
     }
     if (result === 'sent' || result === 'backpressured') return;
     void this.transitionToFallback(record, record.generationId, peer);
-    safeInvoke(() => record.session.emitSnapshot(publication.snapshot));
+    safeInvoke(() => record.session.emitSnapshot({
+      matchEpoch: publication.matchEpoch,
+      eventCursor: publication.eventCursor,
+      snapshot: publication.snapshot
+    }));
   }
 
   private sendReliable(record: SessionRecord, message: ServerReliableMessage): void {

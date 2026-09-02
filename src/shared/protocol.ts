@@ -1,6 +1,9 @@
 import { z } from 'zod';
 import { CHASSIS } from './model.js';
 import {
+  type MatchEventPublication,
+  type MatchSnapshotPublication,
+  type MatchStartedPublication,
   type RtcActivationRequest,
   type RtcNegotiationAnswer,
   type RtcNegotiationRequest,
@@ -10,9 +13,7 @@ import { KNOCKOUT_TARGET_OPTIONS, MATCH_DURATION_OPTIONS } from './roomSettings.
 import type {
   Ack,
   Chassis,
-  GameEvent,
   InputFrame,
-  MatchSnapshot,
   RoomState,
   ServerError,
   SessionWelcome
@@ -53,6 +54,7 @@ export const lobbySettingsSchema = z.object({
 }).strict();
 export const matchStartSchema = emptyPayloadSchema;
 export { matchInputSchema } from './gameplayTransport.js';
+export const transportFallbackSchema = emptyPayloadSchema;
 export const resultReadySchema = z.object({ ready: z.boolean() }).strict();
 export const resultLobbySchema = emptyPayloadSchema;
 
@@ -93,9 +95,9 @@ export interface ServerToClientEvents {
   'session:welcome': (welcome: SessionWelcome) => void;
   'room:state': (state: RoomState) => void;
   'transport:mode': (notice: TransportModeNotice) => void;
-  'match:started': (snapshot: MatchSnapshot) => void;
-  'match:snapshot': (snapshot: MatchSnapshot) => void;
-  'match:event': (event: GameEvent) => void;
+  'match:started': (publication: MatchStartedPublication) => void;
+  'match:snapshot': (publication: MatchSnapshotPublication) => void;
+  'match:event': (publication: MatchEventPublication) => void;
   'network:probe': (acknowledge: () => void) => void;
   'server:error': (error: ServerError) => void;
 }

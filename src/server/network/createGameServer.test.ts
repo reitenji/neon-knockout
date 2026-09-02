@@ -3,8 +3,16 @@ import { GAME } from '../../shared/constants.js';
 import type { Ack, SessionWelcome } from '../../shared/model.js';
 import { RoomManager, type RoomPublication } from '../rooms/roomManager.js';
 import { createGameServer } from './createGameServer.js';
+import { GameplayTransportHub } from './gameplayTransport/GameplayTransportHub.js';
 import type { MatchInputIngress } from './matchInputIngress.js';
 import { registerSocketHandlers, type GameIo, type GameSocket } from './socketHandlers.js';
+
+function inertTransportHub(): GameplayTransportHub {
+  return new GameplayTransportHub({
+    peerFactory: () => { throw new Error('No peer expected in this unit test.'); },
+    udpPortRange: [54100, 54131]
+  });
+}
 
 describe('createGameServer scheduler', () => {
   afterEach(() => {
@@ -30,6 +38,8 @@ describe('createGameServer scheduler', () => {
 
     expect(productionServer.testHarness).toBeNull();
     expect(testServer.testHarness?.runCombatScript).toBeTypeOf('function');
+    expect(testServer.testHarness?.transportMode).toBeTypeOf('function');
+    expect(testServer.testHarness?.dropWebRtc).toBeTypeOf('function');
   });
 });
 
@@ -81,6 +91,7 @@ describe('socket latency scheduler', () => {
       rooms,
       now: () => 0,
       logger: { error: vi.fn() },
+      transportHub: inertTransportHub(),
       onSession: () => undefined,
       onLeave: () => undefined,
       onDisconnect: () => undefined
@@ -162,6 +173,7 @@ describe('socket session ingress', () => {
       rooms,
       now: () => 0,
       logger: { error: vi.fn() },
+      transportHub: inertTransportHub(),
       onSession: (_socket, _welcome, inputIngress) => { sessionIngress = inputIngress; },
       onLeave: () => undefined,
       onDisconnect: () => undefined

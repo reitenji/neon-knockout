@@ -1,5 +1,12 @@
 import { timingSafeEqual } from 'node:crypto';
 import { ARENA, CHASSIS, GAME } from '../../shared/constants.js';
+import {
+  RTT_FRESHNESS_MS,
+  RTT_SAMPLE_LIMIT,
+  type MatchEventPublication,
+  type MatchSnapshotPublication,
+  type MatchStartedPublication
+} from '../../shared/gameplayTransport.js';
 import { DEFAULT_ROOM_SETTINGS, type RoomSettings } from '../../shared/roomSettings.js';
 import type {
   Chassis,
@@ -35,14 +42,13 @@ const SNAPSHOT_INTERVAL_MS = 1_000 / GAME.snapshotRate;
 const MAX_ELAPSED_MS = 250;
 const MAX_STEPS_PER_ADVANCE = 5;
 const TIMER_EPSILON_MS = 1e-7;
-const NETWORK_SAMPLE_LIMIT = 8;
 const MAX_TEST_COMBAT_STEPS = 240;
 
 export type RoomPublication =
   | { type: 'ROOM_STATE'; roomCode: string; state: RoomState }
-  | { type: 'MATCH_STARTED'; roomCode: string; snapshot: MatchSnapshot }
-  | { type: 'MATCH_SNAPSHOT'; roomCode: string; snapshot: MatchSnapshot }
-  | { type: 'MATCH_EVENT'; roomCode: string; event: GameEvent }
+  | ({ type: 'MATCH_STARTED'; roomCode: string } & MatchStartedPublication)
+  | ({ type: 'MATCH_SNAPSHOT'; roomCode: string } & MatchSnapshotPublication)
+  | ({ type: 'MATCH_EVENT'; roomCode: string } & MatchEventPublication)
   | { type: 'ROOM_CLOSED'; roomCode: string };
 
 type RoomPlayer = {
@@ -76,6 +82,7 @@ type Room = {
   settings: RoomSettings;
   players: Map<string, RoomPlayer>;
   nextPlayerOrder: number;
+  matchEpoch: number;
   match: MatchState | null;
   resultPlayers: Map<string, ResultPlayerRecord> | null;
   network: Map<string, PlayerNetworkRuntime>;
@@ -90,6 +97,7 @@ type PlayerNetworkRuntime = {
   jitterMs: number | null;
   transport: PlayerNetworkTransport;
   samples: number[];
+  sampledAtMs: number | null;
 };
 
 type ConnectionSession = Readonly<{ roomCode: string; playerId: string }>;
@@ -142,7 +150,7 @@ function emptyStats(): PlayerStats {
 }
 
 function createNetworkRuntime(transport: PlayerNetworkTransport = 'polling'): PlayerNetworkRuntime {
-  return { currentMs: null, medianMs: null, jitterMs: null, transport, samples: [] };
+  return { currentMs: null, medianMs: null, jitterMs: null, transport, samples: [], sampledAtMs: null };
 }
 
 function roundMedian(values: readonly number[]): number | null {
@@ -154,14 +162,23 @@ function roundMedian(values: readonly number[]): number | null {
 
 function pushBounded(values: number[], next: number): void {
   values.push(next);
-  if (values.length > NETWORK_SAMPLE_LIMIT) values.splice(0, values.length - NETWORK_SAMPLE_LIMIT);
+  if (values.length > RTT_SAMPLE_LIMIT) values.splice(0, values.length - RTT_SAMPLE_LIMIT);
 }
 
-function networkStatus(runtime: PlayerNetworkRuntime): PlayerNetworkStatus {
+function clearNetworkSamples(runtime: PlayerNetworkRuntime): void {
+  runtime.currentMs = null;
+  runtime.medianMs = null;
+  runtime.jitterMs = null;
+  runtime.samples = [];
+  runtime.sampledAtMs = null;
+}
+
+function networkStatus(runtime: PlayerNetworkRuntime, now: number): PlayerNetworkStatus {
+  const fresh = runtime.sampledAtMs !== null && now - runtime.sampledAtMs < RTT_FRESHNESS_MS;
   return {
-    currentMs: runtime.currentMs,
-    medianMs: runtime.medianMs,
-    jitterMs: runtime.jitterMs,
+    currentMs: fresh ? runtime.currentMs : null,
+    medianMs: fresh ? runtime.medianMs : null,
+    jitterMs: fresh ? runtime.jitterMs : null,
     transport: runtime.transport
   };
 }
@@ -212,6 +229,7 @@ export class RoomManager {
       settings: { ...DEFAULT_ROOM_SETTINGS },
       players: new Map([[playerId, player]]),
       nextPlayerOrder: 1,
+      matchEpoch: 0,
       match: null,
       resultPlayers: null,
       network: new Map([[playerId, createNetworkRuntime()]]),
@@ -360,6 +378,7 @@ export class RoomManager {
       candidate.reconnectAnchor = null;
     }
     if (room.match) clearPulses(room.match);
+    room.matchEpoch += 1;
     room.match = createMatchState([...room.players.values()].map((candidate) => ({
       playerId: candidate.playerId,
       name: candidate.name,
@@ -369,10 +388,7 @@ export class RoomManager {
     })), this.deps.now(), room.settings);
     for (const candidate of room.players.values()) {
       const runtime = room.network.get(candidate.playerId) ?? createNetworkRuntime();
-      runtime.currentMs = null;
-      runtime.medianMs = null;
-      runtime.jitterMs = null;
-      runtime.samples = [];
+      clearNetworkSamples(runtime);
       room.network.set(candidate.playerId, runtime);
     }
     room.resultPlayers = null;
@@ -381,7 +397,13 @@ export class RoomManager {
     room.accumulatorMs = 0;
     room.snapshotAccumulatorMs = 0;
     this.publishRoom(room);
-    this.deps.publish({ type: 'MATCH_STARTED', roomCode: room.roomCode, snapshot: this.snapshotForRoom(room) });
+    this.deps.publish({
+      type: 'MATCH_STARTED',
+      roomCode: room.roomCode,
+      matchEpoch: room.matchEpoch,
+      eventCursor: room.match.nextEventId - 1,
+      snapshot: this.snapshotForRoom(room)
+    });
   }
 
   applyInput(connectionId: string, input: InputFrame): void {
@@ -398,25 +420,57 @@ export class RoomManager {
       : input);
   }
 
-  setPing(connectionId: string, pingMs: number): void {
+  setPing(
+    connectionId: string,
+    pingMs: number,
+    source: PlayerNetworkTransport,
+    sampledAtMs: number
+  ): void {
     const { room, player } = this.requireConnectedPlayer(connectionId);
     if (!room.match || (room.phase !== 'COUNTDOWN' && room.phase !== 'MATCH')) return;
-    const normalized = Math.round(Math.max(0, Math.min(GAME.maxPingMs, pingMs)));
     const runtime = room.network.get(player.playerId) ?? createNetworkRuntime();
+    if (runtime.transport !== source || !Number.isFinite(sampledAtMs)) return;
+    const normalized = Math.round(Math.max(0, Math.min(GAME.maxPingMs, pingMs)));
     runtime.currentMs = normalized;
     pushBounded(runtime.samples, normalized);
     runtime.medianMs = roundMedian(runtime.samples);
     runtime.jitterMs = roundMedian(runtime.samples.slice(1).map((sample, index) =>
       Math.abs(sample - runtime.samples[index]!)
     )) ?? 0;
+    runtime.sampledAtMs = sampledAtMs;
     room.network.set(player.playerId, runtime);
   }
 
   setTransport(connectionId: string, transport: PlayerNetworkTransport): void {
     const { room, player } = this.requireConnectedPlayer(connectionId);
     const runtime = room.network.get(player.playerId) ?? createNetworkRuntime(transport);
+    if (runtime.transport !== transport) clearNetworkSamples(runtime);
     runtime.transport = transport;
     room.network.set(player.playerId, runtime);
+  }
+
+  clearPing(connectionId: string): void {
+    const { room, player } = this.requireConnectedPlayer(connectionId);
+    const runtime = room.network.get(player.playerId) ?? createNetworkRuntime();
+    clearNetworkSamples(runtime);
+    room.network.set(player.playerId, runtime);
+  }
+
+  currentMatchPublication(connectionId: string): MatchStartedPublication | null {
+    const session = this.connections.get(connectionId);
+    const room = session ? this.rooms.get(session.roomCode) : undefined;
+    const player = session ? room?.players.get(session.playerId) : undefined;
+    if (
+      !room
+      || !player?.connected
+      || !room.match
+      || (room.phase !== 'COUNTDOWN' && room.phase !== 'MATCH')
+    ) return null;
+    return {
+      matchEpoch: room.matchEpoch,
+      eventCursor: room.match.nextEventId - 1,
+      snapshot: this.snapshotForRoom(room)
+    };
   }
 
   isInActiveMatch(connectionId: string): boolean {
@@ -626,7 +680,14 @@ export class RoomManager {
     const result = stepMatch(room.match, room.inputs, 0).find(
       (event): event is Extract<GameEvent, { type: 'RESULT' }> => event.type === 'RESULT' && event.reason === 'NO_CONTEST'
     );
-    if (result) this.deps.publish({ type: 'MATCH_EVENT', roomCode: room.roomCode, event: result });
+    if (result) {
+      this.deps.publish({
+        type: 'MATCH_EVENT',
+        roomCode: room.roomCode,
+        matchEpoch: room.matchEpoch,
+        event: result
+      });
+    }
     this.resetMatchToLobby(room);
     this.publishRoom(room);
   }
@@ -648,13 +709,21 @@ export class RoomManager {
   }
 
   private publishMatchEvents(room: Room, events: readonly GameEvent[]): void {
-    for (const event of events) this.deps.publish({ type: 'MATCH_EVENT', roomCode: room.roomCode, event });
+    for (const event of events) {
+      this.deps.publish({ type: 'MATCH_EVENT', roomCode: room.roomCode, matchEpoch: room.matchEpoch, event });
+    }
     if (room.match?.phase === 'FINISHED' && room.phase !== 'RESULT') this.enterResult(room);
   }
 
   private publishSnapshot(room: Room): void {
     if (!room.match) return;
-    this.deps.publish({ type: 'MATCH_SNAPSHOT', roomCode: room.roomCode, snapshot: this.snapshotForRoom(room) });
+    this.deps.publish({
+      type: 'MATCH_SNAPSHOT',
+      roomCode: room.roomCode,
+      matchEpoch: room.matchEpoch,
+      eventCursor: room.match.nextEventId - 1,
+      snapshot: this.snapshotForRoom(room)
+    });
   }
 
   private enterResult(room: Room): void {
@@ -954,10 +1023,11 @@ export class RoomManager {
   }
 
   private snapshotForRoom(room: Room): MatchSnapshot {
+    const now = this.deps.now();
     const network = Object.fromEntries(
       Object.keys(room.match!.players)
         .sort()
-        .map((playerId) => [playerId, networkStatus(room.network.get(playerId) ?? createNetworkRuntime())])
+        .map((playerId) => [playerId, networkStatus(room.network.get(playerId) ?? createNetworkRuntime(), now)])
     );
     const snapshot = snapshotMatch(room.match!, network);
     return {

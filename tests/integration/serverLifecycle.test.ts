@@ -1,11 +1,90 @@
 import { describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
+import type { RtcNegotiationAnswer } from '../../src/shared/gameplayTransport.js';
 import type { Ack, SessionWelcome } from '../../src/shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../src/shared/protocol.js';
 import { createGameServer } from '../../src/server/network/createGameServer.js';
+import type {
+  PeerSendResult,
+  ServerPeer,
+  ServerPeerFactory
+} from '../../src/server/network/gameplayTransport/ServerPeer.js';
 
 type GameClient = Socket<ServerToClientEvents, ClientToServerEvents>;
-type SessionEvent = 'room:create' | 'room:join' | 'session:resume';
+type SessionEvent = 'room:create' | 'room:join' | 'session:resume' | 'transport:negotiate';
+const LIFECYCLE_GENERATION = '2f8ca1f2-7e6e-4ea7-90e2-e6a955892574';
+const LIFECYCLE_UDP_RANGE = [54200, 54231] as const;
+
+class LifecyclePeer implements ServerPeer {
+  private readonly fastListeners = new Set<(serialized: string) => void>();
+  private readonly reliableListeners = new Set<(serialized: string) => void>();
+  private readonly closedListeners = new Set<() => void>();
+  private releaseClosure: () => void = () => undefined;
+  private readonly closureGate = new Promise<void>((resolve) => { this.releaseClosure = resolve; });
+  closeCalls = 0;
+
+  constructor(readonly generationId: string, private readonly releaseRange: () => void) {}
+
+  async negotiate() {
+    return { type: 'answer' as const, sdp: 'lifecycle-answer' };
+  }
+
+  isReady(): boolean {
+    return false;
+  }
+
+  sendFast(): PeerSendResult {
+    return 'closed';
+  }
+
+  sendReliable(): PeerSendResult {
+    return 'closed';
+  }
+
+  async sampleRttMs(): Promise<number | null> {
+    return null;
+  }
+
+  onFastMessage(listener: (serialized: string) => void): () => void {
+    this.fastListeners.add(listener);
+    return () => this.fastListeners.delete(listener);
+  }
+
+  onReliableMessage(listener: (serialized: string) => void): () => void {
+    this.reliableListeners.add(listener);
+    return () => this.reliableListeners.delete(listener);
+  }
+
+  onClosed(listener: () => void): () => void {
+    this.closedListeners.add(listener);
+    return () => this.closedListeners.delete(listener);
+  }
+
+  async close(): Promise<void> {
+    this.closeCalls += 1;
+    await this.closureGate;
+    this.releaseRange();
+  }
+
+  release(): void {
+    this.releaseClosure();
+  }
+}
+
+class LifecyclePeerFactory {
+  readonly peers: LifecyclePeer[] = [];
+  readonly ranges: Array<readonly [number, number]> = [];
+  private occupied = false;
+
+  readonly create: ServerPeerFactory = (options) => {
+    if (this.occupied) throw new Error('UDP range is still occupied.');
+    this.occupied = true;
+    this.ranges.push(options.udpPortRange);
+    const peer = new LifecyclePeer(options.generationId, () => { this.occupied = false; });
+    this.peers.push(peer);
+    return peer;
+  };
+}
 
 async function healthStatus(origin: string): Promise<number> {
   return fetch(`${origin}/health`, { signal: AbortSignal.timeout(1_000) })
@@ -47,6 +126,14 @@ function emitAck<T>(socket: GameClient, event: SessionEvent, payload: unknown): 
 function expectWelcome(acknowledgement: Ack<SessionWelcome>): SessionWelcome {
   if (!acknowledgement.ok) throw new Error(acknowledgement.error.code);
   return acknowledgement.data;
+}
+
+async function waitFor(predicate: () => boolean, label: string): Promise<void> {
+  const deadline = performance.now() + 1_500;
+  while (!predicate()) {
+    if (performance.now() >= deadline) throw new Error(`Timed out waiting for ${label}.`);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
 }
 
 describe('GameServer lifecycle', () => {
@@ -199,6 +286,55 @@ describe('GameServer lifecycle', () => {
     } finally {
       firstClient?.disconnect();
       restartedClient?.disconnect();
+      await server.stop();
+    }
+  });
+
+  it('awaits peer closure on stop and reuses the same deterministic UDP range after restart', async () => {
+    const factory = new LifecyclePeerFactory();
+    const server = createGameServer({
+      host: '127.0.0.1',
+      port: 0,
+      clientDirectory: false,
+      enableTestHarness: true,
+      testGameplayTransport: { peerFactory: factory.create, udpPortRange: LIFECYCLE_UDP_RANGE }
+    });
+    let firstClient: GameClient | null = null;
+    let secondClient: GameClient | null = null;
+
+    try {
+      const firstAddress = await server.start();
+      firstClient = await connectClient(firstAddress.origin);
+      expectWelcome(await emitAck<SessionWelcome>(firstClient, 'room:create', { name: 'Ada' }));
+      expect(await emitAck<RtcNegotiationAnswer>(firstClient, 'transport:negotiate', {
+        generationId: LIFECYCLE_GENERATION,
+        offer: { type: 'offer', sdp: 'first-lifecycle-offer' }
+      })).toMatchObject({ ok: true });
+      const firstPeer = factory.peers[0]!;
+
+      let stopped = false;
+      const stopping = server.stop().then(() => { stopped = true; });
+      await waitFor(() => firstPeer.closeCalls === 1, 'the first peer close request');
+      expect(stopped).toBe(false);
+      firstPeer.release();
+      await stopping;
+      expect(stopped).toBe(true);
+
+      const restarted = await server.start();
+      secondClient = await connectClient(restarted.origin);
+      expectWelcome(await emitAck<SessionWelcome>(secondClient, 'room:create', { name: 'Linus' }));
+      expect(await emitAck<RtcNegotiationAnswer>(secondClient, 'transport:negotiate', {
+        generationId: LIFECYCLE_GENERATION,
+        offer: { type: 'offer', sdp: 'second-lifecycle-offer' }
+      })).toMatchObject({ ok: true });
+
+      expect(factory.ranges).toEqual([LIFECYCLE_UDP_RANGE, LIFECYCLE_UDP_RANGE]);
+      expect(factory.peers).toHaveLength(2);
+      factory.peers[1]!.release();
+    } finally {
+      for (const peer of factory.peers) peer.release();
+      firstClient?.disconnect();
+      secondClient?.disconnect();
       await server.stop();
     }
   });

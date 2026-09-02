@@ -217,7 +217,7 @@ describe('RoomManager FFA lifecycle', () => {
     const host = subject.manager.createRoom('c-1', 'Ada');
     const guest = subject.manager.joinRoom('c-2', host.roomCode, 'Linus');
     const publicationsBeforeLobbySample = subject.publications.length;
-    subject.manager.setPing('c-1', 41.6);
+    subject.manager.setPing('c-1', 41.6, 'polling', subject.clock.now());
     subject.manager.setTransport('c-1', 'websocket');
     expect(subject.publications).toHaveLength(publicationsBeforeLobbySample);
 
@@ -231,14 +231,14 @@ describe('RoomManager FFA lifecycle', () => {
     });
 
     const publicationsBeforeSamples = subject.publications.length;
-    subject.manager.setPing('c-1', 10);
-    subject.manager.setPing('c-1', 10);
-    subject.manager.setPing('c-1', 10);
-    subject.manager.setPing('c-1', 100);
-    subject.manager.setPing('c-2', 10);
-    subject.manager.setPing('c-2', 30);
-    subject.manager.setPing('c-2', 70);
-    subject.manager.setPing('c-2', GAME.maxPingMs + 500);
+    subject.manager.setPing('c-1', 10, 'websocket', subject.clock.now());
+    subject.manager.setPing('c-1', 10, 'websocket', subject.clock.now());
+    subject.manager.setPing('c-1', 10, 'websocket', subject.clock.now());
+    subject.manager.setPing('c-1', 100, 'websocket', subject.clock.now());
+    subject.manager.setPing('c-2', 10, 'polling', subject.clock.now());
+    subject.manager.setPing('c-2', 30, 'polling', subject.clock.now());
+    subject.manager.setPing('c-2', 70, 'polling', subject.clock.now());
+    subject.manager.setPing('c-2', GAME.maxPingMs + 500, 'polling', subject.clock.now());
     expect(subject.publications).toHaveLength(publicationsBeforeSamples);
     subject.manager.advance(40);
     expect(subject.snapshot(host.roomCode).network).toEqual({
@@ -247,20 +247,108 @@ describe('RoomManager FFA lifecycle', () => {
     });
   });
 
-  it('computes jitter only from consecutive samples inside the bounded RTT window', () => {
+  it('computes jitter only from the latest five consecutive RTT samples', () => {
     const subject = fixture();
     const { roomCode, players } = readyAndStart(subject);
 
     for (const sample of [10, 10, 110, 210, 310, 410, 410, 410, 410]) {
-      subject.manager.setPing('c-1', sample);
+      subject.manager.setPing('c-1', sample, 'polling', subject.clock.now());
     }
     subject.manager.advance(40);
 
     expect(subject.snapshot(roomCode).network[players[0].playerId]).toMatchObject({
       currentMs: 410,
-      medianMs: 360,
-      jitterMs: 100
+      medianMs: 410,
+      jitterMs: 0
     });
+  });
+
+  it('accepts only current-transport RTT samples, expires them after six seconds, and clears them on transport change', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject);
+    const hostId = players[0].playerId;
+
+    subject.manager.setTransport('c-1', 'webrtc');
+    subject.manager.setPing('c-1', 99, 'websocket', 1_000);
+    subject.manager.advance(40);
+    expect(subject.snapshot(roomCode).network[hostId]).toEqual({
+      currentMs: null,
+      medianMs: null,
+      jitterMs: null,
+      transport: 'webrtc'
+    });
+
+    subject.manager.setPing('c-1', 12, 'webrtc', 1_000);
+    subject.clock.advance(5_999);
+    subject.manager.advance(40);
+    expect(subject.snapshot(roomCode).network[hostId]).toMatchObject({
+      currentMs: 12,
+      medianMs: 12,
+      jitterMs: 0,
+      transport: 'webrtc'
+    });
+
+    subject.clock.advance(2);
+    subject.manager.advance(40);
+    expect(subject.snapshot(roomCode).network[hostId]).toMatchObject({
+      currentMs: null,
+      medianMs: null,
+      jitterMs: null,
+      transport: 'webrtc'
+    });
+
+    subject.manager.setPing('c-1', 15, 'webrtc', subject.clock.now());
+    subject.manager.setTransport('c-1', 'websocket');
+    subject.manager.advance(40);
+    expect(subject.snapshot(roomCode).network[hostId]).toEqual({
+      currentMs: null,
+      medianMs: null,
+      jitterMs: null,
+      transport: 'websocket'
+    });
+  });
+
+  it('publishes one stable epoch through host migration and resume, then increments exactly once for a rematch', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject, 3);
+    const firstStarted = subject.publications.find(
+      (publication): publication is Extract<RoomPublication, { type: 'MATCH_STARTED' }> =>
+        publication.type === 'MATCH_STARTED'
+    );
+    expect(firstStarted).toMatchObject({ matchEpoch: 1, eventCursor: 0 });
+
+    advanceCountdown(subject);
+    subject.manager.disconnect('c-1');
+    expect(subject.roomState(roomCode).hostPlayerId).toBe(players[1].playerId);
+    subject.manager.resume('c-4', roomCode, players[0].resumeToken);
+    const firstEpochPublications = subject.publications.filter(
+      (publication) => publication.type === 'MATCH_STARTED'
+        || publication.type === 'MATCH_SNAPSHOT'
+        || publication.type === 'MATCH_EVENT'
+    );
+    expect(firstEpochPublications).not.toHaveLength(0);
+    expect(firstEpochPublications.every((publication) => publication.matchEpoch === 1)).toBe(true);
+
+    forceTargetResult(
+      subject,
+      roomCode,
+      players[1].playerId,
+      players[2].playerId,
+      DEFAULT_ROOM_SETTINGS.knockoutTarget
+    );
+    subject.manager.setResultReady('c-2', true);
+    subject.manager.setResultReady('c-3', true);
+    subject.manager.setResultReady('c-4', true);
+    subject.manager.startMatch('c-2');
+
+    const starts = subject.publications.filter(
+      (publication): publication is Extract<RoomPublication, { type: 'MATCH_STARTED' }> =>
+        publication.type === 'MATCH_STARTED'
+    );
+    expect(starts.map(({ matchEpoch, eventCursor }) => ({ matchEpoch, eventCursor }))).toEqual([
+      { matchEpoch: 1, eventCursor: 0 },
+      { matchEpoch: 2, eventCursor: 0 }
+    ]);
   });
 
   it('preserves settings and migrated ownership through resume, member removal, result, rematches, and lobby return', () => {
