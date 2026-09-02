@@ -402,13 +402,19 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         const roomCode = rooms.leaveRoom(socket.id);
         stopLatencySampling();
         activePlayerId = null;
-        try {
-          await Promise.all([
-            transportHub.detachSession(socket.id),
-            socket.leave(roomCode)
-          ]);
-        } finally {
-          onLeave(socket, roomCode);
+        const cleanupResults = await Promise.allSettled([
+          transportHub.detachSession(socket.id),
+          socket.leave(roomCode)
+        ]);
+        onLeave(socket, roomCode);
+        const cleanupFailures = cleanupResults.flatMap((result) =>
+          result.status === 'rejected' ? [result.reason] : []);
+        if (cleanupFailures.length > 0) {
+          const correlationId = randomUUID();
+          logger.error(
+            `[${correlationId}] Socket.IO room leave cleanup failure`,
+            cleanupFailures.length === 1 ? cleanupFailures[0] : cleanupFailures
+          );
         }
         return null;
       });

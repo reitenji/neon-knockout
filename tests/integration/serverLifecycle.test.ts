@@ -264,7 +264,7 @@ describe('GameServer lifecycle', () => {
     }
   });
 
-  it('reports a genuine peer close failure instead of acknowledging successful leave', async () => {
+  it('acknowledges the committed leave after logging a peer close cleanup failure', async () => {
     const factory = new LifecyclePeerFactory();
     const serverErrors: unknown[][] = [];
     const server = createGameServer({
@@ -280,7 +280,7 @@ describe('GameServer lifecycle', () => {
     try {
       const address = await server.start();
       client = await connectClient(address.origin);
-      expectWelcome(await emitAck<SessionWelcome>(client, 'room:create', { name: 'Ada' }));
+      const firstRoom = expectWelcome(await emitAck<SessionWelcome>(client, 'room:create', { name: 'Ada' }));
       expect(await emitAck<RtcNegotiationAnswer>(client, 'transport:negotiate', {
         generationId: LIFECYCLE_GENERATION,
         offer: { type: 'offer', sdp: 'close-failure-offer' }
@@ -291,13 +291,16 @@ describe('GameServer lifecycle', () => {
       await waitFor(() => peer.closeCalls === 1, 'failing leave peer close request');
       peer.release(new Error('forced peer close failure'));
 
-      expect(await leaveAcknowledgement)
-        .toMatchObject({ ok: false, error: { code: 'INTERNAL_ERROR' } });
+      expect(await leaveAcknowledgement).toEqual({ ok: true, data: null });
+      expect(server.rooms.debugRoom(firstRoom.roomCode)).toBeNull();
       expect(serverErrors).toHaveLength(1);
-      expect(serverErrors[0]?.[0]).toMatch(/Unexpected Socket.IO async action failure/);
+      expect(serverErrors[0]?.[0]).toMatch(/Socket.IO room leave cleanup failure/);
       expect(serverErrors[0]?.[1]).toEqual(new Error('forced peer close failure'));
       expect(await emitAck<null>(client, 'room:leave', {}))
         .toMatchObject({ ok: false, error: { code: 'PLAYER_NOT_FOUND' } });
+      const replacement = expectWelcome(await emitAck<SessionWelcome>(client, 'room:create', { name: 'Ada again' }));
+      expect(replacement.roomCode).not.toBe(firstRoom.roomCode);
+      expect(server.rooms.debugRoom(replacement.roomCode)?.playerIds).toEqual([replacement.playerId]);
     } finally {
       for (const peer of factory.peers) peer.release();
       client?.disconnect();
