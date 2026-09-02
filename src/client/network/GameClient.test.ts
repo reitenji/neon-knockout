@@ -50,6 +50,12 @@ const socketHarness = vi.hoisted(() => {
 vi.mock('socket.io-client', () => ({ io: socketHarness.io }));
 
 const gameplayHarness = vi.hoisted(() => {
+  type SignalingResult = Readonly<{ ok: boolean }>;
+  type TransportOptions = Readonly<{
+    negotiate: (request: unknown) => Promise<SignalingResult>;
+    activate: (request: unknown) => Promise<SignalingResult>;
+  }>;
+  let automaticSignaling = false;
   const transports: Array<{
     start: ReturnType<typeof vi.fn>;
     acceptMode: ReturnType<typeof vi.fn>;
@@ -70,8 +76,19 @@ const gameplayHarness = vi.hoisted(() => {
     fallback: vi.fn(),
     dispose: vi.fn()
   });
-  const createGameplayTransport = vi.fn(() => {
+  const createGameplayTransport = vi.fn((options: TransportOptions) => {
     const transport = createTransport();
+    const generationId = `00000000-0000-4000-8000-${String(transports.length + 1).padStart(12, '0')}`;
+    if (automaticSignaling) {
+      transport.start.mockImplementation(async () => {
+        const negotiation = await options.negotiate({
+          generationId,
+          offer: { type: 'offer', sdp: `client-offer:${generationId}` }
+        });
+        if (!negotiation.ok) return;
+        await options.activate({ generationId });
+      });
+    }
     transports.push(transport);
     return transport;
   });
@@ -84,8 +101,12 @@ const gameplayHarness = vi.hoisted(() => {
     get firstTransport() {
       return transports[0]!;
     },
+    enableAutomaticSignaling(): void {
+      automaticSignaling = true;
+    },
     reset(): void {
       transports.splice(0);
+      automaticSignaling = false;
       createGameplayTransport.mockClear();
     }
   };
@@ -289,6 +310,77 @@ describe('createSocketGameClient', () => {
     expect(formerSequencer.dispose).toHaveBeenCalledOnce();
     expect(gameplayHarness.transport).not.toBe(formerTransport);
     expect(gameplayHarness.transport.start).toHaveBeenCalledOnce();
+  });
+
+  it('automatically negotiates a fresh transport from result return before the epoch-two countdown starts', async () => {
+    gameplayHarness.enableAutomaticSignaling();
+    socketHarness.socket.emit.mockImplementation((event, payload, acknowledge?: (value: unknown) => void) => {
+      if (event === 'transport:negotiate') {
+        const request = payload as { generationId: string };
+        acknowledge?.({
+          ok: true,
+          data: {
+            generationId: request.generationId,
+            answer: { type: 'answer', sdp: 'server-answer' }
+          }
+        });
+        return;
+      }
+      if (event === 'transport:activate') {
+        const request = payload as { generationId: string };
+        acknowledge?.({ ok: true, data: { generationId: request.generationId, mode: 'webrtc' } });
+        return;
+      }
+      acknowledge?.({ ok: true, data: null });
+    });
+    const client = createSocketGameClient();
+    const observedRoomStates: RoomState[] = [];
+    client.subscribe('room:state', (state) => observedRoomStates.push(state));
+    socketHarness.trigger('session:welcome', welcome());
+    await Promise.resolve();
+    await Promise.resolve();
+    const firstTransport = gameplayHarness.transport;
+    const firstGeneration = (socketHarness.socket.emit.mock.calls.find(
+      ([event]) => event === 'transport:negotiate'
+    )?.[1] as { generationId?: string } | undefined)?.generationId;
+    expect(firstGeneration).toEqual(expect.any(String));
+    socketHarness.trigger('room:state', {
+      ...roomState(),
+      phase: 'RESULT',
+      result: { winnerPlayerId: 'player-1', reason: 'TARGET_SCORE', players: [] }
+    });
+    expect(observedRoomStates.at(-1)?.phase).toBe('RESULT');
+    socketHarness.socket.emit.mockClear();
+
+    await expect(client.returnToLobby()).resolves.toEqual({ ok: true, data: null });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const rematchTransport = gameplayHarness.transport;
+    expect(rematchTransport).not.toBe(firstTransport);
+    expect(firstTransport.dispose).toHaveBeenCalledOnce();
+    const rematchNegotiate = socketHarness.socket.emit.mock.calls.find(([event]) => event === 'transport:negotiate');
+    const rematchActivate = socketHarness.socket.emit.mock.calls.find(([event]) => event === 'transport:activate');
+    expect(rematchNegotiate).toEqual([
+      'transport:negotiate',
+      expect.objectContaining({ generationId: expect.any(String) }),
+      expect.any(Function)
+    ]);
+    expect(rematchActivate).toEqual([
+      'transport:activate',
+      expect.objectContaining({ generationId: rematchNegotiate?.[1].generationId }),
+      expect.any(Function)
+    ]);
+    expect(rematchNegotiate?.[1].generationId).not.toBe(firstGeneration);
+
+    const epochTwoStart: MatchStartedPublication = {
+      matchEpoch: 2,
+      eventCursor: 0,
+      snapshot: { ...matchSnapshot(0), phase: 'COUNTDOWN' }
+    };
+    socketHarness.trigger('match:started', epochTwoStart);
+    expect(rematchTransport.acceptSocketStarted).toHaveBeenCalledWith(epochTwoStart);
+    expect(firstTransport.acceptSocketStarted).not.toHaveBeenCalled();
   });
 
   it('sends match input fire-and-forget without an acknowledgement callback', () => {

@@ -291,7 +291,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         emitError: (error) => socket.emit('server:error', structuredClone(error)),
         probeFallbackPing: sampleLatencyImmediately,
         setNetworkMode: (mode) => rooms.setTransport(socket.id, mode),
-        setNetworkSample: (medianMs, sampledAt) => rooms.setPing(socket.id, medianMs, 'webrtc', sampledAt),
+        setNetworkSample: (medianMs, sampledAt) => rooms.setWebRtcMedian(socket.id, medianMs, sampledAt),
         clearNetworkSample: () => rooms.clearPing(socket.id)
       });
       onSession(socket, welcome, inputIngress);

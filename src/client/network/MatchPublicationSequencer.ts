@@ -27,6 +27,7 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
   const clearTimeoutFn = options.clearTimeoutFn ?? (globalThis.clearTimeout as typeof window.clearTimeout);
   const pendingEvents = new Map<number, Map<number, GameEvent>>();
   const pendingSnapshots = new Map<number, MatchSnapshotPublication>();
+  const latestSnapshotTicks = new Map<number, number>();
   const startedEpochs = new Set<number>();
   let activeEpoch: number | null = null;
   let nextEventId = 0;
@@ -55,6 +56,11 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
     for (const epoch of pendingSnapshots.keys()) {
       if (epoch < activeEpoch) {
         pendingSnapshots.delete(epoch);
+      }
+    }
+    for (const epoch of latestSnapshotTicks.keys()) {
+      if (epoch < activeEpoch) {
+        latestSnapshotTicks.delete(epoch);
       }
     }
   }
@@ -163,6 +169,16 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
     return false;
   }
 
+  function publishSnapshotIfNewer(publication: MatchSnapshotPublication): void {
+    const latestTick = latestSnapshotTicks.get(publication.matchEpoch);
+    if (latestTick !== undefined && publication.snapshot.tick <= latestTick) {
+      return;
+    }
+
+    latestSnapshotTicks.set(publication.matchEpoch, publication.snapshot.tick);
+    options.onSnapshot(publication.snapshot);
+  }
+
   function acceptStarted(publication: MatchStartedPublication): void {
     if (disposed || startedEpochs.has(publication.matchEpoch)) {
       return;
@@ -175,6 +191,7 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
     activeEpoch = publication.matchEpoch;
     nextEventId = publication.eventCursor + 1;
     clearStaleEpochs();
+    latestSnapshotTicks.set(publication.matchEpoch, publication.snapshot.tick);
 
     options.onStarted(publication.snapshot);
     if (disposed) {
@@ -184,7 +201,7 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
     const queuedSnapshot = pendingSnapshots.get(publication.matchEpoch);
     if (queuedSnapshot !== undefined) {
       pendingSnapshots.delete(publication.matchEpoch);
-      options.onSnapshot(queuedSnapshot.snapshot);
+      publishSnapshotIfNewer(queuedSnapshot);
     }
     publishContiguousEvents(publication.matchEpoch);
     refreshGapTimer();
@@ -196,10 +213,14 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
     }
 
     if (activeEpoch === publication.matchEpoch) {
-      options.onSnapshot(publication.snapshot);
+      publishSnapshotIfNewer(publication);
       return;
     }
 
+    const queuedSnapshot = pendingSnapshots.get(publication.matchEpoch);
+    if (queuedSnapshot !== undefined && publication.snapshot.tick <= queuedSnapshot.snapshot.tick) {
+      return;
+    }
     pendingSnapshots.set(publication.matchEpoch, publication);
     refreshGapTimer();
   }
@@ -243,6 +264,7 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
     }
     pendingEvents.clear();
     pendingSnapshots.clear();
+    latestSnapshotTicks.clear();
     startedEpochs.clear();
     gapNotified = false;
   }

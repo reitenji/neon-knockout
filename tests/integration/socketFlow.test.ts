@@ -40,6 +40,9 @@ class IntegrationPeer implements ServerPeer {
   fastResult: PeerSendResult = 'sent';
   reliableResult: PeerSendResult = 'sent';
   rttMs: number | null = 12;
+  readonly rttSamples: Array<number | null> = [];
+  rttSampleCalls = 0;
+  autoAcknowledgeHeartbeats = false;
   closeCalls = 0;
 
   constructor(readonly generationId: string) {}
@@ -59,12 +62,24 @@ class IntegrationPeer implements ServerPeer {
   }
 
   sendReliable(serialized: string): PeerSendResult {
-    if (this.reliableResult === 'sent') this.reliableSent.push(serialized);
+    if (this.reliableResult === 'sent') {
+      this.reliableSent.push(serialized);
+      const message = JSON.parse(serialized) as { kind?: unknown; nonce?: unknown };
+      if (this.autoAcknowledgeHeartbeats && message.kind === 'heartbeat' && typeof message.nonce === 'number') {
+        queueMicrotask(() => this.receiveReliable({
+          version: GAMEPLAY_PROTOCOL_VERSION,
+          generationId: this.generationId,
+          kind: 'heartbeat-ack',
+          nonce: message.nonce
+        }));
+      }
+    }
     return this.reliableResult;
   }
 
   async sampleRttMs(): Promise<number | null> {
-    return this.rttMs;
+    this.rttSampleCalls += 1;
+    return this.rttSamples.length > 0 ? this.rttSamples.shift()! : this.rttMs;
   }
 
   onFastMessage(listener: (serialized: string) => void): () => void {
@@ -90,6 +105,11 @@ class IntegrationPeer implements ServerPeer {
   receiveFast(message: unknown): void {
     const serialized = typeof message === 'string' ? message : JSON.stringify(message);
     for (const listener of [...this.fastListeners]) listener(serialized);
+  }
+
+  receiveReliable(message: unknown): void {
+    const serialized = typeof message === 'string' ? message : JSON.stringify(message);
+    for (const listener of [...this.reliableListeners]) listener(serialized);
   }
 }
 
@@ -510,6 +530,39 @@ describe('Socket.IO FFA game server flow', () => {
     await harness().dropWebRtc(match.host.playerId);
     expect(peer.closeCalls).toBe(1);
   });
+
+  it('publishes the hub latest-five WebRTC median once, then resumes raw Socket.IO RTT aggregation', async () => {
+    const match = await startMatch();
+    const peer = await negotiateAndActivate(match.hostClient);
+    peer.autoAcknowledgeHeartbeats = true;
+    peer.rttSamples.push(50, 10, 30, 100, 20, 0);
+
+    await waitFor(() => peer.rttSampleCalls >= 6, 'six varying WebRTC RTT samples', 13_000);
+    server.rooms.advance(STEP_MS);
+    expect(snapshot(match.roomCode).network[match.host.playerId]).toMatchObject({
+      currentMs: 20,
+      medianMs: 20,
+      transport: 'webrtc'
+    });
+
+    await harness().dropWebRtc(match.host.playerId);
+    await waitFor(() => {
+      const network = snapshot(match.roomCode).network[match.host.playerId];
+      return network?.transport === 'websocket' && network.medianMs !== null;
+    }, 'fresh Socket.IO RTT after WebRTC fallback', 750);
+    const connectionId = match.hostClient.id;
+    if (!connectionId) throw new Error('Expected the host Socket.IO connection id.');
+    for (const sample of [10, 90, 20, 80, 30]) {
+      server.rooms.setPing(connectionId, sample, 'websocket', performance.now());
+    }
+    server.rooms.advance(STEP_MS);
+    expect(snapshot(match.roomCode).network[match.host.playerId]).toMatchObject({
+      currentMs: 30,
+      medianMs: 30,
+      jitterMs: 65,
+      transport: 'websocket'
+    });
+  }, 20_000);
 
   it('replaces a disconnected peer on resume and emits a fresh epoch boundary before later snapshots', async () => {
     const match = await startMatch();

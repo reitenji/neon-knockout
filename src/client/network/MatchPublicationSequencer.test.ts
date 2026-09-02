@@ -113,6 +113,42 @@ describe('match publication sequencer', () => {
     expect(harness.publishedEvents.map((value) => value.eventId)).toEqual([1, 2]);
   });
 
+  it('never regresses current-epoch snapshots arriving with ticks 0, 2, 1', () => {
+    const harness = createHarness();
+
+    harness.sequencer.acceptStarted(started({ matchEpoch: 4, snapshot: snapshot(0) }));
+    harness.sequencer.acceptSnapshot(snapshotPublication(4, snapshot(2)));
+    harness.sequencer.acceptSnapshot(snapshotPublication(4, snapshot(1)));
+
+    expect([
+      ...harness.publishedStarts,
+      ...harness.publishedSnapshots
+    ].map((value) => value.tick)).toEqual([0, 2]);
+  });
+
+  it('retains only the highest-tick future snapshot before its start', () => {
+    const harness = createHarness();
+
+    harness.sequencer.acceptSnapshot(snapshotPublication(5, snapshot(8)));
+    harness.sequencer.acceptSnapshot(snapshotPublication(5, snapshot(3)));
+    harness.sequencer.acceptStarted(started({ matchEpoch: 5, snapshot: snapshot(0) }));
+
+    expect(harness.publishedSnapshots.map((value) => value.tick)).toEqual([8]);
+  });
+
+  it('resets snapshot tick ordering for a newer rematch epoch', () => {
+    const harness = createHarness();
+
+    harness.sequencer.acceptStarted(started({ matchEpoch: 4, snapshot: snapshot(20) }));
+    harness.sequencer.acceptSnapshot(snapshotPublication(4, snapshot(21)));
+    harness.sequencer.acceptStarted(started({ matchEpoch: 5, snapshot: snapshot(0) }));
+    harness.sequencer.acceptSnapshot(snapshotPublication(5, snapshot(1)));
+    harness.sequencer.acceptSnapshot(snapshotPublication(5, snapshot(0)));
+
+    expect(harness.publishedStarts.map((value) => value.tick)).toEqual([20, 0]);
+    expect(harness.publishedSnapshots.map((value) => value.tick)).toEqual([21, 1]);
+  });
+
   it('waits for matching start before publishing a snapshot or event', () => {
     const harness = createHarness();
 

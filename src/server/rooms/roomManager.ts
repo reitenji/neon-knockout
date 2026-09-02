@@ -423,7 +423,7 @@ export class RoomManager {
   setPing(
     connectionId: string,
     pingMs: number,
-    source: PlayerNetworkTransport,
+    source: Exclude<PlayerNetworkTransport, 'webrtc'>,
     sampledAtMs: number
   ): void {
     const { room, player } = this.requireConnectedPlayer(connectionId);
@@ -437,6 +437,20 @@ export class RoomManager {
     runtime.jitterMs = roundMedian(runtime.samples.slice(1).map((sample, index) =>
       Math.abs(sample - runtime.samples[index]!)
     )) ?? 0;
+    runtime.sampledAtMs = sampledAtMs;
+    room.network.set(player.playerId, runtime);
+  }
+
+  setWebRtcMedian(connectionId: string, medianMs: number, sampledAtMs: number): void {
+    const { room, player } = this.requireConnectedPlayer(connectionId);
+    if (!room.match || (room.phase !== 'COUNTDOWN' && room.phase !== 'MATCH')) return;
+    const runtime = room.network.get(player.playerId) ?? createNetworkRuntime();
+    if (runtime.transport !== 'webrtc' || !Number.isFinite(sampledAtMs)) return;
+    const normalized = Math.round(Math.max(0, Math.min(GAME.maxPingMs, medianMs)));
+    runtime.currentMs = normalized;
+    runtime.medianMs = normalized;
+    runtime.jitterMs = 0;
+    runtime.samples = [];
     runtime.sampledAtMs = sampledAtMs;
     room.network.set(player.playerId, runtime);
   }
