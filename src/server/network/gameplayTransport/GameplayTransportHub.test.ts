@@ -16,6 +16,7 @@ import type { PeerSendResult, ServerPeer, ServerPeerFactory } from './ServerPeer
 import {
   GameplayTransportHub,
   GameplayTransportNegotiationCancelledError,
+  GameplayTransportSessionUnavailableError,
   type TransportPublication,
   type TransportSession
 } from './GameplayTransportHub.js';
@@ -333,6 +334,23 @@ afterEach(async () => {
 });
 
 describe('GameplayTransportHub', () => {
+  it('classifies an unattached or stopped-session request separately from in-flight cancellation', async () => {
+    const { hub } = createSubject();
+    const request = {
+      generationId: FIRST_GENERATION,
+      offer: { type: 'offer' as const, sdp: 'unattached-offer' }
+    };
+
+    const unattachedError = await hub.negotiate('unknown-socket', request).catch((error: unknown) => error);
+    expect(unattachedError).toBeInstanceOf(GameplayTransportSessionUnavailableError);
+    expect(unattachedError).not.toBeInstanceOf(GameplayTransportNegotiationCancelledError);
+
+    await hub.stop();
+    const stoppedError = await hub.negotiate('unknown-socket', request).catch((error: unknown) => error);
+    expect(stoppedError).toBeInstanceOf(GameplayTransportSessionUnavailableError);
+    expect(stoppedError).not.toBeInstanceOf(GameplayTransportNegotiationCancelledError);
+  });
+
   it('classifies superseded and detached pending negotiations as expected lifecycle cancellation', async () => {
     const { hub, factory } = createSubject();
     hub.attachSession(session().session);

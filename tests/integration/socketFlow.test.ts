@@ -516,6 +516,20 @@ describe('Socket.IO FFA game server flow', () => {
     expect(serverErrors[0]?.[1]).toEqual(new Error('forced negotiation failure'));
   });
 
+  it('returns recoverable transport unavailability without logging before a room session is attached', async () => {
+    const unattachedClient = await client();
+
+    expect(await emitAck<RtcNegotiationAnswer>(unattachedClient, 'transport:negotiate', {
+      generationId: FIRST_GENERATION,
+      offer: { type: 'offer', sdp: 'pre-room-offer' }
+    })).toMatchObject({
+      ok: false,
+      error: { code: 'TRANSPORT_UNAVAILABLE', recoverable: true }
+    });
+    expect(peerFactory.peers).toEqual([]);
+    expect(serverErrors).toEqual([]);
+  });
+
   it('treats superseded negotiation as expected cancellation without activating its stale generation', async () => {
     const hostClient = await client();
     const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });

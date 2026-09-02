@@ -96,7 +96,16 @@ function safeInvoke(callback: () => void): void {
   }
 }
 
-export class GameplayTransportNegotiationCancelledError extends Error {
+export abstract class GameplayTransportExpectedLifecycleError extends Error {}
+
+export class GameplayTransportSessionUnavailableError extends GameplayTransportExpectedLifecycleError {
+  constructor() {
+    super('Gameplay transport session is not attached.');
+    this.name = 'GameplayTransportSessionUnavailableError';
+  }
+}
+
+export class GameplayTransportNegotiationCancelledError extends GameplayTransportExpectedLifecycleError {
   constructor(message: string) {
     super(message);
     this.name = 'GameplayTransportNegotiationCancelledError';
@@ -203,7 +212,7 @@ export class GameplayTransportHub {
       if (stillCurrent) {
         await this.transitionToFallback(record, generationId, peer);
       }
-      if (!stillCurrent && !(error instanceof GameplayTransportNegotiationCancelledError)) {
+      if (!stillCurrent && !(error instanceof GameplayTransportExpectedLifecycleError)) {
         throw new GameplayTransportNegotiationCancelledError('WebRTC negotiation was cancelled with its stale session.');
       }
       throw error;
@@ -324,7 +333,7 @@ export class GameplayTransportHub {
   private requireSession(socketId: string): SessionRecord {
     const record = this.sessionsBySocket.get(socketId);
     if (!record || record.disposed || this.stopped) {
-      throw new GameplayTransportNegotiationCancelledError('Gameplay transport session is not attached.');
+      throw new GameplayTransportSessionUnavailableError();
     }
     return record;
   }

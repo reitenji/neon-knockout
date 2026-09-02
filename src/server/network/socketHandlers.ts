@@ -27,7 +27,7 @@ import { DomainError } from '../rooms/domainError.js';
 import type { RoomManager } from '../rooms/roomManager.js';
 import { createMatchInputIngress, type MatchInputIngress } from './matchInputIngress.js';
 import {
-  GameplayTransportNegotiationCancelledError,
+  GameplayTransportExpectedLifecycleError,
   type GameplayTransportHub
 } from './gameplayTransport/GameplayTransportHub.js';
 
@@ -280,7 +280,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
             callback({ ok: false, error: error.error });
             return;
           }
-          if (error instanceof GameplayTransportNegotiationCancelledError) {
+          if (error instanceof GameplayTransportExpectedLifecycleError) {
             callback({ ok: false, error: TRANSPORT_UNAVAILABLE });
             return;
           }
