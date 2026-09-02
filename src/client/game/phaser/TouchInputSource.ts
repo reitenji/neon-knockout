@@ -10,6 +10,8 @@ export class TouchInputSource implements ArenaInputSource {
   private quickHeld = false;
   private heavyHeld = false;
   private dashHeld = false;
+  private quickPressPending = false;
+  private dashPressPending = false;
 
   constructor(deadZone = DEFAULT_DEAD_ZONE) {
     this.deadZone = clamp(Number.isFinite(deadZone) ? deadZone : DEFAULT_DEAD_ZONE, 0, 1);
@@ -21,6 +23,7 @@ export class TouchInputSource implements ArenaInputSource {
   }
 
   setQuickHeld(held: boolean): void {
+    if (held && !this.quickHeld) this.quickPressPending = true;
     this.quickHeld = held;
   }
 
@@ -29,6 +32,7 @@ export class TouchInputSource implements ArenaInputSource {
   }
 
   setDashHeld(held: boolean): void {
+    if (held && !this.dashHeld) this.dashPressPending = true;
     this.dashHeld = held;
   }
 
@@ -46,12 +50,21 @@ export class TouchInputSource implements ArenaInputSource {
     return { quick: this.quickHeld, heavy: this.heavyHeld };
   }
 
+  consumePressEdges(): Readonly<{ quick: boolean; dash: boolean }> {
+    const pending = { quick: this.quickPressPending, dash: this.dashPressPending };
+    this.quickPressPending = false;
+    this.dashPressPending = false;
+    return pending;
+  }
+
   reset(): void {
     this.joystickX = 0;
     this.joystickY = 0;
     this.quickHeld = false;
     this.heavyHeld = false;
     this.dashHeld = false;
+    this.quickPressPending = false;
+    this.dashPressPending = false;
   }
 }
 
@@ -77,6 +90,13 @@ export function combineArenaInputSources(...sources: readonly ArenaInputSource[]
         return { quick: combined.quick || attack.quick, heavy: combined.heavy || attack.heavy };
       },
       { quick: false, heavy: false }
+    ),
+    consumePressEdges: () => sources.reduce<{ quick: boolean; dash: boolean }>(
+      (combined, source) => {
+        const pending = source.consumePressEdges?.() ?? { quick: false, dash: false };
+        return { quick: combined.quick || pending.quick, dash: combined.dash || pending.dash };
+      },
+      { quick: false, dash: false }
     ),
     reset: () => {
       for (const source of sources) source.reset();

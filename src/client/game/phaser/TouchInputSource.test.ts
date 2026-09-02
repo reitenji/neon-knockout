@@ -59,15 +59,41 @@ describe('TouchInputSource', () => {
     expect(input.sample(4, 68)).toMatchObject({ quick: false, heavy: false, dash: false });
   });
 
+  it('delivers a quick tap released between samples exactly once', () => {
+    const touch = new TouchInputSource();
+    const input = new ArenaInput(combineArenaInputSources(source(), touch));
+
+    touch.setQuickHeld(true);
+    touch.setQuickHeld(false);
+
+    expect(input.sample(0, 0)).toMatchObject({ quick: true });
+    expect(input.sample(1, 17)).toMatchObject({ quick: false });
+  });
+
+  it('delivers a dash tap released between samples exactly once', () => {
+    const touch = new TouchInputSource();
+    const input = new ArenaInput(combineArenaInputSources(source(), touch));
+
+    touch.setDashHeld(true);
+    touch.setDashHeld(false);
+
+    expect(input.sample(0, 0)).toMatchObject({ dash: true });
+    expect(input.sample(1, 17)).toMatchObject({ dash: false });
+  });
+
   it('clears joystick and every held action on reset', () => {
     const touch = new TouchInputSource();
+    const input = new ArenaInput(touch);
     touch.setJoystick(-1, -1);
     touch.setQuickHeld(true);
     touch.setHeavyHeld(true);
     touch.setDashHeld(true);
+    touch.setQuickHeld(false);
+    touch.setDashHeld(false);
     touch.reset();
     expect(touch.movement()).toEqual({ up: false, down: false, left: false, right: false, dash: false });
     expect(touch.attack()).toEqual({ quick: false, heavy: false });
+    expect(input.sample(0, 0)).toMatchObject({ quick: false, heavy: false, dash: false });
   });
 });
 

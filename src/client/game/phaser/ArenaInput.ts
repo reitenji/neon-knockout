@@ -9,6 +9,7 @@ type HeldAttack = Readonly<{ quick: boolean; heavy: boolean }>;
 export interface ArenaInputSource {
   movement(): HeldMovement;
   attack(): HeldAttack;
+  consumePressEdges?(): Readonly<{ quick: boolean; dash: boolean }>;
   reset(): void;
   dispose?(): void;
   onSuspend?(listener: () => void): () => void;
@@ -75,15 +76,17 @@ export class ArenaInput {
     const attackHeld = this.source.attack();
     if (this.suppressHeldUntilRelease && !this.releaseGateIsOpen(movementHeld, attackHeld)) return this.idleFrame(seq);
     this.suppressHeldUntilRelease = false;
+    const pressEdges = this.source.consumePressEdges?.() ?? { quick: false, dash: false };
 
     const movement = normalizeAxes(
       Number(movementHeld.right) - Number(movementHeld.left),
       Number(movementHeld.down) - Number(movementHeld.up)
     );
     const movementDirection = movement.x === 0 && movement.y === 0 ? null : movement;
-    const quick = attackHeld.quick && !this.previousQuick && !attackHeld.heavy && !this.previousHeavy;
+    const quick = (pressEdges.quick || (attackHeld.quick && !this.previousQuick)) &&
+      !attackHeld.heavy && !this.previousHeavy;
     const heavy = attackHeld.heavy;
-    const dash = movementHeld.dash && !this.previousDash;
+    const dash = pressEdges.dash || (movementHeld.dash && !this.previousDash);
     const aim = movementDirection ?? this.lastAttackFacing;
 
     if (movementDirection) this.lastAttackFacing = movementDirection;

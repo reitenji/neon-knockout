@@ -10,6 +10,7 @@ import {
 
 type ObservedInput = Readonly<{
   sequence: number;
+  quick: boolean;
 }>;
 
 type TouchObservation = Readonly<{
@@ -42,12 +43,12 @@ async function latestObservedSequence(page: Page): Promise<number> {
   });
 }
 
-async function observedInputAfter(page: Page, sequence: number): Promise<ObservedInput | null> {
+async function observedQuickAfter(page: Page, sequence: number): Promise<ObservedInput | null> {
   return page.evaluate((afterSequence) => {
     const observer = (window as typeof window & {
       __NEON_E2E_INPUT_OBSERVER__?: { inputs?: ObservedInput[] };
     }).__NEON_E2E_INPUT_OBSERVER__;
-    return observer?.inputs?.find((input) => input.sequence > afterSequence) ?? null;
+    return observer?.inputs?.find((input) => input.sequence > afterSequence && input.quick) ?? null;
   }, sequence);
 }
 
@@ -72,7 +73,7 @@ async function touchObservation(page: Page): Promise<TouchObservation | null> {
   }).__NEON_E2E_TOUCH_OBSERVER__ ?? null);
 }
 
-test('Playwright WebKit enters a mobile match and keeps authoritative input live after a trusted touch gesture', async ({ browser, game }, testInfo) => {
+test('Playwright WebKit turns one trusted mobile tap into one authoritative WebRTC quick attack', async ({ browser, game }, testInfo) => {
   expect(testInfo.project.name).toBe('mobile-webkit');
   expect(testInfo.project.use.browserName).toBe('webkit');
 
@@ -115,36 +116,38 @@ test('Playwright WebKit enters a mobile match and keeps authoritative input live
     const quick = host.page.getByRole('button', { name: 'Hızlı saldırı' });
     await expect(quick).toBeVisible();
 
+    await expect.poll(() => game.harness.transportMode(hostPlayerId), { timeout: 10_000 }).toBe('webrtc');
+    const completedBefore = player(game, code, hostPlayerId).stats.completedAttacks;
+    const marker = await latestObservedSequence(host.page);
     const quickBox = await quick.boundingBox();
     if (!quickBox) throw new Error('WebKit quick touch button was not measurable.');
     await host.page.touchscreen.tap(quickBox.x + quickBox.width / 2, quickBox.y + quickBox.height / 2);
     await expect.poll(() => touchObservation(host.page))
       .toEqual({ trustedStarts: 1, trustedEnds: 1 });
 
-    const marker = await latestObservedSequence(host.page);
-    await expect.poll(() => observedInputAfter(host.page, marker)).not.toBeNull();
-    const sampledInput = await observedInputAfter(host.page, marker);
-    if (!sampledInput) throw new Error('WebKit gameplay input did not continue after the touch interaction.');
+    await expect.poll(() => observedQuickAfter(host.page, marker)).not.toBeNull();
+    const sampledInput = await observedQuickAfter(host.page, marker);
+    if (!sampledInput) throw new Error('WebKit trusted touch did not produce a quick input.');
 
     await expect.poll(() => game.harness.acceptedInputs(hostPlayerId).find(
       (record) => record.sequence === sampledInput.sequence
-    )?.source).toMatch(/^(webrtc|websocket|polling)$/);
+    )?.source).toBe('webrtc');
     const acceptedRecord = game.harness.acceptedInputs(hostPlayerId).find(
       (record) => record.sequence === sampledInput.sequence
     );
     if (!acceptedRecord) throw new Error('WebKit gameplay input source was not recorded.');
     testInfo.annotations.push({ type: 'gameplay-transport', description: acceptedRecord.source });
-    if (acceptedRecord.source === 'webrtc') {
-      const generation = game.harness.transportGeneration(hostPlayerId);
-      expect(generation?.generationId).not.toBeNull();
-      expect(generation?.negotiationCount).toBeGreaterThan(0);
-    } else {
-      expect(['websocket', 'polling']).toContain(acceptedRecord.source);
-    }
-    await expect.poll(() => player(game, code, hostPlayerId).lastProcessedInputSeq)
-      .toBeGreaterThanOrEqual(sampledInput.sequence);
-    await expect.poll(() => game.harness.transportMode(hostPlayerId))
-      .toMatch(/^(webrtc|websocket|polling)$/);
+    const generation = game.harness.transportGeneration(hostPlayerId);
+    expect(generation?.generationId).not.toBeNull();
+    expect(generation?.negotiationCount).toBeGreaterThan(0);
+    await expect.poll(() => {
+      const authoritative = player(game, code, hostPlayerId);
+      return authoritative.lastProcessedInputSeq >= sampledInput.sequence && authoritative.action.kind;
+    }).toBe('QUICK_1');
+    await expect.poll(() => player(game, code, hostPlayerId).stats.completedAttacks)
+      .toBe(completedBefore + 1);
+    await host.page.waitForTimeout(250);
+    expect(player(game, code, hostPlayerId).stats.completedAttacks).toBe(completedBefore + 1);
     await expect(host.page.getByRole('alert')).toHaveCount(0);
     await assertNoUnexpectedErrors(game, host, guest);
   } finally {
