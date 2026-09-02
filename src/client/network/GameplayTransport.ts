@@ -65,10 +65,14 @@ type Generation = {
   lastSentInput: InputFrame | null;
   pendingEdgeInput: InputFrame | null;
   edgeInputReplayed: boolean;
+  quickRedundancyRemaining: number;
+  dashRedundancyRemaining: number;
 };
 
 const encoder = new TextEncoder();
 const HEARTBEAT_GAP_MS = HEARTBEAT_INTERVAL_MS * MISSED_HEARTBEATS_BEFORE_FALLBACK;
+// Two newer sequences cover one dropped and one reordered fast sample; the next sample releases the held edge.
+const TRANSIENT_EDGE_REDUNDANCY_SENDS = 2;
 const CANCELLED = Symbol('cancelled');
 const finiteNumberSchema = z.number().finite();
 const nonNegativeIntegerSchema = z.number().int().nonnegative();
@@ -639,7 +643,9 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
         fallbackNotified: false,
         lastSentInput: null,
         pendingEdgeInput: null,
-        edgeInputReplayed: false
+        edgeInputReplayed: false,
+        quickRedundancyRemaining: 0,
+        dashRedundancyRemaining: 0
       };
       ownedGeneration = generation;
       current = generation;
@@ -695,36 +701,51 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
 
   function sendInput(input: InputFrame): boolean {
     const generation = current;
+    if (generation === null || !isCurrent(generation)) return false;
+    const abandonRedundancy = (): false => {
+      generation.quickRedundancyRemaining = 0;
+      generation.dashRedundancyRemaining = 0;
+      return false;
+    };
     if (
-      generation === null
-      || !isCurrent(generation)
-      || generation.mode !== 'webrtc'
+      generation.mode !== 'webrtc'
       || generation.matchEpoch === null
       || generation.fast.readyState !== 'open'
-      || generation.fast.bufferedAmount > FAST_CHANNEL_MAX_BUFFERED_BYTES
-    ) return false;
+    ) return abandonRedundancy();
+
+    const repeatsQuick = !input.quick && generation.quickRedundancyRemaining > 0;
+    const repeatsDash = !input.dash && generation.dashRedundancyRemaining > 0;
+    const payload = repeatsQuick || repeatsDash
+      ? { ...input, quick: input.quick || repeatsQuick, dash: input.dash || repeatsDash }
+      : input;
+
+    if (generation.fast.bufferedAmount > FAST_CHANNEL_MAX_BUFFERED_BYTES) return abandonRedundancy();
 
     const message: ClientFastMessage = {
       version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: generation.generationId,
       matchEpoch: generation.matchEpoch,
       kind: 'input',
-      payload: input
+      payload
     };
     let serialized: string;
     try {
       serialized = JSON.stringify(message);
     } catch {
-      return false;
+      return abandonRedundancy();
     }
-    if (encoder.encode(serialized).byteLength > CLIENT_MESSAGE_LIMIT_BYTES) return false;
+    if (encoder.encode(serialized).byteLength > CLIENT_MESSAGE_LIMIT_BYTES) return abandonRedundancy();
     try {
       generation.fast.send(serialized);
+      if (input.quick) generation.quickRedundancyRemaining = TRANSIENT_EDGE_REDUNDANCY_SENDS;
+      else if (repeatsQuick) generation.quickRedundancyRemaining -= 1;
+      if (input.dash) generation.dashRedundancyRemaining = TRANSIENT_EDGE_REDUNDANCY_SENDS;
+      else if (repeatsDash) generation.dashRedundancyRemaining -= 1;
       if (
-        input.quick
-        || input.dash
+        payload.quick
+        || payload.dash
         || (generation.lastSentInput?.heavy === true && !input.heavy)
-      ) generation.pendingEdgeInput = input;
+      ) generation.pendingEdgeInput = payload;
       generation.lastSentInput = input;
       return true;
     } catch {

@@ -9,7 +9,11 @@ import {
   type RtcActivationRequest,
   type RtcNegotiationRequest
 } from '../../shared/gameplayTransport.js';
+import { GAME } from '../../shared/constants.js';
 import type { Ack, InputFrame, MatchSnapshot } from '../../shared/model.js';
+import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
+import { stepMatch } from '../../server/game/simulation.js';
+import { createMatchState } from '../../server/game/state.js';
 import type { createMatchPublicationSequencer } from './MatchPublicationSequencer.js';
 import { createGameplayTransport } from './GameplayTransport.js';
 
@@ -416,6 +420,99 @@ describe('createGameplayTransport', () => {
 
     harness.controller.acceptMode({ generationId: SECOND_GENERATION, mode: 'websocket' });
     expect(harness.controller.sendInput(input(8))).toBe(true);
+  });
+
+  it('repeats a transient quick edge long enough to survive one dropped and one reordered fast frame exactly once', async () => {
+    const harness = createHarness();
+    await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    const neutral = (seq: number): InputFrame => ({ ...input(seq), quick: false });
+
+    harness.controller.sendInput(input(40));
+    harness.controller.sendInput(neutral(41));
+    harness.controller.sendInput(neutral(42));
+    harness.controller.sendInput(neutral(43));
+
+    const sentInputs = harness.peer.fast.send.mock.calls.map(([serialized]) =>
+      (JSON.parse(serialized) as { payload: InputFrame }).payload
+    );
+    expect(sentInputs.map(({ seq, quick }) => ({ seq, quick }))).toEqual([
+      { seq: 40, quick: true },
+      { seq: 41, quick: true },
+      { seq: 42, quick: true },
+      { seq: 43, quick: false }
+    ]);
+
+    const state = createMatchState([
+      { playerId: 'p1', name: 'Ada', accent: 0 },
+      { playerId: 'p2', name: 'Linus', accent: 1 }
+    ], 0, DEFAULT_ROOM_SETTINGS);
+    state.phase = 'REGULATION';
+
+    // Drop the original edge, then deliver the final redundant sample before the earlier one.
+    stepMatch(state, new Map([['p1', sentInputs[2]!]]), 1_000 / 60);
+    stepMatch(state, new Map([['p1', sentInputs[1]!]]), 1_000 / 60);
+    stepMatch(state, new Map([['p1', sentInputs[3]!]]), 1_000 / 60);
+    stepMatch(state, new Map([['p1', neutral(44)]]),
+      GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs + GAME.quickCombo[0].recoveryMs);
+
+    expect(state.players.p1.stats.completedAttacks).toBe(1);
+    expect(state.players.p1.previousQuick).toBe(false);
+  });
+
+  it('repeats and then releases a transient dash edge within the same bounded window', async () => {
+    const harness = createHarness();
+    await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    const frame = (seq: number, dash: boolean): InputFrame => ({
+      ...input(seq),
+      quick: false,
+      dash
+    });
+
+    harness.controller.sendInput(frame(50, true));
+    harness.controller.sendInput(frame(51, false));
+    harness.controller.sendInput(frame(52, false));
+    harness.controller.sendInput(frame(53, false));
+
+    expect(harness.peer.fast.send.mock.calls.map(([serialized]) => {
+      const payload = (JSON.parse(serialized) as { payload: InputFrame }).payload;
+      return { seq: payload.seq, dash: payload.dash };
+    })).toEqual([
+      { seq: 50, dash: true },
+      { seq: 51, dash: true },
+      { seq: 52, dash: true },
+      { seq: 53, dash: false }
+    ]);
+  });
+
+  it('does not arm a delayed fast-channel edge when the original input falls through to Socket.IO', async () => {
+    const harness = createHarness();
+    await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    const neutral = (seq: number): InputFrame => ({ ...input(seq), quick: false });
+
+    harness.peer.fast.bufferedAmount = FAST_CHANNEL_MAX_BUFFERED_BYTES + 1;
+    expect(harness.controller.sendInput(input(60))).toBe(false);
+    harness.peer.fast.bufferedAmount = 0;
+    expect(harness.controller.sendInput(neutral(61))).toBe(true);
+
+    expect(JSON.parse(harness.peer.fast.send.mock.calls[0]![0]).payload).toEqual(neutral(61));
+  });
+
+  it('abandons remaining redundancy when a follow-up falls through to Socket.IO', async () => {
+    const harness = createHarness();
+    await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    const neutral = (seq: number): InputFrame => ({ ...input(seq), quick: false });
+
+    expect(harness.controller.sendInput(input(70))).toBe(true);
+    harness.peer.fast.bufferedAmount = FAST_CHANNEL_MAX_BUFFERED_BYTES + 1;
+    expect(harness.controller.sendInput(neutral(71))).toBe(false);
+    harness.peer.fast.bufferedAmount = 0;
+    expect(harness.controller.sendInput(neutral(72))).toBe(true);
+
+    expect(JSON.parse(harness.peer.fast.send.mock.calls[1]![0]).payload).toEqual(neutral(72));
   });
 
   it('rejects unopened, backpressured, oversized, and throwing fast sends', async () => {
