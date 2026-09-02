@@ -1,4 +1,4 @@
-import type { Browser, ConsoleMessage } from '@playwright/test';
+import type { BoundingBox, Browser, CDPSession, ConsoleMessage } from '@playwright/test';
 import type { MatchPlayer } from '../../src/shared/model.js';
 import {
   assertNoUnexpectedErrors,
@@ -41,9 +41,29 @@ async function waitForNeutral(game: E2eGame, roomCode: string, playerId: string)
   }).toBe(true);
 }
 
+function touchPoint(box: BoundingBox, id: number, offsetX = 0, offsetY = 0) {
+  return {
+    x: box.x + box.width / 2 + offsetX,
+    y: box.y + box.height / 2 + offsetY,
+    id,
+    radiusX: 2,
+    radiusY: 2,
+    force: 1
+  };
+}
+
+async function dispatchTouch(
+  cdp: CDPSession,
+  type: 'touchStart' | 'touchMove' | 'touchEnd' | 'touchCancel',
+  points: readonly ReturnType<typeof touchPoint>[] = []
+): Promise<void> {
+  await cdp.send('Input.dispatchTouchEvent', { type, touchPoints: points });
+}
+
 test('portrait phone lobby rotates into a real touch-controlled authoritative match', async ({ browser, game }) => {
   const host = await openMobilePlayer(browser, game.origin);
   const guest = await openPlayer(browser, game.origin);
+  const cdp = await host.context.newCDPSession(host.page);
   try {
     await expect(host.page.getByRole('button', { name: 'Oda Kur' })).toBeVisible();
     await expect(host.page.getByRole('button', { name: 'Odaya Katıl' })).toBeVisible();
@@ -94,43 +114,39 @@ test('portrait phone lobby rotates into a real touch-controlled authoritative ma
     if (!padBox) throw new Error('Touch joystick was not measurable.');
     const sequenceBeforeTouch = player(game, code, hostPlayerId).lastProcessedInputSeq;
     const movementStart = player(game, code, hostPlayerId).position.x;
-    await host.page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
-    await host.page.mouse.down();
-    await host.page.mouse.move(padBox.x + padBox.width - 3, padBox.y + padBox.height / 2, { steps: 2 });
+    await dispatchTouch(cdp, 'touchStart', [touchPoint(padBox, 1)]);
+    await dispatchTouch(cdp, 'touchMove', [touchPoint(padBox, 1, padBox.width / 2 - 3)]);
     await expect.poll(() => player(game, code, hostPlayerId).position.x).toBeGreaterThan(movementStart + 12);
     await expect.poll(() => player(game, code, hostPlayerId).lastProcessedInputSeq).toBeGreaterThan(sequenceBeforeTouch);
-    await host.page.mouse.up();
+    await dispatchTouch(cdp, 'touchEnd');
 
     await waitForNeutral(game, code, hostPlayerId);
     const quick = host.page.getByRole('button', { name: 'Hızlı saldırı' });
     const quickBox = await quick.boundingBox();
     if (!quickBox) throw new Error('Quick touch button was not measurable.');
-    await host.page.mouse.move(quickBox.x + quickBox.width / 2, quickBox.y + quickBox.height / 2);
-    await host.page.mouse.down();
+    await dispatchTouch(cdp, 'touchStart', [touchPoint(quickBox, 2)]);
     await expect.poll(() => player(game, code, hostPlayerId).action.kind).toBe('QUICK_1');
-    await host.page.mouse.up();
+    await dispatchTouch(cdp, 'touchEnd');
 
     await waitForNeutral(game, code, hostPlayerId);
     const heavy = host.page.getByRole('button', { name: 'Charge saldırı' });
     const heavyBox = await heavy.boundingBox();
     if (!heavyBox) throw new Error('Heavy touch button was not measurable.');
-    await host.page.mouse.move(heavyBox.x + heavyBox.width / 2, heavyBox.y + heavyBox.height / 2);
-    await host.page.mouse.down();
+    await dispatchTouch(cdp, 'touchStart', [touchPoint(heavyBox, 3)]);
     await expect.poll(() => player(game, code, hostPlayerId).action.chargeMs).toBeGreaterThanOrEqual(180);
-    await host.page.mouse.up();
+    await dispatchTouch(cdp, 'touchEnd');
     await expect.poll(() => player(game, code, hostPlayerId).action.kind).toBe('HEAVY');
 
     await waitForNeutral(game, code, hostPlayerId);
     const dash = host.page.getByRole('button', { name: 'Dash' });
     const dashBox = await dash.boundingBox();
     if (!dashBox) throw new Error('Dash touch button was not measurable.');
-    await host.page.mouse.move(dashBox.x + dashBox.width / 2, dashBox.y + dashBox.height / 2);
-    await host.page.mouse.down();
+    await dispatchTouch(cdp, 'touchStart', [touchPoint(dashBox, 4)]);
     await expect.poll(() => {
       const candidate = player(game, code, hostPlayerId);
       return candidate.dashRemainingMs > 0 || candidate.dashCooldownRemainingMs > 0;
     }).toBe(true);
-    await host.page.mouse.up();
+    await dispatchTouch(cdp, 'touchCancel');
 
     expect(player(game, code, hostPlayerId).lastProcessedInputSeq).toBeGreaterThan(0);
     await assertNoUnexpectedErrors(game, host, guest);

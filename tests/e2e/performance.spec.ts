@@ -82,7 +82,7 @@ async function createEightPlayerMatch(
   game: E2eGame,
   companionErrors: ServerError[]
 ): Promise<Readonly<{ code: string; measured: PlayerPage; companions: readonly GameClient[]; welcomes: readonly SessionWelcome[] }>> {
-  const measured = await openPlayer(browser, game.origin);
+  const measured = await openPlayer(browser, game.origin, { observeInput: true });
   const companions: GameClient[] = [];
   try {
     await measured.page.getByLabel('Oyuncu adı').fill('Player 1');
@@ -117,18 +117,42 @@ async function createEightPlayerMatch(
   }
 }
 
-async function sampleFrameDurations(player: PlayerPage): Promise<number[]> {
-  return player.page.evaluate((sampleCount) => new Promise<number[]>((resolve) => {
+type BrowserSampler<T> = Readonly<{
+  result: Promise<T>;
+  stop(): Promise<void>;
+}>;
+
+let nextSamplerId = 0;
+
+function sampleFrameDurations(player: PlayerPage): BrowserSampler<number[]> {
+  const samplerId = `durations-${nextSamplerId++}`;
+  const result = player.page.evaluate(({ sampleCount, id }) => new Promise<number[]>((resolve) => {
+    const scope = window as typeof window & { __NEON_E2E_FRAME_SAMPLERS__?: Record<string, { stopped: boolean }> };
+    const controls = scope.__NEON_E2E_FRAME_SAMPLERS__ ??= {};
+    controls[id] = { stopped: false };
     const durations: number[] = [];
     let previous = performance.now();
     const sample = (now: number): void => {
       durations.push(now - previous);
       previous = now;
-      if (durations.length >= sampleCount) resolve(durations.slice(1));
-      else requestAnimationFrame(sample);
+      if (durations.length >= sampleCount || controls[id]?.stopped) {
+        delete controls[id];
+        resolve(durations.slice(1));
+      } else requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
-  }), FRAME_SAMPLES);
+  }), { sampleCount: FRAME_SAMPLES, id: samplerId });
+  return {
+    result,
+    stop: async () => {
+      await player.page.evaluate((id) => {
+        const controls = (window as typeof window & {
+          __NEON_E2E_FRAME_SAMPLERS__?: Record<string, { stopped: boolean }>;
+        }).__NEON_E2E_FRAME_SAMPLERS__;
+        if (controls?.[id]) controls[id].stopped = true;
+      }, samplerId);
+    }
+  };
 }
 
 type SampledFrame = Readonly<{
@@ -139,8 +163,12 @@ type SampledFrame = Readonly<{
   hasFocus: boolean;
 }>;
 
-async function sampleFrameTimeline(player: PlayerPage): Promise<readonly SampledFrame[]> {
-  return player.page.evaluate((sampleCount) => new Promise<SampledFrame[]>((resolve) => {
+function sampleFrameTimeline(player: PlayerPage): BrowserSampler<readonly SampledFrame[]> {
+  const samplerId = `timeline-${nextSamplerId++}`;
+  const result = player.page.evaluate(({ sampleCount, id }) => new Promise<SampledFrame[]>((resolve) => {
+    const scope = window as typeof window & { __NEON_E2E_FRAME_SAMPLERS__?: Record<string, { stopped: boolean }> };
+    const controls = scope.__NEON_E2E_FRAME_SAMPLERS__ ??= {};
+    controls[id] = { stopped: false };
     const frames: SampledFrame[] = [];
     let previous = performance.now();
     const sample = (now: number): void => {
@@ -152,11 +180,24 @@ async function sampleFrameTimeline(player: PlayerPage): Promise<readonly Sampled
         hasFocus: document.hasFocus()
       });
       previous = now;
-      if (frames.length >= sampleCount) resolve(frames.slice(1));
-      else requestAnimationFrame(sample);
+      if (frames.length >= sampleCount || controls[id]?.stopped) {
+        delete controls[id];
+        resolve(frames.slice(1));
+      } else requestAnimationFrame(sample);
     };
     requestAnimationFrame(sample);
-  }), FRAME_SAMPLES);
+  }), { sampleCount: FRAME_SAMPLES, id: samplerId });
+  return {
+    result,
+    stop: async () => {
+      await player.page.evaluate((id) => {
+        const controls = (window as typeof window & {
+          __NEON_E2E_FRAME_SAMPLERS__?: Record<string, { stopped: boolean }>;
+        }).__NEON_E2E_FRAME_SAMPLERS__;
+        if (controls?.[id]) controls[id].stopped = true;
+      }, samplerId);
+    }
+  };
 }
 
 async function markAfterAnimationFrames(
@@ -188,48 +229,86 @@ function authoritativePlayer(game: E2eGame, code: string, playerId: string): Mat
 }
 
 type InputLatencyObservation = Readonly<{
-  submittedAtMs: number;
-  firstAuthoritativeSnapshotAtMs: number;
-  processedSequence: number;
+  inputSequence: number;
+  browserSampledAtMs: number;
+  browserAcceptedAtMs: number;
+  acceptedProcessedSequence: number;
   latencyMs: number;
 }>;
 
-async function waitForProcessedSequence(
-  game: E2eGame,
-  code: string,
-  playerId: string,
-  minimumSequence: number
-): Promise<Readonly<{ observedAtMs: number; processedSequence: number }>> {
-  const deadline = performance.now() + ACK_TIMEOUT_MS;
-  while (performance.now() < deadline) {
-    const processedSequence = authoritativePlayer(game, code, playerId).lastProcessedInputSeq;
-    if (processedSequence >= minimumSequence) {
-      return { observedAtMs: performance.now(), processedSequence };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1));
-  }
-  throw new Error(`Timed out waiting for authoritative input sequence ${minimumSequence} for ${playerId}.`);
+type BrowserInputRecord = Readonly<{
+  sequence: number;
+  sampledAtMs: number;
+  moveX: number;
+}>;
+
+type BrowserSnapshotRecord = Readonly<{
+  lastProcessedInputSeq: number;
+  acceptedAtMs: number;
+}>;
+
+type BrowserInputObserver = Readonly<{
+  inputs: readonly BrowserInputRecord[];
+  acceptedSnapshots: readonly BrowserSnapshotRecord[];
+}>;
+
+async function observerSequence(player: PlayerPage): Promise<number> {
+  return player.page.evaluate(() => {
+    const observer = (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: BrowserInputObserver })
+      .__NEON_E2E_INPUT_OBSERVER__;
+    return observer?.inputs.at(-1)?.sequence ?? -1;
+  });
+}
+
+async function waitForBrowserAcceptance(
+  player: PlayerPage,
+  afterSequence: number,
+  moveX: number
+): Promise<InputLatencyObservation> {
+  await player.page.waitForFunction(({ afterSequence: after, moveX: expectedMoveX }) => {
+    const observer = (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: BrowserInputObserver })
+      .__NEON_E2E_INPUT_OBSERVER__;
+    const input = observer?.inputs.find((candidate) =>
+      candidate.sequence > after && candidate.moveX === expectedMoveX);
+    return Boolean(input && observer?.acceptedSnapshots.some((snapshot) =>
+      snapshot.lastProcessedInputSeq >= input.sequence && snapshot.acceptedAtMs >= input.sampledAtMs));
+  }, { afterSequence, moveX }, { timeout: ACK_TIMEOUT_MS });
+  return player.page.evaluate(({ afterSequence: after, moveX: expectedMoveX }) => {
+    const observer = (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: BrowserInputObserver })
+      .__NEON_E2E_INPUT_OBSERVER__;
+    const input = observer?.inputs.find((candidate) =>
+      candidate.sequence > after && candidate.moveX === expectedMoveX);
+    const accepted = input && observer?.acceptedSnapshots.find((snapshot) =>
+      snapshot.lastProcessedInputSeq >= input.sequence && snapshot.acceptedAtMs >= input.sampledAtMs);
+    if (!input || !accepted) throw new Error('Exact browser input acceptance was not observed.');
+    return {
+      inputSequence: input.sequence,
+      browserSampledAtMs: input.sampledAtMs,
+      browserAcceptedAtMs: accepted.acceptedAtMs,
+      acceptedProcessedSequence: accepted.lastProcessedInputSeq,
+      latencyMs: accepted.acceptedAtMs - input.sampledAtMs
+    };
+  }, { afterSequence, moveX });
+}
+
+async function warmBrowserInputPath(player: PlayerPage): Promise<void> {
+  let marker = await observerSequence(player);
+  await player.page.keyboard.down('d');
+  await waitForBrowserAcceptance(player, marker, 1);
+  marker = await observerSequence(player);
+  await player.page.keyboard.up('d');
+  await waitForBrowserAcceptance(player, marker, 0);
 }
 
 async function measureBrowserInputLatency(
-  game: E2eGame,
-  code: string,
-  measured: PlayerPage,
-  playerId: string
+  measured: PlayerPage
 ): Promise<readonly InputLatencyObservation[]> {
   const observations: InputLatencyObservation[] = [];
   for (let index = 0; index < INPUT_LATENCY_SAMPLES; index += 1) {
-    const before = authoritativePlayer(game, code, playerId).lastProcessedInputSeq;
-    const submittedAtMs = performance.now();
+    const marker = await observerSequence(measured);
     if (index % 2 === 0) await measured.page.keyboard.down('d');
     else await measured.page.keyboard.up('d');
-    const first = await waitForProcessedSequence(game, code, playerId, before + 1);
-    observations.push({
-      submittedAtMs,
-      firstAuthoritativeSnapshotAtMs: first.observedAtMs,
-      processedSequence: first.processedSequence,
-      latencyMs: first.observedAtMs - submittedAtMs
-    });
+    observations.push(await waitForBrowserAcceptance(measured, marker, index % 2 === 0 ? 1 : 0));
   }
   await measured.page.keyboard.up('d');
   return observations;
@@ -264,15 +343,25 @@ function companionInput(seq: number, index: number): InputFrame {
   };
 }
 
-async function driveCompanions(companions: readonly GameClient[]): Promise<void> {
+async function driveCompanions(companions: readonly GameClient[], signal: AbortSignal): Promise<void> {
   const startedAt = performance.now();
   let sequence = 0;
-  while (performance.now() - startedAt < COMPANION_INPUT_MS) {
+  while (!signal.aborted && performance.now() - startedAt < COMPANION_INPUT_MS) {
     for (let index = 0; index < companions.length; index += 1) {
       companions[index]!.emit('match:input', companionInput(sequence, index));
     }
     sequence += 1;
-    await new Promise((resolve) => setTimeout(resolve, 1_000 / 60));
+    await new Promise<void>((resolve) => {
+      const onAbort = (): void => {
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      }, 1_000 / 60);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
   }
 }
 
@@ -392,6 +481,9 @@ function framesOverlappingInterval(
 test('holds one LAN viewport frame budget while eight authoritative players fight', async ({ browser, game }, testInfo) => {
   const companionErrors: ServerError[] = [];
   const match = await createEightPlayerMatch(browser, game, companionErrors);
+  const driveAbort = new AbortController();
+  let companionDrive: Promise<void> | null = null;
+  let frameSampler: BrowserSampler<number[]> | null = null;
   try {
     const initial = game.harness.matchSnapshot(match.code);
     if (!initial) throw new Error('Eight-player performance snapshot was not available.');
@@ -405,17 +497,18 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     expect(companionIds.map((playerId) => game.harness.transportMode(playerId)))
       .toEqual(new Array(COMPANION_COUNT).fill('websocket'));
 
-    const webRtcLatencyObservations = await measureBrowserInputLatency(
-      game,
-      match.code,
-      match.measured,
-      measuredId
-    );
+    await warmBrowserInputPath(match.measured);
+    const webRtcLatencyObservations = await measureBrowserInputLatency(match.measured);
+    for (const observation of webRtcLatencyObservations) {
+      expect(game.harness.acceptedInputs(measuredId).find(
+        (record) => record.sequence === observation.inputSequence
+      )?.source).toBe('webrtc');
+    }
 
     const before = authoritativePlayer(game, match.code, measuredId);
     const eventMarker = game.harness.recentEvents(match.code).at(-1)?.eventId ?? 0;
-    const companionDrive = driveCompanions(match.companions);
-    const samples = sampleFrameDurations(match.measured);
+    companionDrive = driveCompanions(match.companions, driveAbort.signal);
+    frameSampler = sampleFrameDurations(match.measured);
     await match.measured.page.keyboard.down('j');
     await match.measured.page.waitForTimeout(120);
     await match.measured.page.keyboard.up('j');
@@ -433,7 +526,7 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     await match.measured.page.keyboard.down('Space');
     await match.measured.page.waitForTimeout(120);
     await match.measured.page.keyboard.up('Space');
-    const durations = await samples;
+    const durations = await frameSampler.result;
     await companionDrive;
 
     const after = authoritativePlayer(game, match.code, measuredId);
@@ -450,14 +543,18 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
 
     await game.harness.dropWebRtc(measuredId);
     await expect.poll(() => game.harness.transportMode(measuredId), { timeout: 10_000 }).toBe('websocket');
-    const socketIoLatencyObservations = await measureBrowserInputLatency(
-      game,
-      match.code,
-      match.measured,
-      measuredId
-    );
+    await warmBrowserInputPath(match.measured);
+    const socketIoLatencyObservations = await measureBrowserInputLatency(match.measured);
+    for (const observation of socketIoLatencyObservations) {
+      expect(game.harness.acceptedInputs(measuredId).find(
+        (record) => record.sequence === observation.inputSequence
+      )?.source).toBe('websocket');
+    }
     const transportLatency = {
-      methodology: 'same browser page, Playwright keyboard, ArenaInput sampler, and authoritative sequence observer; WebRTC sampled before forced in-place Socket.IO fallback',
+      metric: 'browser input sampler to browser-accepted authoritative snapshot',
+      methodology: 'same browser page and keyboard path; exact sampled sequence is matched to the first accepted snapshot whose local lastProcessedInputSeq reaches it; each mode is warmed up; WebRTC is measured first, then forced in-place Socket.IO fallback',
+      order: ['webrtc', 'socket.io-fallback'],
+      physicalLanClaim: false,
       webRtc: latencyMetrics(webRtcLatencyObservations),
       socketIo: latencyMetrics(socketIoLatencyObservations),
       observations: {
@@ -502,6 +599,12 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     expect(companionErrors).toEqual([]);
     await assertNoUnexpectedErrors(game, match.measured);
   } finally {
+    driveAbort.abort();
+    if (frameSampler) await frameSampler.stop().catch(() => undefined);
+    await Promise.allSettled([
+      ...(companionDrive ? [companionDrive] : []),
+      ...(frameSampler ? [frameSampler.result] : [])
+    ]);
     for (const companion of match.companions) companion.disconnect();
     await match.measured.context.close();
   }
@@ -510,6 +613,7 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
 test('holds browser frame time below 50 ms through four simultaneous hit-driven ring-out effects', async ({ browser, game }, testInfo) => {
   const companionErrors: ServerError[] = [];
   const match = await createEightPlayerMatch(browser, game, companionErrors);
+  let frameSampler: BrowserSampler<readonly SampledFrame[]> | null = null;
   try {
     const initial = game.harness.matchSnapshot(match.code);
     if (!initial) throw new Error('Eight-player ring-out burst snapshot was not available.');
@@ -544,7 +648,7 @@ test('holds browser frame time below 50 ms through four simultaneous hit-driven 
     );
     expect(livePulse.remainingMs).toBeGreaterThan(250);
 
-    const samples = sampleFrameTimeline(match.measured);
+    frameSampler = sampleFrameTimeline(match.measured);
     const pairs = [
       { attackerId: attackerA, targetId: companionIds[0]!, attacker: { x: 1139, y: 360 }, target: { x: 1198, y: 360 }, facing: { x: 1, y: 0 } },
       { attackerId: companionIds[1]!, targetId: companionIds[2]!, attacker: { x: 141, y: 360 }, target: { x: 82, y: 360 }, facing: { x: -1, y: 0 } },
@@ -620,7 +724,7 @@ test('holds browser frame time below 50 ms through four simultaneous hit-driven 
       return events.filter((event) => event.type === 'KNOCKOUT' && targetIds.has(event.targetId)).length;
     }, { timeout: 12_000 }).toBe(4);
 
-    const frames = await samples;
+    const frames = await frameSampler.result;
     const events = game.harness.recentEvents(match.code).filter((event) => event.eventId > eventMarker);
     const hits = events.filter((event): event is Extract<(typeof events)[number], { type: 'HIT' }> =>
       event.type === 'HIT' && targetIds.has(event.targetId));
@@ -700,6 +804,8 @@ test('holds browser frame time below 50 ms through four simultaneous hit-driven 
     expect(companionErrors).toEqual([]);
     await assertNoUnexpectedErrors(game, match.measured);
   } finally {
+    if (frameSampler) await frameSampler.stop().catch(() => undefined);
+    await Promise.allSettled(frameSampler ? [frameSampler.result] : []);
     for (const companion of match.companions) companion.disconnect();
     await match.measured.context.close();
   }

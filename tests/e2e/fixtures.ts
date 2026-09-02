@@ -67,6 +67,7 @@ export type MatchPages = Readonly<{
 export type OpenPlayerOptions = Readonly<{
   contextOptions?: BrowserContextOptions;
   initScript?: () => void;
+  observeInput?: boolean;
 }>;
 
 function errorText(message: ConsoleMessage): string {
@@ -79,6 +80,14 @@ export async function openPlayer(
   options: OpenPlayerOptions = {}
 ): Promise<PlayerPage> {
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, ...options.contextOptions });
+  if (options.observeInput) {
+    await context.addInitScript(() => {
+      (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: unknown }).__NEON_E2E_INPUT_OBSERVER__ = {
+        inputs: [],
+        acceptedSnapshots: []
+      };
+    });
+  }
   if (options.initScript) await context.addInitScript(options.initScript);
   const page = await context.newPage();
   const issues = { pageErrors: [], consoleErrors: [] };
@@ -135,10 +144,21 @@ function playerId(snapshot: MatchSnapshot, name: string): string {
 export async function createTwoPlayerMatch(
   browser: Browser,
   game: E2eGame,
-  settings?: RoomSettings
+  settings?: RoomSettings,
+  options: Readonly<{
+    observeInput?: boolean;
+    hostInitScript?: () => void;
+    guestInitScript?: () => void;
+  }> = {}
 ): Promise<MatchPages> {
-  const host = await openPlayer(browser, game.origin);
-  const guest = await openPlayer(browser, game.origin);
+  const host = await openPlayer(browser, game.origin, {
+    observeInput: options.observeInput,
+    initScript: options.hostInitScript
+  });
+  const guest = await openPlayer(browser, game.origin, {
+    observeInput: options.observeInput,
+    initScript: options.guestInitScript
+  });
   try {
     await host.page.getByLabel('Oyuncu adı').fill('Ada');
     await host.page.getByRole('button', { name: 'Oda Kur' }).click();

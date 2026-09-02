@@ -436,6 +436,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     if (current !== generation || generation.fallbackNotified) return false;
     generation.mode = generation.socketMode;
     generation.fallbackNotified = true;
+    clearEdgeAckDeadline(generation);
     const replayed = replayEdgeInput(generation, input);
     detachAndClose(generation, false);
     try {
@@ -509,6 +510,8 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
 
     generation.socketMode = notice.mode;
     generation.mode = notice.mode;
+    generation.fallbackNotified = true;
+    clearEdgeAckDeadline(generation);
     replayEdgeInput(generation);
     if (!generation.failed) detachAndClose(generation, false);
   }
