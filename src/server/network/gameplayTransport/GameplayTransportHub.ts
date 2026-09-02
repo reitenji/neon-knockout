@@ -57,6 +57,7 @@ export type GameplayTransportHubOptions = Readonly<{
 
 type RttSample = Readonly<{ value: number; sampledAt: number }>;
 type RttSamplingOwner = Readonly<{ peer: ServerPeer; generationId: string }>;
+type PeerClosureResult = Readonly<{ ok: true }> | Readonly<{ ok: false; error: unknown }>;
 
 type SessionRecord = {
   readonly session: TransportSession;
@@ -77,6 +78,8 @@ type SessionRecord = {
   rttFresh: boolean;
   fallbackTriggered: boolean;
   negotiationSequence: number;
+  pendingPeerClosures: Set<Promise<PeerClosureResult>>;
+  peerCloseFailure: Readonly<{ error: unknown }> | null;
   unsubscribers: Array<() => void>;
   disposed: boolean;
 };
@@ -115,8 +118,12 @@ export class GameplayTransportNegotiationCancelledError extends GameplayTranspor
 export class GameplayTransportHub {
   private readonly sessionsBySocket = new Map<string, SessionRecord>();
   private readonly sessionsByPlayer = new Map<string, SessionRecord>();
-  private readonly peerClosures = new WeakMap<ServerPeer, Promise<void>>();
-  private readonly pendingPeerClosures = new Set<Promise<void>>();
+  private readonly detachmentsBySocket = new Map<string, Readonly<{
+    record: SessionRecord;
+    promise: Promise<void>;
+  }>>();
+  private readonly peerClosures = new WeakMap<ServerPeer, Promise<PeerClosureResult>>();
+  private readonly pendingPeerClosures = new Set<Promise<PeerClosureResult>>();
   private readonly now: () => number;
   private stopped = false;
 
@@ -151,6 +158,8 @@ export class GameplayTransportHub {
       rttFresh: false,
       fallbackTriggered: false,
       negotiationSequence: 0,
+      pendingPeerClosures: new Set(),
+      peerCloseFailure: null,
       unsubscribers: [],
       disposed: false
     };
@@ -202,7 +211,7 @@ export class GameplayTransportHub {
         !this.isCurrentPeer(record, peer, generationId)
         || record.negotiationSequence !== sequence
       ) {
-        await this.closePeer(peer);
+        await this.closePeer(record, peer);
         throw new GameplayTransportNegotiationCancelledError('WebRTC negotiation was superseded.');
       }
       return { generationId, answer };
@@ -289,14 +298,25 @@ export class GameplayTransportHub {
     });
   }
 
-  async detachSession(socketId: string): Promise<void> {
+  detachSession(socketId: string): Promise<void> {
     const record = this.sessionsBySocket.get(socketId);
-    if (!record) return;
+    if (!record) return this.detachmentsBySocket.get(socketId)?.promise ?? Promise.resolve();
     this.sessionsBySocket.delete(socketId);
     if (this.sessionsByPlayer.get(record.session.playerId) === record) {
       this.sessionsByPlayer.delete(record.session.playerId);
     }
-    await this.disposeRecord(record);
+    const detachment = {
+      record,
+      promise: this.disposeRecord(record, true)
+    };
+    this.detachmentsBySocket.set(socketId, detachment);
+    const clearDetachment = (): void => {
+      if (this.detachmentsBySocket.get(socketId) === detachment) {
+        this.detachmentsBySocket.delete(socketId);
+      }
+    };
+    void detachment.promise.then(clearDetachment, clearDetachment);
+    return detachment.promise;
   }
 
   modeForPlayer(playerId: string): GameplayTransportMode | null {
@@ -579,7 +599,7 @@ export class GameplayTransportHub {
       || record.generationId !== generationId
       || (record.peer !== peer && !record.fallbackTriggered)
     ) return;
-    if (record.fallbackTriggered) return this.closePeer(peer);
+    if (record.fallbackTriggered) return this.closePeer(record, peer);
 
     record.fallbackTriggered = true;
     const mode = this.fallbackMode(record.session);
@@ -602,18 +622,32 @@ export class GameplayTransportHub {
     if (record.rttSampling?.peer === peer) record.rttSampling = null;
     record.rttFresh = false;
     record.rttSamples = [];
-    return this.closePeer(peer);
+    return this.closePeer(record, peer);
   }
 
-  private closePeer(peer: ServerPeer): Promise<void> {
+  private async closePeer(record: SessionRecord, peer: ServerPeer): Promise<void> {
+    await this.trackPeerClosure(record, peer);
+  }
+
+  private trackPeerClosure(record: SessionRecord, peer: ServerPeer): Promise<PeerClosureResult> {
     const existing = this.peerClosures.get(peer);
     if (existing) return existing;
-    const closure = Promise.resolve()
+    const closure: Promise<PeerClosureResult> = Promise.resolve()
       .then(() => peer.close())
-      .catch(() => undefined);
+      .then(
+        (): PeerClosureResult => ({ ok: true }),
+        (error: unknown): PeerClosureResult => ({ ok: false, error })
+      );
     this.peerClosures.set(peer, closure);
     this.pendingPeerClosures.add(closure);
-    void closure.then(() => this.pendingPeerClosures.delete(closure));
+    record.pendingPeerClosures.add(closure);
+    void closure.then((result) => {
+      this.pendingPeerClosures.delete(closure);
+      record.pendingPeerClosures.delete(closure);
+      if (!result.ok && record.peerCloseFailure === null) {
+        record.peerCloseFailure = { error: result.error };
+      }
+    });
     return closure;
   }
 
@@ -636,22 +670,25 @@ export class GameplayTransportHub {
     void this.disposeRecord(record);
   }
 
-  private async disposeRecord(record: SessionRecord): Promise<void> {
-    if (record.disposed) return;
-    record.disposed = true;
-    record.negotiationSequence += 1;
-    const peer = record.peer;
-    this.clearPeerTimers(record);
-    for (const unsubscribe of record.unsubscribers.splice(0)) safeInvoke(unsubscribe);
-    record.peer = null;
-    record.pendingHeartbeatNonce = null;
-    record.rttSamples = [];
-    record.rttSampling = null;
-    if (record.mode === 'webrtc' || record.rttFresh) {
-      safeInvoke(() => record.session.clearNetworkSample());
+  private async disposeRecord(record: SessionRecord, surfaceCloseFailure = false): Promise<void> {
+    if (!record.disposed) {
+      record.disposed = true;
+      record.negotiationSequence += 1;
+      const peer = record.peer;
+      this.clearPeerTimers(record);
+      for (const unsubscribe of record.unsubscribers.splice(0)) safeInvoke(unsubscribe);
+      record.peer = null;
+      record.pendingHeartbeatNonce = null;
+      record.rttSamples = [];
+      record.rttSampling = null;
+      if (record.mode === 'webrtc' || record.rttFresh) {
+        safeInvoke(() => record.session.clearNetworkSample());
+      }
+      record.rttFresh = false;
+      if (peer) this.trackPeerClosure(record, peer);
     }
-    record.rttFresh = false;
-    if (peer) await this.closePeer(peer);
+    await Promise.all([...record.pendingPeerClosures]);
+    if (surfaceCloseFailure && record.peerCloseFailure) throw record.peerCloseFailure.error;
   }
 
   private isCurrentRecord(record: SessionRecord): boolean {

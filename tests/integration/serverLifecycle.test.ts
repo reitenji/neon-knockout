@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { io, type Socket } from 'socket.io-client';
 import type { RtcNegotiationAnswer } from '../../src/shared/gameplayTransport.js';
-import type { Ack, SessionWelcome } from '../../src/shared/model.js';
+import type { Ack, RoomState, SessionWelcome } from '../../src/shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../src/shared/protocol.js';
 import { createGameServer } from '../../src/server/network/createGameServer.js';
 import type {
@@ -11,8 +11,9 @@ import type {
 } from '../../src/server/network/gameplayTransport/ServerPeer.js';
 
 type GameClient = Socket<ServerToClientEvents, ClientToServerEvents>;
-type SessionEvent = 'room:create' | 'room:join' | 'session:resume' | 'transport:negotiate';
+type SessionEvent = 'room:create' | 'room:join' | 'room:leave' | 'session:resume' | 'transport:negotiate';
 const LIFECYCLE_GENERATION = '2f8ca1f2-7e6e-4ea7-90e2-e6a955892574';
+const REPLACEMENT_GENERATION = '4cf2e59c-3dd7-4a54-8e5d-95eb40efca5c';
 const LIFECYCLE_UDP_RANGE = [54200, 54231] as const;
 
 class LifecyclePeer implements ServerPeer {
@@ -21,6 +22,7 @@ class LifecyclePeer implements ServerPeer {
   private readonly closedListeners = new Set<() => void>();
   private releaseClosure: () => void = () => undefined;
   private readonly closureGate = new Promise<void>((resolve) => { this.releaseClosure = resolve; });
+  private closeFailure: Error | null = null;
   closeCalls = 0;
 
   constructor(readonly generationId: string, private readonly releaseRange: () => void) {}
@@ -63,10 +65,12 @@ class LifecyclePeer implements ServerPeer {
   async close(): Promise<void> {
     this.closeCalls += 1;
     await this.closureGate;
+    if (this.closeFailure) throw this.closeFailure;
     this.releaseRange();
   }
 
-  release(): void {
+  release(error?: Error): void {
+    this.closeFailure = error ?? null;
     this.releaseClosure();
   }
 }
@@ -136,7 +140,171 @@ async function waitFor(predicate: () => boolean, label: string): Promise<void> {
   }
 }
 
+function expectRoomState(
+  socket: GameClient,
+  predicate: (state: RoomState) => boolean
+): Promise<RoomState> {
+  return new Promise((resolve, reject) => {
+    const listener = (state: RoomState): void => {
+      if (!predicate(state)) return;
+      clearTimeout(timer);
+      socket.off('room:state', listener);
+      resolve(state);
+    };
+    const timer = setTimeout(() => {
+      socket.off('room:state', listener);
+      reject(new Error('Timed out waiting for lifecycle room state'));
+    }, 1_500);
+    socket.on('room:state', listener);
+  });
+}
+
 describe('GameServer lifecycle', () => {
+  it('awaits peer release before acknowledging leave and reuses the same socket and UDP range', async () => {
+    const factory = new LifecyclePeerFactory();
+    const serverErrors: unknown[][] = [];
+    const server = createGameServer({
+      host: '127.0.0.1',
+      port: 0,
+      clientDirectory: false,
+      enableTestHarness: true,
+      logger: { error: (...args: unknown[]) => serverErrors.push(args) },
+      testGameplayTransport: { peerFactory: factory.create, udpPortRange: LIFECYCLE_UDP_RANGE }
+    });
+    let client: GameClient | null = null;
+
+    try {
+      const address = await server.start();
+      client = await connectClient(address.origin);
+      const firstRoom = expectWelcome(await emitAck<SessionWelcome>(client, 'room:create', { name: 'Ada' }));
+      expect(await emitAck<RtcNegotiationAnswer>(client, 'transport:negotiate', {
+        generationId: LIFECYCLE_GENERATION,
+        offer: { type: 'offer', sdp: 'first-room-offer' }
+      })).toMatchObject({ ok: true });
+      const firstPeer = factory.peers[0]!;
+
+      let leaveSettled = false;
+      const leaveAcknowledgement = emitAck<null>(client, 'room:leave', {});
+      void leaveAcknowledgement.then(() => { leaveSettled = true; });
+      await waitFor(() => firstPeer.closeCalls === 1, 'leave peer close request');
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(server.rooms.debugRoom(firstRoom.roomCode)).toBeNull();
+      expect(leaveSettled).toBe(false);
+      expect(await emitAck<null>(client, 'room:leave', {}))
+        .toMatchObject({ ok: false, error: { code: 'PLAYER_NOT_FOUND' } });
+
+      firstPeer.release();
+      expect(await leaveAcknowledgement).toEqual({ ok: true, data: null });
+      const replacement = expectWelcome(await emitAck<SessionWelcome>(client, 'room:create', { name: 'Ada again' }));
+      expect(replacement.roomCode).not.toBe(firstRoom.roomCode);
+      expect(await emitAck<RtcNegotiationAnswer>(client, 'transport:negotiate', {
+        generationId: REPLACEMENT_GENERATION,
+        offer: { type: 'offer', sdp: 'replacement-room-offer' }
+      })).toMatchObject({ ok: true });
+      expect(factory.ranges).toEqual([LIFECYCLE_UDP_RANGE, LIFECYCLE_UDP_RANGE]);
+      expect(factory.peers).toHaveLength(2);
+      expect(serverErrors).toEqual([]);
+      factory.peers[1]!.release();
+    } finally {
+      for (const peer of factory.peers) peer.release();
+      client?.disconnect();
+      await server.stop();
+    }
+  });
+
+  it('publishes host migration while leave waits for peer closure', async () => {
+    const factory = new LifecyclePeerFactory();
+    const server = createGameServer({
+      host: '127.0.0.1',
+      port: 0,
+      clientDirectory: false,
+      enableTestHarness: true,
+      testGameplayTransport: { peerFactory: factory.create, udpPortRange: LIFECYCLE_UDP_RANGE }
+    });
+    let hostClient: GameClient | null = null;
+    let survivorClient: GameClient | null = null;
+
+    try {
+      const address = await server.start();
+      hostClient = await connectClient(address.origin);
+      const room = expectWelcome(await emitAck<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' }));
+      survivorClient = await connectClient(address.origin);
+      const survivor = expectWelcome(await emitAck<SessionWelcome>(survivorClient, 'room:join', {
+        name: 'Linus',
+        roomCode: room.roomCode
+      }));
+      expect(await emitAck<RtcNegotiationAnswer>(hostClient, 'transport:negotiate', {
+        generationId: LIFECYCLE_GENERATION,
+        offer: { type: 'offer', sdp: 'migration-offer' }
+      })).toMatchObject({ ok: true });
+      const peer = factory.peers[0]!;
+      const migratedRoom = expectRoomState(survivorClient, (state) =>
+        state.roomCode === room.roomCode
+        && state.hostPlayerId === survivor.playerId
+        && state.players.length === 1);
+
+      let leaveSettled = false;
+      const leaveAcknowledgement = emitAck<null>(hostClient, 'room:leave', {});
+      void leaveAcknowledgement.then(() => { leaveSettled = true; });
+      await waitFor(() => peer.closeCalls === 1, 'migrating host peer close request');
+      await expect(migratedRoom).resolves.toMatchObject({
+        hostPlayerId: survivor.playerId,
+        players: [{ playerId: survivor.playerId, connected: true }]
+      });
+      expect(server.rooms.debugRoom(room.roomCode)?.playerIds).toEqual([survivor.playerId]);
+      expect(leaveSettled).toBe(false);
+
+      peer.release();
+      expect(await leaveAcknowledgement).toEqual({ ok: true, data: null });
+    } finally {
+      for (const peer of factory.peers) peer.release();
+      hostClient?.disconnect();
+      survivorClient?.disconnect();
+      await server.stop();
+    }
+  });
+
+  it('reports a genuine peer close failure instead of acknowledging successful leave', async () => {
+    const factory = new LifecyclePeerFactory();
+    const serverErrors: unknown[][] = [];
+    const server = createGameServer({
+      host: '127.0.0.1',
+      port: 0,
+      clientDirectory: false,
+      enableTestHarness: true,
+      logger: { error: (...args: unknown[]) => serverErrors.push(args) },
+      testGameplayTransport: { peerFactory: factory.create, udpPortRange: LIFECYCLE_UDP_RANGE }
+    });
+    let client: GameClient | null = null;
+
+    try {
+      const address = await server.start();
+      client = await connectClient(address.origin);
+      expectWelcome(await emitAck<SessionWelcome>(client, 'room:create', { name: 'Ada' }));
+      expect(await emitAck<RtcNegotiationAnswer>(client, 'transport:negotiate', {
+        generationId: LIFECYCLE_GENERATION,
+        offer: { type: 'offer', sdp: 'close-failure-offer' }
+      })).toMatchObject({ ok: true });
+      const peer = factory.peers[0]!;
+
+      const leaveAcknowledgement = emitAck<null>(client, 'room:leave', {});
+      await waitFor(() => peer.closeCalls === 1, 'failing leave peer close request');
+      peer.release(new Error('forced peer close failure'));
+
+      expect(await leaveAcknowledgement)
+        .toMatchObject({ ok: false, error: { code: 'INTERNAL_ERROR' } });
+      expect(serverErrors).toHaveLength(1);
+      expect(serverErrors[0]?.[0]).toMatch(/Unexpected Socket.IO async action failure/);
+      expect(serverErrors[0]?.[1]).toEqual(new Error('forced peer close failure'));
+      expect(await emitAck<null>(client, 'room:leave', {}))
+        .toMatchObject({ ok: false, error: { code: 'PLAYER_NOT_FOUND' } });
+    } finally {
+      for (const peer of factory.peers) peer.release();
+      client?.disconnect();
+      await server.stop();
+    }
+  });
+
   it('accepts a polling-only Socket.IO client when WebSocket is unavailable', async () => {
     const server = createGameServer({ host: '127.0.0.1', port: 0, clientDirectory: false });
     let pollingClient: GameClient | null = null;

@@ -398,13 +398,18 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       });
     });
     socket.on('room:leave', (payload, callback) => {
-      acknowledge(roomLeaveSchema, payload, callback, () => {
+      acknowledgeAsync(roomLeaveSchema, payload, callback, async () => {
         const roomCode = rooms.leaveRoom(socket.id);
         stopLatencySampling();
         activePlayerId = null;
-        void transportHub.detachSession(socket.id);
-        void socket.leave(roomCode);
-        onLeave(socket, roomCode);
+        try {
+          await Promise.all([
+            transportHub.detachSession(socket.id),
+            socket.leave(roomCode)
+          ]);
+        } finally {
+          onLeave(socket, roomCode);
+        }
         return null;
       });
     });
