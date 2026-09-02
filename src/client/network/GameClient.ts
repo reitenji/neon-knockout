@@ -103,26 +103,59 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
       send(finish);
     });
 
-  let gameplayTransport: ReturnType<typeof createGameplayTransport> | null = null;
-  const sequencer = createMatchPublicationSequencer({
-    onStarted: (snapshot) => publish('match:started', snapshot),
-    onSnapshot: (snapshot) => publish('match:snapshot', snapshot),
-    onEvent: (event) => publish('match:event', event),
-    onTransportGap: () => {
-      gameplayTransport?.dispose();
-      socket.emit('transport:fallback', {});
-    }
-  });
-  gameplayTransport = createGameplayTransport({
-    negotiate: (request) => withAckTimeout((acknowledge) => {
-      socket.emit('transport:negotiate', request, acknowledge);
-    }),
-    activate: (request) => withAckTimeout((acknowledge) => {
-      socket.emit('transport:activate', request, acknowledge);
-    }),
-    notifyFallback: () => socket.emit('transport:fallback', {}),
-    sequencer
-  });
+  type GameplayTransportBundle = {
+    readonly transport: ReturnType<typeof createGameplayTransport>;
+    readonly sequencer: ReturnType<typeof createMatchPublicationSequencer>;
+    disposed: boolean;
+  };
+  let activeBundle: GameplayTransportBundle | null = null;
+
+  const createBundle = (): GameplayTransportBundle => {
+    let owner: GameplayTransportBundle | null = null;
+    const sequencer = createMatchPublicationSequencer({
+      onStarted: (snapshot) => publish('match:started', snapshot),
+      onSnapshot: (snapshot) => publish('match:snapshot', snapshot),
+      onEvent: (event) => publish('match:event', event),
+      onTransportGap: () => {
+        if (owner !== null && activeBundle === owner && !owner.disposed) owner.transport.fallback();
+      }
+    });
+    const transport = createGameplayTransport({
+      negotiate: (request) => withAckTimeout((acknowledge) => {
+        socket.emit('transport:negotiate', request, acknowledge);
+      }),
+      activate: (request) => withAckTimeout((acknowledge) => {
+        socket.emit('transport:activate', request, acknowledge);
+      }),
+      notifyFallback: () => socket.emit('transport:fallback', {}),
+      sequencer
+    });
+    owner = { transport, sequencer, disposed: false };
+    return owner;
+  };
+
+  const ensureBundle = (): GameplayTransportBundle => {
+    activeBundle ??= createBundle();
+    return activeBundle;
+  };
+
+  const disposeActiveBundle = (): void => {
+    const bundle = activeBundle;
+    if (bundle === null) return;
+    activeBundle = null;
+    bundle.disposed = true;
+    bundle.sequencer.dispose();
+    bundle.transport.dispose();
+  };
+
+  const replaceBundleAndStart = (): void => {
+    disposeActiveBundle();
+    const bundle = createBundle();
+    activeBundle = bundle;
+    void bundle.transport.start();
+  };
+
+  activeBundle = createBundle();
 
   socket.on('connect', () => {
     hasConnected = true;
@@ -132,19 +165,19 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
   socket.on('connect_error', () => setConnectionState(hasConnected ? 'reconnecting' : 'disconnected'));
   socket.on('disconnect', () => {
     if (!socket.active) {
-      gameplayTransport?.dispose();
+      disposeActiveBundle();
       hasSession = false;
     }
     setConnectionState(socket.active ? 'reconnecting' : 'disconnected');
   });
   socket.on('session:welcome', (welcome) => {
-    if (hasSession) gameplayTransport?.dispose();
+    if (hasSession) replaceBundleAndStart();
+    else void ensureBundle().transport.start();
     hasSession = true;
-    void gameplayTransport?.start();
     publish('session:welcome', welcome);
   });
   socket.on('room:state', (state) => publish('room:state', state));
-  socket.on('transport:mode', (notice) => gameplayTransport?.acceptMode(notice));
+  socket.on('transport:mode', (notice) => activeBundle?.transport.acceptMode(notice));
   socket.on('match:started', (snapshot) => publish('match:started', snapshot));
   socket.on('match:snapshot', (snapshot) => publish('match:snapshot', snapshot));
   socket.on('match:event', (event) => publish('match:event', event));
@@ -158,7 +191,7 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
       socket.connect();
     },
     disconnect(): void {
-      gameplayTransport?.dispose();
+      disposeActiveBundle();
       hasSession = false;
       socket.disconnect();
       setConnectionState('disconnected');
@@ -193,7 +226,7 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
         socket.emit('room:leave', {}, acknowledge);
       });
       if (acknowledgement.ok) {
-        gameplayTransport?.dispose();
+        disposeActiveBundle();
         hasSession = false;
       }
       return acknowledgement;
@@ -202,7 +235,7 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
       return withAckTimeout((acknowledge) => socket.emit('match:start', {}, acknowledge));
     },
     sendInput(input: InputFrame): void {
-      if (!gameplayTransport?.sendInput(input)) socket.emit('match:input', input);
+      if (!activeBundle?.transport.sendInput(input)) socket.emit('match:input', input);
     },
     setResultReady(ready: boolean): Promise<Ack<null>> {
       return withAckTimeout((acknowledge) => socket.emit('result:ready', { ready }, acknowledge));
@@ -211,7 +244,7 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
       const acknowledgement = await withAckTimeout<null>((acknowledge) => {
         socket.emit('result:lobby', {}, acknowledge);
       });
-      if (acknowledgement.ok) void gameplayTransport?.start();
+      if (acknowledgement.ok) replaceBundleAndStart();
       return acknowledgement;
     }
   };

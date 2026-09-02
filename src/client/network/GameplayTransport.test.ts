@@ -41,6 +41,43 @@ const snapshot = (tick = 1): MatchSnapshot => ({
   resultReason: null
 });
 
+const initialPlayerSnapshot = (): MatchSnapshot => ({
+  ...snapshot(),
+  scores: { 'player-1': 0 },
+  network: {
+    'player-1': { currentMs: null, medianMs: null, jitterMs: null, transport: 'websocket' }
+  },
+  players: [{
+    playerId: 'player-1',
+    name: 'Ada',
+    chassis: 'RIFT',
+    accent: 0,
+    position: { x: 640, y: 360 },
+    velocity: { x: 0, y: 0 },
+    facing: { x: 1, y: 0 },
+    overload: 0,
+    lastProcessedInputSeq: -1,
+    action: {
+      kind: null,
+      phase: 'IDLE',
+      comboStep: 0,
+      chargeMs: 0,
+      charging: false,
+      attackId: null,
+      profileId: null,
+      lockedFacing: null,
+      activeProgress: 0,
+      hitTargetIds: []
+    },
+    dashRemainingMs: 0,
+    dashCooldownRemainingMs: 0,
+    hitstunRemainingMs: 0,
+    respawnRemainingMs: 0,
+    protectionRemainingMs: 0,
+    stats: { knockouts: 0, falls: 0, landedHits: 0, completedAttacks: 0 }
+  }]
+});
+
 const started = (matchEpoch = 4): MatchStartedPublication => ({
   matchEpoch,
   eventCursor: 0,
@@ -209,6 +246,38 @@ describe('createGameplayTransport', () => {
     expect(harness.negotiate).not.toHaveBeenCalled();
     expect(harness.notifyFallback).not.toHaveBeenCalled();
     expect(controller.sendInput(input())).toBe(false);
+  });
+
+  it('negotiates with a UUIDv4 from getRandomValues when randomUUID is unavailable on private HTTP', async () => {
+    const getRandomValues = vi.fn((target: Uint8Array) => {
+      target.set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+      return target;
+    });
+    vi.stubGlobal('crypto', { getRandomValues });
+    const harness = createHarness();
+
+    const starting = harness.controller.start();
+    await flushPromises();
+    harness.peer.fast.open();
+    harness.peer.reliable.open();
+    await starting;
+
+    expect(getRandomValues).toHaveBeenCalledOnce();
+    expect(harness.negotiate.mock.calls[0]![0].generationId).toBe('00010203-0405-4607-8809-0a0b0c0d0e0f');
+    expect(harness.peer.close).not.toHaveBeenCalled();
+  });
+
+  it('falls back cleanly without allocating a peer when secure randomness is unavailable', async () => {
+    vi.stubGlobal('crypto', {});
+    const peer = new FakePeer();
+    const createPeer = vi.fn(() => peer as unknown as RTCPeerConnection);
+    const harness = createHarness({ peer, createPeer });
+
+    await expect(harness.controller.start()).resolves.toBeUndefined();
+
+    expect(createPeer).not.toHaveBeenCalled();
+    expect(harness.negotiate).not.toHaveBeenCalled();
+    expect(harness.controller.sendInput(input())).toBe(false);
   });
 
   it('uses the bound peer configuration and creates both exact channels before offering', async () => {
@@ -415,6 +484,25 @@ describe('createGameplayTransport', () => {
     });
   });
 
+  it('accepts a complete initial-player snapshot whose processed input sequence is minus one', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+    const publication: MatchStartedPublication = {
+      matchEpoch: 4,
+      eventCursor: 0,
+      snapshot: initialPlayerSnapshot()
+    };
+
+    harness.peer.reliable.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'started',
+      payload: publication
+    });
+
+    expect(harness.sequencer.acceptStarted).toHaveBeenCalledWith(publication);
+  });
+
   it('ignores stale-generation peer messages', async () => {
     const harness = createHarness();
     await activateHarness(harness);
@@ -470,6 +558,178 @@ describe('createGameplayTransport', () => {
     expect(harness.notifyFallback).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await starting;
+    expect(harness.notifyFallback).toHaveBeenCalledOnce();
+  });
+
+  it('enforces one five-second deadline across slow negotiation and channel readiness', async () => {
+    vi.useFakeTimers();
+    let finishNegotiation: ((acknowledgement: Ack<{
+      generationId: string;
+      answer: Readonly<{ type: 'answer'; sdp: string }>;
+    }>) => void) | undefined;
+    let generationId = '';
+    const harness = createHarness({
+      negotiate: (request) => new Promise((resolve) => {
+        generationId = request.generationId;
+        finishNegotiation = resolve;
+      })
+    });
+    const starting = harness.controller.start();
+    await flushPromises();
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    finishNegotiation?.({
+      ok: true,
+      data: { generationId, answer: { type: 'answer', sdp: 'slow-answer' } }
+    });
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(999);
+    expect(harness.notifyFallback).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await starting;
+    expect(harness.notifyFallback).toHaveBeenCalledOnce();
+  });
+
+  it('clears the generation deadline on dispose and ignores a late activation acknowledgement', async () => {
+    vi.useFakeTimers();
+    let finishActivation: ((acknowledgement: Ack<{
+      generationId: string | null;
+      mode: 'webrtc' | 'websocket' | 'polling';
+    }>) => void) | undefined;
+    const harness = createHarness({
+      activate: () => new Promise((resolve) => {
+        finishActivation = resolve;
+      })
+    });
+    const starting = harness.controller.start();
+    await flushPromises();
+    const generationId = harness.negotiate.mock.calls[0]![0].generationId;
+    harness.peer.fast.open();
+    harness.peer.reliable.open();
+    await flushPromises();
+    expect(harness.activate).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(1);
+
+    harness.controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    finishActivation?.({ ok: true, data: { generationId, mode: 'webrtc' } });
+    await starting;
+
+    expect(harness.notifyFallback).not.toHaveBeenCalled();
+    expect(harness.controller.sendInput(input())).toBe(false);
+  });
+
+  it('owns one deadline after replacement and ignores the replaced generation activation acknowledgement', async () => {
+    vi.useFakeTimers();
+    const firstPeer = new FakePeer();
+    const secondPeer = new FakePeer();
+    const peers = [firstPeer, secondPeer];
+    const activationResolvers: Array<(acknowledgement: Ack<{
+      generationId: string | null;
+      mode: 'webrtc' | 'websocket' | 'polling';
+    }>) => void> = [];
+    const harness = createHarness({
+      peer: firstPeer,
+      createPeer: () => peers.shift() as unknown as RTCPeerConnection,
+      activate: () => new Promise((resolve) => activationResolvers.push(resolve))
+    });
+    const firstStart = harness.controller.start();
+    await flushPromises();
+    const firstGeneration = harness.negotiate.mock.calls[0]![0].generationId;
+    firstPeer.fast.open();
+    firstPeer.reliable.open();
+    await flushPromises();
+    expect(vi.getTimerCount()).toBe(1);
+
+    const secondStart = harness.controller.start();
+    await flushPromises();
+    const secondGeneration = harness.negotiate.mock.calls[1]![0].generationId;
+    secondPeer.fast.open();
+    secondPeer.reliable.open();
+    await flushPromises();
+    expect(vi.getTimerCount()).toBe(1);
+
+    activationResolvers[0]?.({ ok: true, data: { generationId: firstGeneration, mode: 'webrtc' } });
+    harness.controller.acceptSocketStarted(started());
+    await firstStart;
+    expect(harness.controller.sendInput(input())).toBe(false);
+    expect(harness.notifyFallback).not.toHaveBeenCalled();
+
+    harness.controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    activationResolvers[1]?.({ ok: true, data: { generationId: secondGeneration, mode: 'webrtc' } });
+    await secondStart;
+  });
+
+  it('ignores a malformed current-generation snapshot publication', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+
+    harness.peer.fast.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'snapshot',
+      payload: { matchEpoch: 4, eventCursor: 0, snapshot: { tick: 2 } }
+    });
+
+    expect(harness.sequencer.acceptSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('ignores a malformed current-generation started publication without changing the input epoch', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+
+    harness.peer.reliable.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'started',
+      payload: { matchEpoch: 9, eventCursor: 0, snapshot: { tick: 1 } }
+    });
+
+    expect(harness.sequencer.acceptStarted).not.toHaveBeenCalled();
+    expect(harness.controller.sendInput(input())).toBe(false);
+  });
+
+  it('ignores a malformed current-generation event publication', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+
+    harness.peer.reliable.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'event',
+      payload: {
+        matchEpoch: 4,
+        event: { eventId: 1, tick: 1, type: 'PHASE', phase: 'REGULATION' }
+      }
+    });
+
+    expect(harness.sequencer.acceptEvent).not.toHaveBeenCalled();
+  });
+
+  it('ignores a malformed current-generation heartbeat envelope', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+
+    harness.peer.reliable.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'heartbeat',
+      nonce: 41,
+      unexpected: true
+    });
+
+    expect(harness.peer.reliable.send).not.toHaveBeenCalled();
+  });
+
+  it('keeps fallback notification idempotent when a publication gap follows a local failure', async () => {
+    const harness = createHarness();
+    await activateHarness(harness);
+
+    harness.peer.fast.close();
+    harness.controller.fallback();
+
     expect(harness.notifyFallback).toHaveBeenCalledOnce();
   });
 

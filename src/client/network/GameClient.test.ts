@@ -45,34 +45,94 @@ const socketHarness = vi.hoisted(() => {
 vi.mock('socket.io-client', () => ({ io: socketHarness.io }));
 
 const gameplayHarness = vi.hoisted(() => {
-  const transport = {
+  const transports: Array<{
+    start: ReturnType<typeof vi.fn>;
+    acceptMode: ReturnType<typeof vi.fn>;
+    acceptSocketStarted: ReturnType<typeof vi.fn>;
+    acceptSocketSnapshot: ReturnType<typeof vi.fn>;
+    acceptSocketEvent: ReturnType<typeof vi.fn>;
+    sendInput: ReturnType<typeof vi.fn>;
+    fallback: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  }> = [];
+  const createTransport = () => ({
     start: vi.fn(async () => undefined),
     acceptMode: vi.fn(),
     acceptSocketStarted: vi.fn(),
     acceptSocketSnapshot: vi.fn(),
     acceptSocketEvent: vi.fn(),
     sendInput: vi.fn(() => false),
+    fallback: vi.fn(),
     dispose: vi.fn()
-  };
-  const createGameplayTransport = vi.fn(() => transport);
+  });
+  const createGameplayTransport = vi.fn(() => {
+    const transport = createTransport();
+    transports.push(transport);
+    return transport;
+  });
   return {
-    transport,
+    transports,
     createGameplayTransport,
+    get transport() {
+      return transports.at(-1)!;
+    },
+    get firstTransport() {
+      return transports[0]!;
+    },
     reset(): void {
-      transport.start.mockClear();
-      transport.acceptMode.mockClear();
-      transport.acceptSocketStarted.mockClear();
-      transport.acceptSocketSnapshot.mockClear();
-      transport.acceptSocketEvent.mockClear();
-      transport.sendInput.mockReset().mockReturnValue(false);
-      transport.dispose.mockClear();
+      transports.splice(0);
       createGameplayTransport.mockClear();
+    }
+  };
+});
+
+const sequencerHarness = vi.hoisted(() => {
+  type Options = Readonly<{
+    onStarted: (value: unknown) => void;
+    onSnapshot: (value: unknown) => void;
+    onEvent: (value: unknown) => void;
+    onTransportGap: () => void;
+  }>;
+  const sequencers: Array<{
+    options: Options;
+    acceptStarted: ReturnType<typeof vi.fn>;
+    acceptSnapshot: ReturnType<typeof vi.fn>;
+    acceptEvent: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  }> = [];
+  const createMatchPublicationSequencer = vi.fn((options: Options) => {
+    const sequencer = {
+      options,
+      acceptStarted: vi.fn(),
+      acceptSnapshot: vi.fn(),
+      acceptEvent: vi.fn(),
+      dispose: vi.fn()
+    };
+    sequencers.push(sequencer);
+    return sequencer;
+  });
+  return {
+    sequencers,
+    createMatchPublicationSequencer,
+    get sequencer() {
+      return sequencers.at(-1)!;
+    },
+    get firstSequencer() {
+      return sequencers[0]!;
+    },
+    reset(): void {
+      sequencers.splice(0);
+      createMatchPublicationSequencer.mockClear();
     }
   };
 });
 
 vi.mock('./GameplayTransport.js', () => ({
   createGameplayTransport: gameplayHarness.createGameplayTransport
+}));
+
+vi.mock('./MatchPublicationSequencer.js', () => ({
+  createMatchPublicationSequencer: sequencerHarness.createMatchPublicationSequencer
 }));
 
 import { createSocketGameClient } from './GameClient.js';
@@ -124,6 +184,7 @@ describe('createSocketGameClient', () => {
   beforeEach(() => {
     socketHarness.reset();
     gameplayHarness.reset();
+    sequencerHarness.reset();
   });
   afterEach(() => vi.useRealTimers());
 
@@ -183,6 +244,7 @@ describe('createSocketGameClient', () => {
       ['room:leave', {}, expect.any(Function)]
     ]);
     expect(gameplayHarness.transport.dispose).toHaveBeenCalledOnce();
+    expect(sequencerHarness.sequencer.dispose).toHaveBeenCalledOnce();
   });
 
   it('keeps the gameplay transport when leave-room is rejected', async () => {
@@ -204,6 +266,8 @@ describe('createSocketGameClient', () => {
       acknowledge?.({ ok: true, data: null });
     });
     const client = createSocketGameClient();
+    const formerTransport = gameplayHarness.transport;
+    const formerSequencer = sequencerHarness.sequencer;
     await client.setChassis('WRAITH');
     await client.setReady(true);
     await client.startMatch();
@@ -216,6 +280,9 @@ describe('createSocketGameClient', () => {
       ['result:ready', { ready: false }, expect.any(Function)],
       ['result:lobby', {}, expect.any(Function)]
     ]);
+    expect(formerTransport.dispose).toHaveBeenCalledOnce();
+    expect(formerSequencer.dispose).toHaveBeenCalledOnce();
+    expect(gameplayHarness.transport).not.toBe(formerTransport);
     expect(gameplayHarness.transport.start).toHaveBeenCalledOnce();
   });
 
@@ -231,8 +298,8 @@ describe('createSocketGameClient', () => {
   });
 
   it('does not duplicate input on Socket.IO when the gameplay channel accepts it', () => {
-    gameplayHarness.transport.sendInput.mockReturnValue(true);
     const client = createSocketGameClient();
+    gameplayHarness.transport.sendInput.mockReturnValue(true);
     const value: InputFrame = {
       seq: 5, moveX: 0, moveY: 1, aimX: -1, aimY: 0, quick: false, heavy: true, dash: false
     };
@@ -247,12 +314,17 @@ describe('createSocketGameClient', () => {
     createSocketGameClient();
 
     socketHarness.trigger('session:welcome', welcome());
+    const firstTransport = gameplayHarness.firstTransport;
+    const firstSequencer = sequencerHarness.firstSequencer;
     socketHarness.trigger('session:welcome', welcome({ resumed: true, resumeToken: 'resume-2' }));
 
-    expect(gameplayHarness.transport.start).toHaveBeenCalledTimes(2);
-    expect(gameplayHarness.transport.dispose).toHaveBeenCalledOnce();
-    expect(gameplayHarness.transport.dispose.mock.invocationCallOrder[0]).toBeLessThan(
-      gameplayHarness.transport.start.mock.invocationCallOrder[1]!
+    expect(gameplayHarness.transports).toHaveLength(2);
+    expect(firstTransport.start).toHaveBeenCalledOnce();
+    expect(firstTransport.dispose).toHaveBeenCalledOnce();
+    expect(firstSequencer.dispose).toHaveBeenCalledOnce();
+    expect(gameplayHarness.transport.start).toHaveBeenCalledOnce();
+    expect(firstTransport.dispose.mock.invocationCallOrder[0]).toBeLessThan(
+      gameplayHarness.transport.start.mock.invocationCallOrder[0]!
     );
   });
 
@@ -294,32 +366,79 @@ describe('createSocketGameClient', () => {
 
   it('disposes on explicit and non-resumable disconnects but waits through recoverable reconnects', () => {
     const explicitClient = createSocketGameClient();
+    const explicitSequencer = sequencerHarness.sequencer;
     explicitClient.disconnect();
     expect(gameplayHarness.transport.dispose).toHaveBeenCalledOnce();
+    expect(explicitSequencer.dispose).toHaveBeenCalledOnce();
 
-    gameplayHarness.transport.dispose.mockClear();
+    createSocketGameClient();
+    const nonResumableTransport = gameplayHarness.transport;
+    const nonResumableSequencer = sequencerHarness.sequencer;
     socketHarness.socket.active = false;
     socketHarness.trigger('disconnect', 'io server disconnect');
-    expect(gameplayHarness.transport.dispose).toHaveBeenCalledOnce();
+    expect(nonResumableTransport.dispose).toHaveBeenCalledOnce();
+    expect(nonResumableSequencer.dispose).toHaveBeenCalledOnce();
 
-    gameplayHarness.transport.dispose.mockClear();
+    createSocketGameClient();
+    const recoverableTransport = gameplayHarness.transport;
+    const recoverableSequencer = sequencerHarness.sequencer;
     socketHarness.socket.active = true;
     socketHarness.trigger('disconnect', 'transport close');
-    expect(gameplayHarness.transport.dispose).not.toHaveBeenCalled();
+    expect(recoverableTransport.dispose).not.toHaveBeenCalled();
+    expect(recoverableSequencer.dispose).not.toHaveBeenCalled();
   });
 
   it('negotiates a fresh generation after a recoverable resume welcome', () => {
     createSocketGameClient();
     socketHarness.trigger('session:welcome', welcome());
-    gameplayHarness.transport.start.mockClear();
-    gameplayHarness.transport.dispose.mockClear();
+    const formerTransport = gameplayHarness.transport;
+    const formerSequencer = sequencerHarness.sequencer;
     socketHarness.socket.active = true;
 
     socketHarness.trigger('disconnect', 'transport close');
     socketHarness.trigger('session:welcome', welcome({ resumed: true, resumeToken: 'resume-2' }));
 
-    expect(gameplayHarness.transport.dispose).toHaveBeenCalledOnce();
+    expect(formerTransport.dispose).toHaveBeenCalledOnce();
+    expect(formerSequencer.dispose).toHaveBeenCalledOnce();
     expect(gameplayHarness.transport.start).toHaveBeenCalledOnce();
+  });
+
+  it('ignores a stale publication gap after a replacement session', () => {
+    createSocketGameClient();
+    socketHarness.trigger('session:welcome', welcome());
+    const formerTransport = gameplayHarness.transport;
+    const formerSequencer = sequencerHarness.sequencer;
+    socketHarness.trigger('session:welcome', welcome({ resumed: true, resumeToken: 'resume-2' }));
+    const currentTransport = gameplayHarness.transport;
+
+    formerSequencer.options.onTransportGap();
+
+    expect(formerTransport.fallback).not.toHaveBeenCalled();
+    expect(currentTransport.fallback).not.toHaveBeenCalled();
+    expect(socketHarness.socket.emit).not.toHaveBeenCalledWith('transport:fallback', {});
+  });
+
+  it('cancels and ignores a publication gap after explicit disconnect', () => {
+    const client = createSocketGameClient();
+    const formerTransport = gameplayHarness.transport;
+    const formerSequencer = sequencerHarness.sequencer;
+
+    client.disconnect();
+    formerSequencer.options.onTransportGap();
+
+    expect(formerSequencer.dispose).toHaveBeenCalledOnce();
+    expect(formerTransport.fallback).not.toHaveBeenCalled();
+    expect(socketHarness.socket.emit).not.toHaveBeenCalledWith('transport:fallback', {});
+  });
+
+  it('routes a current publication gap through the owning controller fallback method', () => {
+    createSocketGameClient();
+    const currentTransport = gameplayHarness.transport;
+
+    sequencerHarness.sequencer.options.onTransportGap();
+
+    expect(currentTransport.fallback).toHaveBeenCalledOnce();
+    expect(socketHarness.socket.emit).not.toHaveBeenCalledWith('transport:fallback', {});
   });
 
   it('acknowledges server-issued RTT probes without publishing a client-authored latency value', () => {
