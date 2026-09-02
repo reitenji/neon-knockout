@@ -2,6 +2,8 @@ import { io, type Socket } from 'socket.io-client';
 import type { Ack, Chassis, GameEvent, InputFrame, MatchSnapshot, RoomState, ServerError, SessionWelcome } from '../../shared/model.js';
 import type { RoomSettings } from '../../shared/roomSettings.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
+import { createGameplayTransport } from './GameplayTransport.js';
+import { createMatchPublicationSequencer } from './MatchPublicationSequencer.js';
 
 export type GameClientConnectionState = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
@@ -74,6 +76,7 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
   const listeners = createListenerSets();
   let connectionState: GameClientConnectionState = 'idle';
   let hasConnected = false;
+  let hasSession = false;
 
   const publish = <E extends keyof GameClientEvents>(event: E, ...args: Parameters<GameClientEvents[E]>): void => {
     for (const listener of listeners[event]) {
@@ -100,15 +103,48 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
       send(finish);
     });
 
+  let gameplayTransport: ReturnType<typeof createGameplayTransport> | null = null;
+  const sequencer = createMatchPublicationSequencer({
+    onStarted: (snapshot) => publish('match:started', snapshot),
+    onSnapshot: (snapshot) => publish('match:snapshot', snapshot),
+    onEvent: (event) => publish('match:event', event),
+    onTransportGap: () => {
+      gameplayTransport?.dispose();
+      socket.emit('transport:fallback', {});
+    }
+  });
+  gameplayTransport = createGameplayTransport({
+    negotiate: (request) => withAckTimeout((acknowledge) => {
+      socket.emit('transport:negotiate', request, acknowledge);
+    }),
+    activate: (request) => withAckTimeout((acknowledge) => {
+      socket.emit('transport:activate', request, acknowledge);
+    }),
+    notifyFallback: () => socket.emit('transport:fallback', {}),
+    sequencer
+  });
+
   socket.on('connect', () => {
     hasConnected = true;
     setConnectionState('connected');
   });
   socket.io.on('reconnect_attempt', () => setConnectionState(hasConnected ? 'reconnecting' : 'connecting'));
   socket.on('connect_error', () => setConnectionState(hasConnected ? 'reconnecting' : 'disconnected'));
-  socket.on('disconnect', () => setConnectionState(socket.active ? 'reconnecting' : 'disconnected'));
-  socket.on('session:welcome', (welcome) => publish('session:welcome', welcome));
+  socket.on('disconnect', () => {
+    if (!socket.active) {
+      gameplayTransport?.dispose();
+      hasSession = false;
+    }
+    setConnectionState(socket.active ? 'reconnecting' : 'disconnected');
+  });
+  socket.on('session:welcome', (welcome) => {
+    if (hasSession) gameplayTransport?.dispose();
+    hasSession = true;
+    void gameplayTransport?.start();
+    publish('session:welcome', welcome);
+  });
   socket.on('room:state', (state) => publish('room:state', state));
+  socket.on('transport:mode', (notice) => gameplayTransport?.acceptMode(notice));
   socket.on('match:started', (snapshot) => publish('match:started', snapshot));
   socket.on('match:snapshot', (snapshot) => publish('match:snapshot', snapshot));
   socket.on('match:event', (event) => publish('match:event', event));
@@ -122,6 +158,8 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
       socket.connect();
     },
     disconnect(): void {
+      gameplayTransport?.dispose();
+      hasSession = false;
       socket.disconnect();
       setConnectionState('disconnected');
     },
@@ -150,20 +188,31 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     setRoomSettings(settings: RoomSettings): Promise<Ack<null>> {
       return withAckTimeout((acknowledge) => socket.emit('lobby:settings', settings, acknowledge));
     },
-    leaveRoom(): Promise<Ack<null>> {
-      return withAckTimeout((acknowledge) => socket.emit('room:leave', {}, acknowledge));
+    async leaveRoom(): Promise<Ack<null>> {
+      const acknowledgement = await withAckTimeout<null>((acknowledge) => {
+        socket.emit('room:leave', {}, acknowledge);
+      });
+      if (acknowledgement.ok) {
+        gameplayTransport?.dispose();
+        hasSession = false;
+      }
+      return acknowledgement;
     },
     startMatch(): Promise<Ack<null>> {
       return withAckTimeout((acknowledge) => socket.emit('match:start', {}, acknowledge));
     },
     sendInput(input: InputFrame): void {
-      socket.emit('match:input', input);
+      if (!gameplayTransport?.sendInput(input)) socket.emit('match:input', input);
     },
     setResultReady(ready: boolean): Promise<Ack<null>> {
       return withAckTimeout((acknowledge) => socket.emit('result:ready', { ready }, acknowledge));
     },
-    returnToLobby(): Promise<Ack<null>> {
-      return withAckTimeout((acknowledge) => socket.emit('result:lobby', {}, acknowledge));
+    async returnToLobby(): Promise<Ack<null>> {
+      const acknowledgement = await withAckTimeout<null>((acknowledge) => {
+        socket.emit('result:lobby', {}, acknowledge);
+      });
+      if (acknowledgement.ok) void gameplayTransport?.start();
+      return acknowledgement;
     }
   };
 }
