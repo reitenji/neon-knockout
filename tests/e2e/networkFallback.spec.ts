@@ -1,5 +1,5 @@
 import type { ConsoleMessage } from '@playwright/test';
-import { assertNoUnexpectedErrors, expect, test } from './fixtures.js';
+import { assertNoUnexpectedErrors, expect, openPlayer, test } from './fixtures.js';
 
 test('the shipped browser client falls back to polling when WebSocket is unavailable', async ({ browser, game }) => {
   const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
@@ -50,5 +50,57 @@ test('the shipped browser client falls back to polling when WebSocket is unavail
     await assertNoUnexpectedErrors(game, { context, page, issues });
   } finally {
     await context.close();
+  }
+});
+
+test('a browser without RTCPeerConnection joins and keeps playing through Socket.IO', async ({ browser, game }) => {
+  const unsupported = await openPlayer(browser, game.origin, {
+    initScript: () => {
+      Object.defineProperty(window, 'RTCPeerConnection', { configurable: true, value: undefined });
+    }
+  });
+  const guest = await openPlayer(browser, game.origin);
+  try {
+    await unsupported.page.getByLabel('Oyuncu adı').fill('Fallback Ada');
+    await unsupported.page.getByRole('button', { name: 'Oda Kur' }).click();
+    const code = await unsupported.page.getByTestId('room-code').textContent();
+    if (!code) throw new Error('Unsupported-browser room code was not rendered.');
+
+    await guest.page.getByLabel('Oyuncu adı').fill('Linus');
+    await guest.page.getByLabel('Oda kodu').fill(code);
+    await guest.page.getByRole('button', { name: 'Odaya Katıl' }).click();
+    await unsupported.page.getByRole('button', { name: 'WRAITH gövdesini seç' }).click();
+    await guest.page.getByRole('button', { name: 'PULSE gövdesini seç' }).click();
+    await unsupported.page.getByRole('button', { name: 'Hazırım' }).click();
+    await guest.page.getByRole('button', { name: 'Hazırım' }).click();
+    await unsupported.page.getByRole('button', { name: 'Maçı Başlat' }).click();
+    await expect.poll(() => game.harness.matchSnapshot(code)?.phase, { timeout: 12_000 }).toBe('REGULATION');
+
+    const initial = game.harness.matchSnapshot(code);
+    const unsupportedPlayer = initial?.players.find((player) => player.name === 'Fallback Ada');
+    if (!unsupportedPlayer) throw new Error('Unsupported-browser player was missing from the match.');
+    expect(['websocket', 'polling']).toContain(game.harness.transportMode(unsupportedPlayer.playerId));
+
+    const sequenceBeforeInput = unsupportedPlayer.lastProcessedInputSeq;
+    const positionBeforeInput = unsupportedPlayer.position.x;
+    await unsupported.page.keyboard.down('d');
+    await expect.poll(() => {
+      const player = game.harness.matchSnapshot(code)?.players.find((candidate) =>
+        candidate.playerId === unsupportedPlayer.playerId
+      );
+      return Boolean(player && player.lastProcessedInputSeq > sequenceBeforeInput && player.position.x > positionBeforeInput);
+    }).toBe(true);
+    await unsupported.page.keyboard.up('d');
+    await unsupported.page.keyboard.down('j');
+    await expect.poll(() => game.harness.matchSnapshot(code)?.players.find((candidate) =>
+      candidate.playerId === unsupportedPlayer.playerId
+    )?.action.kind).toBe('QUICK_1');
+    await unsupported.page.keyboard.up('j');
+
+    await expect(unsupported.page.getByRole('alert')).toHaveCount(0);
+    await expect(guest.page.getByRole('alert')).toHaveCount(0);
+    await assertNoUnexpectedErrors(game, unsupported, guest);
+  } finally {
+    await Promise.all([unsupported.context.close(), guest.context.close()]);
   }
 });

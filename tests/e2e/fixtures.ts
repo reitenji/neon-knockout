@@ -1,4 +1,12 @@
-import { expect, test as base, type Browser, type BrowserContext, type ConsoleMessage, type Page } from '@playwright/test';
+import {
+  expect,
+  test as base,
+  type Browser,
+  type BrowserContext,
+  type BrowserContextOptions,
+  type ConsoleMessage,
+  type Page
+} from '@playwright/test';
 import { createGameServer, type GameServer } from '../../src/server/network/createGameServer.js';
 import type { MatchSnapshot } from '../../src/shared/model.js';
 import type { RoomSettings } from '../../src/shared/roomSettings.js';
@@ -56,12 +64,22 @@ export type MatchPages = Readonly<{
   close(): Promise<void>;
 }>;
 
+export type OpenPlayerOptions = Readonly<{
+  contextOptions?: BrowserContextOptions;
+  initScript?: () => void;
+}>;
+
 function errorText(message: ConsoleMessage): string {
   return `${message.type()}: ${message.text()}`;
 }
 
-export async function openPlayer(browser: Browser, origin: string): Promise<PlayerPage> {
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+export async function openPlayer(
+  browser: Browser,
+  origin: string,
+  options: OpenPlayerOptions = {}
+): Promise<PlayerPage> {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 }, ...options.contextOptions });
+  if (options.initScript) await context.addInitScript(options.initScript);
   const page = await context.newPage();
   const issues = { pageErrors: [], consoleErrors: [] };
   page.on('pageerror', (error) => issues.pageErrors.push(error.message));

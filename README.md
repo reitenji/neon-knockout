@@ -15,7 +15,19 @@ Use Node.js 20 or newer. The host command builds the production client and start
 4. Each friend opens that exact link, enters only a player name, chooses **Odaya Katıl**, and selects a chassis. The four-character room code remains available as a manual fallback from the main page.
 5. The host chooses the room rules, every player chooses **Hazırım**, and the host chooses **Maçı Başlat** when every connected player is ready.
 
-The local host may use `http://localhost:4173`; other devices must use the private LAN URL shown in the lobby, commonly in `192.168.x.x`, `10.x.x.x`, or `172.16–31.x.x`. Allow incoming TCP connections on port 4173 in the operating-system firewall when players cannot join. Guests only need a modern browser after the host has installed dependencies.
+The local host may use `http://localhost:4173`; other devices must use the private LAN URL shown in the lobby, commonly in `192.168.x.x`, `10.x.x.x`, or `172.16–31.x.x`. Allow incoming TCP connections on port 4173 and UDP ports 53100–53131 in the operating-system firewall when players cannot join or WebRTC cannot activate. Guests only need a modern browser after the host has installed dependencies.
+
+## Gameplay transport and Ping
+
+Socket.IO remains connected for room and session control. During a match, a supported browser tries a host-candidate-only WebRTC connection directly to the authoritative Node.js server over UDP 53100–53131. This is a LAN-only path: it uses no STUN, TURN, public relay, or Internet traversal. If the browser, firewall, or network cannot establish WebRTC, gameplay automatically continues through the current Socket.IO WebSocket or polling connection without reloading or leaving the room.
+
+The UDP range can be overridden when the default conflicts with local policy. Set both bounds and keep them different, for example:
+
+```sh
+GAME_WEBRTC_UDP_PORT_MIN=54000 GAME_WEBRTC_UDP_PORT_MAX=54031 npm run lan
+```
+
+The player list intentionally shows one **Ping** value. While WebRTC is active, Ping is the server-observed selected ICE candidate-pair round-trip time. During Socket.IO fallback, it is the application round-trip time measured through the active WebSocket or polling path. In either mode the displayed value is the median of fresh server-owned samples; it is `—` until a fresh sample exists. Ping is not a rendering-delay, rollback, or client-submitted estimate, and the game does not promise a universal sub-20 ms result.
 
 Only the current host can edit **Oda Ayarları**. Match duration can be **90 sn**, **2 dk**, or **3 dk**; the winning target can be **3**, **5**, **7**, or **10** knockouts. New rooms default to two minutes and five knockouts. Guests see the same server-owned values in read-only controls. A real settings change clears every player's ready state, and the selected pair persists through reconnects, host migration, returns to the lobby, and rematches.
 
@@ -46,11 +58,11 @@ Closing or losing a browser connection does not award a knockout or a fall. Keep
 
 ## Platform notes
 
-- macOS: allow the terminal application through the firewall if macOS asks.
-- Windows: allow Node.js on private networks in Windows Defender Firewall.
-- Linux: allow TCP port 4173 on the active private-network firewall profile.
+- macOS: allow the terminal or Node.js application through the firewall if macOS asks, and ensure any managed or third-party firewall permits inbound TCP 4173 plus UDP 53100–53131.
+- Windows: allow Node.js on private networks in Windows Defender Firewall. A scoped UDP rule can be added from an elevated terminal with `netsh advfirewall firewall add rule name="Neon Knockout WebRTC" dir=in action=allow protocol=UDP localport=53100-53131 profile=private`.
+- Linux: allow TCP 4173 and UDP 53100–53131 on the active private-network firewall profile; with UFW, use `sudo ufw allow 4173/tcp` and `sudo ufw allow 53100:53131/udp`.
 
-If the LAN URL is absent, make sure the host has an active private network adapter. VPN, guest Wi-Fi isolation, captive portals, and corporate firewalls can block direct LAN connections. The client prefers WebSocket and falls back to Socket.IO polling when WebSocket setup is blocked, but neither transport can bypass router isolation or a closed host firewall. Stop an older local server already using port 4173 before running `npm run lan`.
+If the LAN URL is absent, make sure the host has an active private network adapter. VPN, guest Wi-Fi/client isolation, captive portals, and corporate firewalls can block host candidates or all direct LAN connections. A guest network may let devices reach the Internet while deliberately preventing them from reaching each other; WebRTC and Socket.IO cannot bypass that policy. WebRTC falls back to Socket.IO when only UDP is blocked, and Socket.IO prefers WebSocket before polling, but none of these transports can bypass router isolation or a closed host firewall. Stop an older local server already using port 4173 before running `npm run lan`.
 
 ## Health probe and troubleshooting
 
@@ -75,4 +87,4 @@ npm run verify
 npx vitest run tests/integration/socketFlow.test.ts --maxWorkers=1
 ```
 
-`npm run verify` runs lint, both TypeScript checks, all Vitest suites, the ten-second eight-client load gate, and a production build. `npm run test:e2e` builds production code and runs the keyboard-only two-context journeys plus the representative frame-budget gate: one real 1280 × 720 renderer with seven active lightweight Socket.IO participants, for eight authoritative players total.
+`npm run verify` runs lint, both TypeScript checks, all Vitest suites, the ten-second eight-client Socket.IO fallback load gate, and a production build. `npm run test:e2e` builds production code and covers active Chromium-to-Node WebRTC gameplay, forced fallback without reload, a fresh lobby/rematch generation, unsupported-browser fallback, mobile landscape touch input, and the representative frame/ring-out gates. The performance run uses one real 1280 × 720 WebRTC renderer with seven active lightweight Socket.IO participants, records WebRTC-versus-Socket.IO input-to-authoritative-snapshot latency as a JSON attachment, and keeps latency measurement separate from a universal threshold.

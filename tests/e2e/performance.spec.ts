@@ -17,6 +17,7 @@ const COMPANION_COUNT = 7;
 const COMPANION_INPUT_MS = 3_800;
 const ACK_TIMEOUT_MS = 2_000;
 const RING_OUT_EFFECT_SAMPLE_FRAMES = 72;
+const INPUT_LATENCY_SAMPLES = 12;
 
 test.use({
   launchOptions: {
@@ -35,13 +36,13 @@ type GameClient = Socket<ServerToClientEvents, ClientToServerEvents>;
 type AckEvent = Exclude<keyof ClientToServerEvents, 'match:input'>;
 
 const COMPANION_LAYOUT = [
-  { position: { x: 640, y: 190 }, facing: { x: 1, y: 0 } },
-  { position: { x: 820, y: 260 }, facing: { x: 0, y: 1 } },
-  { position: { x: 820, y: 460 }, facing: { x: -1, y: 0 } },
-  { position: { x: 640, y: 530 }, facing: { x: -1, y: 0 } },
-  { position: { x: 460, y: 460 }, facing: { x: 0, y: -1 } },
-  { position: { x: 460, y: 260 }, facing: { x: 0, y: -1 } },
-  { position: { x: 350, y: 360 }, facing: { x: 0, y: 1 } }
+  { position: { x: 640, y: 190 }, facing: { x: 0, y: -1 } },
+  { position: { x: 820, y: 260 }, facing: { x: 1, y: -1 } },
+  { position: { x: 820, y: 460 }, facing: { x: 1, y: 1 } },
+  { position: { x: 640, y: 530 }, facing: { x: 0, y: 1 } },
+  { position: { x: 460, y: 460 }, facing: { x: -1, y: 1 } },
+  { position: { x: 460, y: 260 }, facing: { x: -1, y: -1 } },
+  { position: { x: 350, y: 360 }, facing: { x: -1, y: 0 } }
 ] as const;
 
 async function emitSuccess<T>(socket: GameClient, event: AckEvent, payload: unknown): Promise<T> {
@@ -186,10 +187,71 @@ function authoritativePlayer(game: E2eGame, code: string, playerId: string): Mat
   return player;
 }
 
+type InputLatencyObservation = Readonly<{
+  submittedAtMs: number;
+  firstAuthoritativeSnapshotAtMs: number;
+  processedSequence: number;
+  latencyMs: number;
+}>;
+
+async function waitForProcessedSequence(
+  game: E2eGame,
+  code: string,
+  playerId: string,
+  minimumSequence: number
+): Promise<Readonly<{ observedAtMs: number; processedSequence: number }>> {
+  const deadline = performance.now() + ACK_TIMEOUT_MS;
+  while (performance.now() < deadline) {
+    const processedSequence = authoritativePlayer(game, code, playerId).lastProcessedInputSeq;
+    if (processedSequence >= minimumSequence) {
+      return { observedAtMs: performance.now(), processedSequence };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1));
+  }
+  throw new Error(`Timed out waiting for authoritative input sequence ${minimumSequence} for ${playerId}.`);
+}
+
+async function measureBrowserInputLatency(
+  game: E2eGame,
+  code: string,
+  measured: PlayerPage,
+  playerId: string
+): Promise<readonly InputLatencyObservation[]> {
+  const observations: InputLatencyObservation[] = [];
+  for (let index = 0; index < INPUT_LATENCY_SAMPLES; index += 1) {
+    const before = authoritativePlayer(game, code, playerId).lastProcessedInputSeq;
+    const submittedAtMs = performance.now();
+    if (index % 2 === 0) await measured.page.keyboard.down('d');
+    else await measured.page.keyboard.up('d');
+    const first = await waitForProcessedSequence(game, code, playerId, before + 1);
+    observations.push({
+      submittedAtMs,
+      firstAuthoritativeSnapshotAtMs: first.observedAtMs,
+      processedSequence: first.processedSequence,
+      latencyMs: first.observedAtMs - submittedAtMs
+    });
+  }
+  await measured.page.keyboard.up('d');
+  return observations;
+}
+
+function latencyMetrics(observations: readonly InputLatencyObservation[]): Readonly<{
+  samples: number;
+  medianMs: number;
+  p95Ms: number;
+}> {
+  const sorted = observations.map((sample) => sample.latencyMs).sort((left, right) => left - right);
+  return {
+    samples: sorted.length,
+    medianMs: sorted[Math.floor(sorted.length / 2)]!,
+    p95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1]!
+  };
+}
+
 function companionInput(seq: number, index: number): InputFrame {
-  const cycle = seq % 240;
+  const cycle = seq % 120;
   const facing = COMPANION_LAYOUT[index]!.facing;
-  const moving = cycle < 8 || (cycle >= 50 && cycle < 58);
+  const moving = cycle < 8 || (cycle >= 90 && cycle < 98);
   return {
     seq,
     moveX: moving ? facing.x : 0,
@@ -198,7 +260,7 @@ function companionInput(seq: number, index: number): InputFrame {
     aimY: facing.y,
     quick: cycle === 12,
     heavy: cycle >= 30 && cycle < 75,
-    dash: cycle === 150
+    dash: cycle === 100
   };
 }
 
@@ -281,11 +343,15 @@ async function spawnLivePulseThroughMatchInput(
   return pulse;
 }
 
-function frameMetrics(durations: readonly number[]): Readonly<{ medianFps: number; p95FrameMs: number }> {
+function frameMetrics(durations: readonly number[]): Readonly<{
+  medianFrameMs: number;
+  medianFps: number;
+  p95FrameMs: number;
+}> {
   const sorted = [...durations].sort((left, right) => left - right);
   const median = sorted[Math.floor(sorted.length / 2)]!;
   const p95 = sorted[Math.ceil(sorted.length * 0.95) - 1]!;
-  return { medianFps: 1_000 / median, p95FrameMs: p95 };
+  return { medianFrameMs: median, medianFps: 1_000 / median, p95FrameMs: p95 };
 }
 
 function burstFrameMetrics(frames: readonly SampledFrame[]): Readonly<{
@@ -335,6 +401,16 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     await placePlayers(game, match.code, measuredId, companionIds);
     await retainMeasuredAim(game, match.code, match.measured, measuredId);
     await expect(match.measured.page.getByRole('list', { name: 'Oyuncu sıralaması' }).getByRole('listitem')).toHaveCount(8);
+    await expect.poll(() => game.harness.transportMode(measuredId), { timeout: 10_000 }).toBe('webrtc');
+    expect(companionIds.map((playerId) => game.harness.transportMode(playerId)))
+      .toEqual(new Array(COMPANION_COUNT).fill('websocket'));
+
+    const webRtcLatencyObservations = await measureBrowserInputLatency(
+      game,
+      match.code,
+      match.measured,
+      measuredId
+    );
 
     const before = authoritativePlayer(game, match.code, measuredId);
     const eventMarker = game.harness.recentEvents(match.code).at(-1)?.eventId ?? 0;
@@ -343,11 +419,17 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     await match.measured.page.keyboard.down('j');
     await match.measured.page.waitForTimeout(120);
     await match.measured.page.keyboard.up('j');
-    await match.measured.page.waitForTimeout(520);
+    await expect.poll(() => authoritativePlayer(game, match.code, measuredId).stats.completedAttacks, {
+      message: 'the measured WebRTC quick input should complete authoritatively'
+    }).toBeGreaterThanOrEqual(before.stats.completedAttacks + 1);
     await match.measured.page.keyboard.down('k');
     await match.measured.page.waitForTimeout(760);
+    await expect.poll(() => authoritativePlayer(game, match.code, measuredId).action.chargeMs)
+      .toBe(GAME.heavyMaxChargeMs);
     await match.measured.page.keyboard.up('k');
-    await match.measured.page.waitForTimeout(700);
+    await expect.poll(() => game.harness.recentEvents(match.code).some(
+      (event) => event.eventId > eventMarker && event.type === 'PULSE_SPAWN' && event.ownerPlayerId === measuredId
+    ), { message: 'the measured WebRTC heavy release should spawn its pulse authoritatively' }).toBe(true);
     await match.measured.page.keyboard.down('Space');
     await match.measured.page.waitForTimeout(120);
     await match.measured.page.keyboard.up('Space');
@@ -366,14 +448,52 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     expect(game.harness.matchSnapshot(match.code)?.players).toHaveLength(8);
     await expect(match.measured.page.getByRole('list', { name: 'Oyuncu sıralaması' }).getByRole('listitem')).toHaveCount(8);
 
-    const { medianFps, p95FrameMs } = frameMetrics(durations);
+    await game.harness.dropWebRtc(measuredId);
+    await expect.poll(() => game.harness.transportMode(measuredId), { timeout: 10_000 }).toBe('websocket');
+    const socketIoLatencyObservations = await measureBrowserInputLatency(
+      game,
+      match.code,
+      match.measured,
+      measuredId
+    );
+    const transportLatency = {
+      methodology: 'same browser page, Playwright keyboard, ArenaInput sampler, and authoritative sequence observer; WebRTC sampled before forced in-place Socket.IO fallback',
+      webRtc: latencyMetrics(webRtcLatencyObservations),
+      socketIo: latencyMetrics(socketIoLatencyObservations),
+      observations: {
+        webRtc: webRtcLatencyObservations,
+        socketIo: socketIoLatencyObservations
+      }
+    };
+    await testInfo.attach('transport-latency-comparison', {
+      body: Buffer.from(JSON.stringify(transportLatency, null, 2)),
+      contentType: 'application/json'
+    });
+    console.info(`TRANSPORT_LATENCY_METRICS ${JSON.stringify(transportLatency)}`);
+
+    const { medianFrameMs, medianFps, p95FrameMs } = frameMetrics(durations);
     const metrics = {
       browserContexts: 1,
       authoritativePlayers: 8,
+      loadGameplayTransport: 'webrtc',
+      socketIoCompanions: COMPANION_COUNT,
       viewport: '1280x720',
       samples: durations.length,
+      medianFrameMs: Number(medianFrameMs.toFixed(2)),
       medianFps: Number(medianFps.toFixed(2)),
-      p95FrameMs: Number(p95FrameMs.toFixed(2))
+      p95FrameMs: Number(p95FrameMs.toFixed(2)),
+      inputLatency: {
+        webRtc: {
+          samples: transportLatency.webRtc.samples,
+          medianMs: Number(transportLatency.webRtc.medianMs.toFixed(2)),
+          p95Ms: Number(transportLatency.webRtc.p95Ms.toFixed(2))
+        },
+        socketIo: {
+          samples: transportLatency.socketIo.samples,
+          medianMs: Number(transportLatency.socketIo.medianMs.toFixed(2)),
+          p95Ms: Number(transportLatency.socketIo.p95Ms.toFixed(2))
+        }
+      }
     };
     testInfo.annotations.push({ type: 'performance', description: JSON.stringify(metrics) });
     console.info(`PERFORMANCE_METRICS ${JSON.stringify(metrics)}`);

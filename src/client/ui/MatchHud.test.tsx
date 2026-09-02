@@ -164,7 +164,7 @@ describe('MatchHud', () => {
     expect(controls).not.toHaveTextContent(/oklar|shift|tık|fare|mouse/i);
   });
 
-  it('shows current Ping and median RTT for every player without Delay or Rollback telemetry', () => {
+  it('shows one median Ping value for every player without transport diagnostics', () => {
     const bridge = new PresentationBridge();
     bridge.current = snapshot({
       players: [
@@ -187,33 +187,31 @@ describe('MatchHud', () => {
     const roster = screen.getByRole('region', { name: 'Oyuncu listesi' });
     expect(within(roster).getAllByRole('listitem')).toHaveLength(4);
     expect(within(roster).getByText('KO')).toBeVisible();
-    expect(within(roster).getByText('PING/RTT')).toBeVisible();
+    expect(within(roster).getByText('PING')).toBeVisible();
     expect(within(roster).queryByText('MEDYAN')).not.toBeInTheDocument();
 
-    const localTelemetry = screen.getByLabelText('Ada ağ telemetrisi: Ping 16 ms, RTT 15 ms');
-    expect(within(localTelemetry).getByText('Ping 16 ms')).toBeVisible();
-    expect(within(localTelemetry).getByText('RTT 15 ms')).toBeVisible();
+    const localTelemetry = screen.getByLabelText('Ada ağ telemetrisi: Ping 15 ms');
+    expect(within(localTelemetry).getByText('Ping 15 ms')).toBeVisible();
     expect(localTelemetry).toHaveClass('is-good');
-    expect(roster).not.toHaveTextContent(/Delay|Rollback|\bRB\b/);
 
-    const goodTelemetry = screen.getByLabelText('Linus ağ telemetrisi: Ping 20 ms, RTT 18 ms');
-    expect(within(goodTelemetry).getByText('Ping 20 ms')).toBeVisible();
-    expect(within(goodTelemetry).getByText('RTT 18 ms')).toBeVisible();
+    const goodTelemetry = screen.getByLabelText('Linus ağ telemetrisi: Ping 18 ms');
+    expect(within(goodTelemetry).getByText('Ping 18 ms')).toBeVisible();
     expect(goodTelemetry).toHaveClass('is-good');
 
-    const mediumTelemetry = screen.getByLabelText('Mina ağ telemetrisi: Ping 51 ms, RTT 42 ms');
-    expect(within(mediumTelemetry).getByText('Ping 51 ms')).toBeVisible();
-    expect(within(mediumTelemetry).getByText('RTT 42 ms')).toBeVisible();
+    const mediumTelemetry = screen.getByLabelText('Mina ağ telemetrisi: Ping 42 ms');
+    expect(within(mediumTelemetry).getByText('Ping 42 ms')).toBeVisible();
     expect(mediumTelemetry).toHaveClass('is-medium');
 
-    const highTelemetry = screen.getByLabelText('Kerem ağ telemetrisi: Ping 144 ms, RTT 109 ms');
-    expect(within(highTelemetry).getByText('Ping 144 ms')).toBeVisible();
-    expect(within(highTelemetry).getByText('RTT 109 ms')).toBeVisible();
+    const highTelemetry = screen.getByLabelText('Kerem ağ telemetrisi: Ping 109 ms');
+    expect(within(highTelemetry).getByText('Ping 109 ms')).toBeVisible();
     expect(highTelemetry).toHaveClass('is-high');
+    const pendingTelemetry = screen.getByLabelText('Ada ağ telemetrisi: Ping 15 ms');
+    expect(pendingTelemetry).not.toHaveTextContent('—');
+    expect(roster).not.toHaveTextContent(/RTT|Delay|Rollback|\bRB\b/);
     expect(screen.getByLabelText('Linus skoru: 4 knockout')).toBeVisible();
   });
 
-  it('marks a timed-out current Ping as high even when the rolling RTT median is still good', () => {
+  it('uses only median Ping for threshold styling and shows an em dash when it is unavailable', () => {
     const bridge = new PresentationBridge();
     bridge.current = snapshot({
       network: {
@@ -224,11 +222,14 @@ describe('MatchHud', () => {
 
     render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
 
-    const telemetry = screen.getByLabelText('Linus ağ telemetrisi: Ping 2000 ms, RTT 18 ms');
-    expect(telemetry).toHaveClass('is-high');
+    const telemetry = screen.getByLabelText('Linus ağ telemetrisi: Ping 18 ms');
+    expect(telemetry).toHaveClass('is-good');
+    const pending = screen.getByLabelText('Ada ağ telemetrisi: Ping —');
+    expect(pending).toHaveTextContent('Ping —');
+    expect(pending).toHaveClass('is-pending');
   });
 
-  it('shows the same player Ping/RTT values to every client and never renders bridge delay diagnostics', () => {
+  it('shows the same player Ping values to every client and never renders bridge diagnostics', () => {
     const sharedSnapshot = snapshot({
       network: {
         'p-local': { currentMs: 47, medianMs: 42, jitterMs: 6, transport: 'polling' },
@@ -247,14 +248,14 @@ describe('MatchHud', () => {
     const adaClient = render(<MatchHud bridge={adaBridge} localPlayerId="p-local" />);
     const linusClient = render(<MatchHud bridge={linusBridge} localPlayerId="p-rival" />);
 
-    expect(within(adaClient.container).getByLabelText('Ada ağ telemetrisi: Ping 47 ms, RTT 42 ms')).toBeVisible();
-    expect(within(adaClient.container).getByLabelText('Linus ağ telemetrisi: Ping 21 ms, RTT 18 ms')).toBeVisible();
-    expect(adaClient.container).not.toHaveTextContent(/Delay|Rollback|\bRB\b/);
+    expect(within(adaClient.container).getByLabelText('Ada ağ telemetrisi: Ping 42 ms')).toBeVisible();
+    expect(within(adaClient.container).getByLabelText('Linus ağ telemetrisi: Ping 18 ms')).toBeVisible();
+    expect(adaClient.container).not.toHaveTextContent(/RTT|Delay|Rollback|\bRB\b/);
     expect(within(adaClient.container).queryByRole('status', { name: 'Sunum arabelleği' })).not.toBeInTheDocument();
 
-    expect(within(linusClient.container).getByLabelText('Linus ağ telemetrisi: Ping 21 ms, RTT 18 ms')).toBeVisible();
-    expect(within(linusClient.container).getByLabelText('Ada ağ telemetrisi: Ping 47 ms, RTT 42 ms')).toBeVisible();
-    expect(linusClient.container).not.toHaveTextContent(/Delay|Rollback|\bRB\b/);
+    expect(within(linusClient.container).getByLabelText('Linus ağ telemetrisi: Ping 18 ms')).toBeVisible();
+    expect(within(linusClient.container).getByLabelText('Ada ağ telemetrisi: Ping 42 ms')).toBeVisible();
+    expect(linusClient.container).not.toHaveTextContent(/RTT|Delay|Rollback|\bRB\b/);
     expect(within(linusClient.container).queryByRole('status', { name: 'Sunum arabelleği' })).not.toBeInTheDocument();
   });
 
@@ -328,7 +329,7 @@ describe('MatchHud', () => {
     expect(screen.getByRole('timer', { name: 'Kalan süre' })).toHaveTextContent('02:00');
     expect(screen.getByText('Hazır')).toBeVisible();
     expect(screen.getByText('Beklemede')).toBeVisible();
-    expect(screen.getByLabelText('Ada ağ telemetrisi: Ping 132 ms, RTT 109 ms')).toBeVisible();
+    expect(screen.getByLabelText('Ada ağ telemetrisi: Ping 109 ms')).toBeVisible();
     expect(createGame).toHaveBeenCalledOnce();
 
     act(() => bridge.setConnected(false));

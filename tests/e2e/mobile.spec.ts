@@ -74,6 +74,7 @@ test('portrait phone lobby rotates into a real touch-controlled authoritative ma
     const hostPlayerId = initial?.players.find((candidate) => candidate.name === 'Mobil Ada')?.playerId;
     const guestPlayerId = initial?.players.find((candidate) => candidate.name === 'Linus')?.playerId;
     if (!hostPlayerId || !guestPlayerId) throw new Error('Mobile match players were not available.');
+    expect(['webrtc', 'websocket', 'polling']).toContain(game.harness.transportMode(hostPlayerId));
 
     await host.page.setViewportSize({ width: 667, height: 375 });
     await expect(host.page.getByRole('dialog', { name: 'Telefonu yatay çevir' })).toHaveCount(0);
@@ -91,11 +92,13 @@ test('portrait phone lobby rotates into a real touch-controlled authoritative ma
     const pad = host.page.getByRole('application', { name: 'Yön pedi' });
     const padBox = await pad.boundingBox();
     if (!padBox) throw new Error('Touch joystick was not measurable.');
+    const sequenceBeforeTouch = player(game, code, hostPlayerId).lastProcessedInputSeq;
     const movementStart = player(game, code, hostPlayerId).position.x;
     await host.page.mouse.move(padBox.x + padBox.width / 2, padBox.y + padBox.height / 2);
     await host.page.mouse.down();
     await host.page.mouse.move(padBox.x + padBox.width - 3, padBox.y + padBox.height / 2, { steps: 2 });
     await expect.poll(() => player(game, code, hostPlayerId).position.x).toBeGreaterThan(movementStart + 12);
+    await expect.poll(() => player(game, code, hostPlayerId).lastProcessedInputSeq).toBeGreaterThan(sequenceBeforeTouch);
     await host.page.mouse.up();
 
     await waitForNeutral(game, code, hostPlayerId);

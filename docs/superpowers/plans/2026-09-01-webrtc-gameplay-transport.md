@@ -41,15 +41,15 @@ The change is visible in three ways. The player list shows one honest Ping value
 ## Progress
 
 - [x] (2026-09-01 13:23Z) Approved and committed the architecture spec at commit `d953982`.
-- [ ] Create a clean execution worktree from the feature branch; exclude the abandoned uncommitted browser-to-browser prototype.
-- [ ] Complete Task 1: shared protocol, dependency, and wire contracts.
-- [ ] Complete Task 2: shared server input ingress.
-- [ ] Complete Task 3: ordered client publication sequencer.
-- [ ] Complete Task 4: real Werift peer adapter.
-- [ ] Complete Task 5: server gameplay transport hub and Ping sampler.
-- [ ] Complete Task 6: browser gameplay transport and GameClient arbitration.
-- [ ] Complete Task 7: authoritative publication routing, lifecycle, and network state integration.
-- [ ] Complete Task 8: HUD, real-browser fallback, load, documentation, and full verification.
+- [x] (2026-09-01 13:36Z) Created the isolated `webrtc-gameplay-transport-impl` worktree without copying the abandoned prototype.
+- [x] (2026-09-01 13:50Z) Completed Task 1 at `36643b0`: shared protocol, dependency, and wire contracts.
+- [x] (2026-09-01 14:06Z) Completed Task 2 at `8f17dfc`: shared server input ingress.
+- [x] (2026-09-01 14:20Z) Completed Task 3 at `7b2094c` plus `f9bfa51`: ordered, bounded client publication sequencing.
+- [x] (2026-09-01 15:05Z) Completed Task 4 at `cee2ec9` plus `62cf75b`: real Werift peer adapter and fully reliable critical channel.
+- [x] (2026-09-01 15:41Z) Completed Task 5 at `94e3981` plus `eda877b`: server gameplay transport hub, lifecycle ownership, and Ping sampling.
+- [x] (2026-09-02 04:58Z) Completed Task 6 at `4562199` plus `a5a30e1`: browser gameplay transport and GameClient arbitration.
+- [x] (2026-09-02 07:41Z) Completed Task 7 at `055a244` plus `d5ad18a`: authoritative routing, lifecycle, resume state, and network integration.
+- [x] (2026-09-02 08:57Z) Completed Task 8 implementation and automated acceptance, including fallback edge fixes `b9ec40f` and `142b9fa`; the physical LAN-device gate remains explicitly unperformed.
 - [ ] Publish the completed branch, merge it to public `main`, restart the LAN server from the verified build, and record reachability separately from another-device acceptance.
 
 ## Surprises & Discoveries
@@ -62,6 +62,14 @@ The change is visible in three ways. The player list shows one honest Ping value
   Evidence: `RTCPeerConnection({ icePortRange })`, `onDataChannel`, `connectionStateChange`, `setRemoteDescription`, `createAnswer`, `setLocalDescription`, `getStats`, `RTCDataChannel.onMessage`, and `close` are present in the published type declarations.
 - Observation: dual delivery alone does not preserve event order across two transports.
   Evidence: current consumers suppress duplicate IDs but publish events immediately; this plan therefore adds a single `matchEpoch`-aware reorder buffer before `GameClient` listeners.
+- Observation: a server-driven WebRTC-to-Socket.IO transition could accept a one-frame attack on the closing fast channel and then let a newer neutral Socket.IO frame overtake it.
+  Evidence: the first real fallback browser test reached Socket.IO and advanced input sequence but lost the quick action. Commit `b9ec40f` replays the latest attack edge through the fallback owner, where the shared monotonic ingress consumes it once.
+- Observation: a healthy unordered `maxRetransmits: 0` channel can lose or reorder the only quick/dash-bearing frame even without a fallback transition.
+  Evidence: repeated real-browser performance exposed a missing quick completion. Commit `142b9fa` carries quick/dash held state across two newer fast-frame sequences, releases it on the next sample, and abandons the carry whenever a frame instead falls through to Socket.IO. The deterministic regression drops the original frame, reorders the successors, and observes exactly one authoritative quick completion.
+- Observation: comparing Playwright keyboard input for WebRTC with a direct Node `socket.emit` overstated the difference between transports.
+  Evidence: Task 8 now samples the same browser page, Playwright keyboard trigger, ArenaInput sampler, and authoritative sequence observer before and after an in-place forced fallback.
+- Observation: repeating the eight-player browser load uncovered nondeterministic companion-on-companion attack cancellation, not another transport loss.
+  Evidence: the measured WebRTC quick and heavy gates passed while one Socket.IO companion sometimes lacked a pulse. Outward-facing companion lanes and two bounded action cycles retained eight active senders without cross-canceling the functional pulse assertion; three consecutive performance runs then passed.
 
 ## Decision Log
 
@@ -80,10 +88,22 @@ The change is visible in three ways. The player list shows one honest Ping value
 - Decision: use a clean worktree based on the committed spec rather than modifying the abandoned prototype in place.
   Rationale: this preserves the running server and prevents a browser-to-browser topology from leaking into the Node-authoritative design.
   Date/Author: 2026-09-01, Jarvis.
+- Decision: repeat only transient quick/dash edges on two successful successor fast sends, with every repeated frame carrying the ArenaInput-owned newer sequence.
+  Rationale: server held-state semantics turn the bounded run into one logical edge, while three candidate packets tolerate one loss plus one reorder. Heavy release already persists naturally in later `heavy: false` samples. Arming only after a successful WebRTC send and clearing on every `sendInput(false)` path keeps one transport owner and prevents a delayed duplicate after backpressure.
+  Date/Author: 2026-09-02, Jarvis after browser acceptance.
+- Decision: compare WebRTC and fallback through one browser and one input trigger path.
+  Rationale: the same-page before/after method includes identical Playwright and ArenaInput overhead, so the artifact does not mistake direct lightweight-client submission for a transport advantage.
+  Date/Author: 2026-09-02, Jarvis after methodology review.
 
 ## Outcomes & Retrospective
 
-Implementation has not started. Update this section after every major task with the observable behavior achieved, remaining gaps, and measured Socket.IO-versus-WebRTC latency. At completion, explicitly state whether another physical LAN device was tested; local Playwright success is not a substitute for that acceptance.
+- The shipped HUD now renders one compact `PING` field from fresh server-owned `medianMs`, uses `Ping —` when no sample exists, preserves the existing thresholds, and contains no RTT, Delay, Rollback, or RB labels. The focused HUD RED was 4 failed / 6 passed; the minimal implementation turned it GREEN at 10/10.
+- Real Chromium acceptance passed with both two-player contexts in `webrtc`, numeric Ping for both roster rows, authoritative movement/quick/heavy input, an in-place guest transition to `websocket`, continued authoritative quick input without navigation, lobby return, and a fresh host `webrtc` generation for the rematch. A context with `RTCPeerConnection` removed played through `websocket`; the existing WebSocket-to-polling gate remained intact. Mobile landscape touch advanced the authoritative sequence in an accepted `webrtc`, `websocket`, or `polling` mode.
+- The fallback-edge RED was 2 failed / 43 passed and GREEN was 45/45 before commit `b9ec40f`. The healthy-channel loss/reorder RED was 1 failed / 26 passed; the backpressure ownership follow-up RED was 2 failed / 28 passed. Commit `142b9fa` finished GREEN at 49/49 across `GameplayTransport` and `GameClient`, with TypeScript clean.
+- Three consecutive real-browser performance runs passed with one WebRTC renderer plus seven Socket.IO companions. Same-page WebRTC median/p95 input-to-authoritative-sequence observations were `31.65/33.11`, `32.20/33.60`, and `31.73/32.76` ms; the same page after forced Socket.IO fallback measured `32.33/33.00`, `22.74/33.26`, and `26.86/33.18` ms. Frame median was `8.30` ms and p95 was `9.80` ms in all three. These same-host samples show mixed medians and only small/mixed p95 differences; they do not establish a representative physical-LAN improvement.
+- The final full Playwright run passed 11/11. Its WebRTC versus Socket.IO median/p95 result was `31.89/33.41` versus `31.37/47.88` ms, frame median/p95 was `8.30/9.70` ms, and the four-hit/four-ring-out burst stayed at `17.80` ms maximum and `9.90` ms p95 with all 180 sampled frames accounted for.
+- Final gates passed independently and through `npm run verify`: lint; both TypeScript projects; 59 Vitest files with 575 tests; the 10-second eight-client Socket.IO fallback load test 1/1; and the production client/server build. `npm run test:e2e` separately passed 11/11 after its own production build.
+- The automated browser server used an ephemeral `127.0.0.1` port and proves local software behavior. The existing user-owned production server on port 4173 was intentionally neither started, stopped, nor probed. Production-profile localhost health, private-address reachability, firewall behavior, and another physical LAN device were not verified in this task. Publishing, `main` merge, server restart, and physical-device acceptance therefore remain open.
 
 ## Context and Orientation
 
@@ -733,7 +753,7 @@ Build the transport in layers that leave the game playable at every commit. Firs
 - Consumes: the complete gameplay transport and test harness.
 - Produces: user-visible one-Ping HUD, real Chromium evidence, fallback/load/performance evidence, and reproducible LAN instructions.
 
-- [ ] **Step 1: Write failing HUD tests for one Ping field.**
+- [x] **Step 1: Write failing HUD tests for one Ping field.**
 
   Replace `PING/RTT` with `PING`; render `medianMs` as the sole value; show `Ping —` when null; preserve good/medium/high thresholds; show the same values to local and remote clients; and assert the roster contains none of `RTT`, `Delay`, `Rollback`, or `RB`.
 
@@ -741,33 +761,33 @@ Build the transport in layers that leave the game playable at every commit. Firs
       expect(within(roster).getByLabelText('Linus ağ telemetrisi: Ping 18 ms')).toBeVisible();
       expect(roster).not.toHaveTextContent(/RTT|Delay|Rollback|\bRB\b/);
 
-- [ ] **Step 2: Run HUD tests and confirm RED, then implement the minimal presentation.**
+- [x] **Step 2: Run HUD tests and confirm RED, then implement the minimal presentation.**
 
       npx vitest run src/client/ui/MatchHud.test.tsx --maxWorkers=1
 
   `pingPresentation()` uses only fresh `medianMs`, returns `Ping —` for null, and keeps the current compact roster width.
 
-- [ ] **Step 3: Add the real WebRTC browser acceptance test.**
+- [x] **Step 3: Add the real WebRTC browser acceptance test.**
 
   `tests/e2e/webrtcGameplay.spec.ts` creates two real pages with `createTwoPlayerMatch()`, waits until both `game.harness.transportMode(playerId)` values equal `webrtc`, sends movement/quick/heavy input from a browser, and waits for `lastProcessedInputSeq` and authoritative action changes. Assert both player rows contain one numeric Ping and no console/server errors.
 
   Force one peer closed with `await game.harness.dropWebRtc(guestPlayerId)`. Assert its mode becomes `websocket` or `polling`, send another attack without reloading, and prove the authoritative sequence advances. Return to lobby, rematch, and prove a fresh WebRTC generation activates.
 
-- [ ] **Step 4: Add explicit unsupported-browser and mobile fallback coverage.**
+- [x] **Step 4: Add explicit unsupported-browser and mobile fallback coverage.**
 
   In a separate context, replace `window.RTCPeerConnection` with `undefined` before page code. Join and play over Socket.IO without a toast or fatal error. Keep the existing WebSocket-to-polling test unchanged. Add one mobile landscape smoke that accepts either active WebRTC or clean Socket.IO fallback and proves touch input advances the authoritative sequence.
 
-- [ ] **Step 5: Preserve and extend load/performance gates.**
+- [x] **Step 5: Preserve and extend load/performance gates.**
 
   Keep `tests/load/eightClients.test.ts` as an eight-client Socket.IO fallback gate. In Playwright performance coverage, use one real WebRTC browser plus seven lightweight Socket.IO companions; record input submission time, the first authoritative snapshot with the processed sequence, median latency, p95 latency, frame median, and p95 frame duration. Ring-out effects must retain the existing frame-budget assertions.
 
   The automated gate fails on functional regressions and resource leaks. Record the WebRTC-versus-Socket.IO latency comparison as an artifact; do not invent a universal 20 ms threshold for CI running on one machine.
 
-- [ ] **Step 6: Update LAN documentation.**
+- [x] **Step 6: Update LAN documentation.**
 
   Add UDP `53100–53131` to macOS/Windows/Linux firewall guidance, show both environment override names, state that WebRTC is host-candidate LAN-only with automatic Socket.IO fallback, explain guest-Wi-Fi/client-isolation limitations, and define Ping as WebRTC candidate-pair RTT while active and application RTT while on fallback.
 
-- [ ] **Step 7: Run every verification gate.**
+- [x] **Step 7: Run every verification gate.**
 
       npm run lint
       npm run typecheck
@@ -792,7 +812,7 @@ Build the transport in layers that leave the game playable at every commit. Firs
 
   In two real browser pages, create/join through `/room/CODE`, play, force no artificial failure, and observe numeric Ping. Report localhost acceptance, private-address reachability, and another-physical-device acceptance as separate facts.
 
-- [ ] **Step 9: Update the living plan and commit Task 8.**
+- [x] **Step 9: Update the living plan and commit Task 8.**
 
   Fill `Progress`, `Surprises & Discoveries`, and `Outcomes & Retrospective` with exact test totals, observed transport modes, measured latency summaries, and any unperformed physical-device gate.
 

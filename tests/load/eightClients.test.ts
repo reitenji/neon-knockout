@@ -140,6 +140,8 @@ describe('eight-client delivery load', () => {
     await emitAck<null>(clients[0]!, 'match:start', {});
     await countdown;
     await regulation;
+    expect(welcomes.map((welcome) => server?.testHarness?.transportMode(welcome.playerId)))
+      .toEqual(new Array(CLIENT_COUNT).fill('websocket'));
 
     const startedAt = performance.now();
     let sequence = 0;

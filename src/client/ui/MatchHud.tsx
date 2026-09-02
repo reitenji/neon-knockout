@@ -119,28 +119,20 @@ function SuddenDeathAnnouncement() {
 
 function pingPresentation(network: PlayerNetworkStatus | undefined): Readonly<{
   pingLabel: string;
-  rttLabel: string;
-  accessibleValue: string;
   tier: 'pending' | 'good' | 'medium' | 'high';
 }> {
-  const current = network?.currentMs === null || network?.currentMs === undefined
-    ? null
-    : Math.max(0, Math.round(network.currentMs));
   const median = network?.medianMs === null || network?.medianMs === undefined
     ? null
     : Math.max(0, Math.round(network.medianMs));
-  const displayedLatency = current === null ? median : median === null ? current : Math.max(current, median);
-  const tier = displayedLatency === null
+  const tier = median === null
     ? 'pending'
-    : displayedLatency <= 20
+    : median <= 20
       ? 'good'
-      : displayedLatency <= 80
+      : median <= 80
         ? 'medium'
         : 'high';
   return {
-    pingLabel: current === null ? 'Ping —' : `Ping ${current} ms`,
-    rttLabel: median === null ? 'RTT —' : `RTT ${median} ms`,
-    accessibleValue: `Ping ${current === null ? 'ölçülüyor' : `${current} ms`}, RTT ${median === null ? 'ölçülüyor' : `${median} ms`}`,
+    pingLabel: median === null ? 'Ping —' : `Ping ${median} ms`,
     tier
   };
 }
@@ -163,7 +155,7 @@ function PlayerRoster({
       <div className="match-hud__roster-heading">
         <span>OYUNCULAR</span>
         <span>KO</span>
-        <span>PING/RTT</span>
+        <span>PING</span>
       </div>
       <ol className="match-hud__ranking" aria-label="Oyuncu sıralaması">
         {ranking.map((player) => {
@@ -182,10 +174,9 @@ function PlayerRoster({
               </strong>
               <span
                 className={`match-hud__telemetry is-${ping.tier}`}
-                aria-label={`${player.name} ağ telemetrisi: ${ping.accessibleValue}`}
+                aria-label={`${player.name} ağ telemetrisi: ${ping.pingLabel}`}
               >
                 <span>{ping.pingLabel}</span>
-                <span>{ping.rttLabel}</span>
               </span>
             </li>
           );
