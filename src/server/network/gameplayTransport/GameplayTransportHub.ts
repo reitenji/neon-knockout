@@ -96,6 +96,13 @@ function safeInvoke(callback: () => void): void {
   }
 }
 
+export class GameplayTransportNegotiationCancelledError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'GameplayTransportNegotiationCancelledError';
+  }
+}
+
 export class GameplayTransportHub {
   private readonly sessionsBySocket = new Map<string, SessionRecord>();
   private readonly sessionsByPlayer = new Map<string, SessionRecord>();
@@ -161,7 +168,7 @@ export class GameplayTransportHub {
       }
     }
     if (!this.isCurrentRecord(record) || record.negotiationSequence !== sequence) {
-      throw new Error('WebRTC negotiation was superseded.');
+      throw new GameplayTransportNegotiationCancelledError('WebRTC negotiation was superseded.');
     }
 
     const generationId = parsed.data.generationId;
@@ -187,12 +194,17 @@ export class GameplayTransportHub {
         || record.negotiationSequence !== sequence
       ) {
         await this.closePeer(peer);
-        throw new Error('WebRTC negotiation was superseded.');
+        throw new GameplayTransportNegotiationCancelledError('WebRTC negotiation was superseded.');
       }
       return { generationId, answer };
     } catch (error) {
-      if (this.isCurrentPeer(record, peer, generationId)) {
+      const stillCurrent = this.isCurrentPeer(record, peer, generationId)
+        && record.negotiationSequence === sequence;
+      if (stillCurrent) {
         await this.transitionToFallback(record, generationId, peer);
+      }
+      if (!stillCurrent && !(error instanceof GameplayTransportNegotiationCancelledError)) {
+        throw new GameplayTransportNegotiationCancelledError('WebRTC negotiation was cancelled with its stale session.');
       }
       throw error;
     }
@@ -312,7 +324,7 @@ export class GameplayTransportHub {
   private requireSession(socketId: string): SessionRecord {
     const record = this.sessionsBySocket.get(socketId);
     if (!record || record.disposed || this.stopped) {
-      throw new Error('Gameplay transport session is not attached.');
+      throw new GameplayTransportNegotiationCancelledError('Gameplay transport session is not attached.');
     }
     return record;
   }

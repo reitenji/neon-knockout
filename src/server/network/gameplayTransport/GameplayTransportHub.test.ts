@@ -7,6 +7,7 @@ import {
   type MatchEventPublication,
   type MatchSnapshotPublication,
   type MatchStartedPublication,
+  type RtcAnswer,
   type RtcOffer
 } from '../../../shared/gameplayTransport.js';
 import type { GameEvent, InputFrame, MatchSnapshot, ServerError } from '../../../shared/model.js';
@@ -14,6 +15,7 @@ import type { MatchInputIngress, MatchInputIngressResult } from '../matchInputIn
 import type { PeerSendResult, ServerPeer, ServerPeerFactory } from './ServerPeer.js';
 import {
   GameplayTransportHub,
+  GameplayTransportNegotiationCancelledError,
   type TransportPublication,
   type TransportSession
 } from './GameplayTransportHub.js';
@@ -83,6 +85,7 @@ class FakePeer implements ServerPeer {
   rttSamples: Array<number | null> = [];
   rttDeferreds: Array<Deferred<number | null>> = [];
   rttSampleCalls = 0;
+  negotiationDeferred: Deferred<RtcAnswer> | null = null;
   listenerRegistrationFailure: ListenerRegistrationFailure = null;
   closeCalls = 0;
 
@@ -90,6 +93,7 @@ class FakePeer implements ServerPeer {
 
   async negotiate(offer: RtcOffer) {
     this.offers.push(offer);
+    if (this.negotiationDeferred) return this.negotiationDeferred.promise;
     return { type: 'answer' as const, sdp: `answer:${offer.sdp}` };
   }
 
@@ -174,11 +178,21 @@ class FakePeerFactory {
   readonly peers: FakePeer[] = [];
   readonly calls: Parameters<ServerPeerFactory>[0][] = [];
   nextListenerRegistrationFailure: ListenerRegistrationFailure = null;
+  nextNegotiationDeferred: Deferred<RtcAnswer> | null = null;
+
+  deferNextNegotiation(): Deferred<RtcAnswer> {
+    const pending = deferred<RtcAnswer>();
+    this.nextNegotiationDeferred = pending;
+    return pending;
+  }
+
   readonly create: ServerPeerFactory = (options) => {
     this.calls.push(options);
     const peer = new FakePeer(options.generationId);
     peer.listenerRegistrationFailure = this.nextListenerRegistrationFailure;
+    peer.negotiationDeferred = this.nextNegotiationDeferred;
     this.nextListenerRegistrationFailure = null;
+    this.nextNegotiationDeferred = null;
     this.peers.push(peer);
     return peer;
   };
@@ -319,6 +333,40 @@ afterEach(async () => {
 });
 
 describe('GameplayTransportHub', () => {
+  it('classifies superseded and detached pending negotiations as expected lifecycle cancellation', async () => {
+    const { hub, factory } = createSubject();
+    hub.attachSession(session().session);
+    const firstDeferred = factory.deferNextNegotiation();
+    const firstNegotiation = hub.negotiate('s1', {
+      generationId: FIRST_GENERATION,
+      offer: { type: 'offer', sdp: 'delayed-first-offer' }
+    });
+    await Promise.resolve();
+
+    const replacement = await hub.negotiate('s1', {
+      generationId: SECOND_GENERATION,
+      offer: { type: 'offer', sdp: 'replacement-offer' }
+    });
+    firstDeferred.resolve({ type: 'answer', sdp: 'late-first-answer' });
+
+    await expect(firstNegotiation).rejects.toBeInstanceOf(GameplayTransportNegotiationCancelledError);
+    expect(replacement.generationId).toBe(SECOND_GENERATION);
+    expect(hub.activate('s1', { generationId: FIRST_GENERATION })).toBe(false);
+
+    const detached = createSubject();
+    detached.hub.attachSession(session({ socketId: 's2', playerId: 'p2' }).session);
+    const detachedDeferred = detached.factory.deferNextNegotiation();
+    const detachedNegotiation = detached.hub.negotiate('s2', {
+      generationId: FIRST_GENERATION,
+      offer: { type: 'offer', sdp: 'detached-offer' }
+    });
+    await Promise.resolve();
+    await detached.hub.detachSession('s2');
+    detachedDeferred.resolve({ type: 'answer', sdp: 'detached-answer' });
+
+    await expect(detachedNegotiation).rejects.toBeInstanceOf(GameplayTransportNegotiationCancelledError);
+  });
+
   it('negotiates only inside the registered socket session and activates after both channels are ready', async () => {
     const { hub, factory } = createSubject();
     const first = session();

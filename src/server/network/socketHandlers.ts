@@ -26,7 +26,10 @@ import {
 import { DomainError } from '../rooms/domainError.js';
 import type { RoomManager } from '../rooms/roomManager.js';
 import { createMatchInputIngress, type MatchInputIngress } from './matchInputIngress.js';
-import type { GameplayTransportHub } from './gameplayTransport/GameplayTransportHub.js';
+import {
+  GameplayTransportNegotiationCancelledError,
+  type GameplayTransportHub
+} from './gameplayTransport/GameplayTransportHub.js';
 
 export type GameIo = Server<ClientToServerEvents, ServerToClientEvents>;
 export type GameSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -275,6 +278,10 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
           }
           if (error instanceof SafeSocketActionError) {
             callback({ ok: false, error: error.error });
+            return;
+          }
+          if (error instanceof GameplayTransportNegotiationCancelledError) {
+            callback({ ok: false, error: TRANSPORT_UNAVAILABLE });
             return;
           }
           const correlationId = randomUUID();

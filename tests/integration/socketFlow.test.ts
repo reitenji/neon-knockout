@@ -29,6 +29,15 @@ const FIRST_GENERATION = '2f8ca1f2-7e6e-4ea7-90e2-e6a955892574';
 const SECOND_GENERATION = '4cf2e59c-3dd7-4a54-8e5d-95eb40efca5c';
 const TEST_UDP_RANGE = [54100, 54131] as const;
 
+type IntegrationAnswer = Readonly<{ type: 'answer'; sdp: string }>;
+type Deferred<T> = Readonly<{ promise: Promise<T>; resolve(value: T): void }>;
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((complete) => { resolve = complete; });
+  return { promise, resolve };
+}
+
 class IntegrationPeer implements ServerPeer {
   readonly fastSent: string[] = [];
   readonly reliableSent: string[] = [];
@@ -44,11 +53,13 @@ class IntegrationPeer implements ServerPeer {
   rttSampleCalls = 0;
   autoAcknowledgeHeartbeats = false;
   closeCalls = 0;
+  negotiationDeferred: Deferred<IntegrationAnswer> | null = null;
 
   constructor(readonly generationId: string) {}
 
   async negotiate() {
     if (this.failNegotiation) throw new Error('forced negotiation failure');
+    if (this.negotiationDeferred) return this.negotiationDeferred.promise;
     return { type: 'answer' as const, sdp: 'integration-answer' };
   }
 
@@ -117,12 +128,21 @@ class IntegrationPeerFactory {
   readonly peers: IntegrationPeer[] = [];
   readonly calls: Parameters<ServerPeerFactory>[0][] = [];
   failNextNegotiation = false;
+  nextNegotiationDeferred: Deferred<IntegrationAnswer> | null = null;
+
+  deferNextNegotiation(): Deferred<IntegrationAnswer> {
+    const pending = deferred<IntegrationAnswer>();
+    this.nextNegotiationDeferred = pending;
+    return pending;
+  }
 
   readonly create: ServerPeerFactory = (options) => {
     this.calls.push(options);
     const peer = new IntegrationPeer(options.generationId);
     peer.failNegotiation = this.failNextNegotiation;
+    peer.negotiationDeferred = this.nextNegotiationDeferred;
     this.failNextNegotiation = false;
+    this.nextNegotiationDeferred = null;
     this.peers.push(peer);
     return peer;
   };
@@ -222,14 +242,17 @@ describe('Socket.IO FFA game server flow', () => {
   let clients: GameClient[];
   let sequences: Map<GameClient, number>;
   let peerFactory: IntegrationPeerFactory;
+  let serverErrors: unknown[][];
 
   beforeEach(async () => {
     peerFactory = new IntegrationPeerFactory();
+    serverErrors = [];
     server = createGameServer({
       host: '127.0.0.1',
       port: 0,
       enableTestHarness: true,
       clientDirectory: false,
+      logger: { error: (...args: unknown[]) => serverErrors.push(args) },
       testGameplayTransport: { peerFactory: peerFactory.create, udpPortRange: TEST_UDP_RANGE }
     });
     ({ origin } = await server.start());
@@ -488,6 +511,49 @@ describe('Socket.IO FFA game server flow', () => {
     })).toMatchObject({ ok: false, error: { code: 'INTERNAL_ERROR' } });
     await waitFor(() => peerFactory.peers[0]?.closeCalls === 1, 'failed peer closure');
     expect(harness().transportMode(host.playerId)).toBe('websocket');
+    expect(serverErrors).toHaveLength(1);
+    expect(serverErrors[0]?.[0]).toMatch(/Unexpected Socket.IO async action failure/);
+    expect(serverErrors[0]?.[1]).toEqual(new Error('forced negotiation failure'));
+  });
+
+  it('treats superseded negotiation as expected cancellation without activating its stale generation', async () => {
+    const hostClient = await client();
+    const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
+    const firstNegotiation = peerFactory.deferNextNegotiation();
+    const firstAck = emitAck<RtcNegotiationAnswer>(hostClient, 'transport:negotiate', {
+      generationId: FIRST_GENERATION,
+      offer: { type: 'offer', sdp: 'delayed-first-offer' }
+    });
+    await waitFor(() => peerFactory.peers.length === 1, 'first pending negotiation');
+
+    const secondAck = await emitAck<RtcNegotiationAnswer>(hostClient, 'transport:negotiate', {
+      generationId: SECOND_GENERATION,
+      offer: { type: 'offer', sdp: 'replacement-offer' }
+    });
+    expect(secondAck).toEqual({
+      ok: true,
+      data: {
+        generationId: SECOND_GENERATION,
+        answer: { type: 'answer', sdp: 'integration-answer' }
+      }
+    });
+
+    firstNegotiation.resolve({ type: 'answer', sdp: 'late-first-answer' });
+    expect(await firstAck).toMatchObject({
+      ok: false,
+      error: { code: 'TRANSPORT_UNAVAILABLE', recoverable: true }
+    });
+    expect(await emitAck<TransportModeNotice>(hostClient, 'transport:activate', {
+      generationId: FIRST_GENERATION
+    })).toMatchObject({ ok: false, error: { code: 'TRANSPORT_UNAVAILABLE' } });
+
+    peerFactory.peers[1]!.ready = true;
+    expect(await emitSuccess<TransportModeNotice>(hostClient, 'transport:activate', {
+      generationId: SECOND_GENERATION
+    })).toEqual({ generationId: SECOND_GENERATION, mode: 'webrtc' });
+    expect(harness().transportMode(host.playerId)).toBe('webrtc');
+    expect(peerFactory.peers[0]!.closeCalls).toBe(1);
+    expect(serverErrors).toEqual([]);
   });
 
   it('accepts one shared sequence across WebRTC and Socket.IO, then immediately falls back a failed snapshot send', async () => {
