@@ -204,7 +204,8 @@ describe.sequential('createWeriftServerPeer', () => {
       expect(peer.configuration).toEqual({
         iceServers: [],
         icePortRange: [53100, 53131],
-        iceUseIpv4: true
+        iceUseIpv4: true,
+        iceUseTcp: false
       });
       await expect(serverPeer.negotiate(offer)).resolves.toEqual({
         type: 'answer',
@@ -367,9 +368,10 @@ describe.sequential('createWeriftServerPeer', () => {
     expect(closeListener).not.toHaveBeenCalled();
   });
 
-  it('returns the first selected successful candidate-pair RTT rounded to milliseconds', async () => {
+  it('prefers the transport-selected candidate-pair RTT rounded to milliseconds', async () => {
     const { serverPeer, peer } = await loadFakeAdapter();
     peer.stats = new Map([
+      ['transport', { type: 'transport', selectedCandidatePairId: 'selected' }],
       ['failed', { type: 'candidate-pair', state: 'failed', nominated: true, currentRoundTripTime: 0.001 }],
       ['not-nominated', { type: 'candidate-pair', state: 'succeeded', nominated: false, currentRoundTripTime: 0.002 }],
       ['negative', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: -1 }],
@@ -379,6 +381,21 @@ describe.sequential('createWeriftServerPeer', () => {
 
     try {
       await expect(serverPeer.sampleRttMs()).resolves.toBe(13);
+    } finally {
+      await serverPeer.close();
+    }
+  });
+
+  it('prefers the transport-selected candidate pair over an earlier succeeded pair', async () => {
+    const { serverPeer, peer } = await loadFakeAdapter();
+    peer.stats = new Map([
+      ['transport', { type: 'transport', selectedCandidatePairId: 'candidate-pair:selected' }],
+      ['candidate-pair:earlier', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: 0.098 }],
+      ['candidate-pair:selected', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: 0.004 }]
+    ]);
+
+    try {
+      await expect(serverPeer.sampleRttMs()).resolves.toBe(4);
     } finally {
       await serverPeer.close();
     }
