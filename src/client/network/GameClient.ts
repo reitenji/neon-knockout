@@ -128,6 +128,7 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
         socket.emit('transport:activate', request, acknowledge);
       }),
       notifyFallback: () => socket.emit('transport:fallback', {}),
+      sendFallbackInput: (input) => socket.emit('match:input', input),
       sequencer
     });
     owner = { transport, sequencer, disposed: false };

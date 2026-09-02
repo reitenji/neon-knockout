@@ -54,8 +54,10 @@ const gameplayHarness = vi.hoisted(() => {
   type TransportOptions = Readonly<{
     negotiate: (request: unknown) => Promise<SignalingResult>;
     activate: (request: unknown) => Promise<SignalingResult>;
+    sendFallbackInput: (input: InputFrame) => void;
   }>;
   let automaticSignaling = false;
+  const optionSets: TransportOptions[] = [];
   const transports: Array<{
     start: ReturnType<typeof vi.fn>;
     acceptMode: ReturnType<typeof vi.fn>;
@@ -89,6 +91,7 @@ const gameplayHarness = vi.hoisted(() => {
         await options.activate({ generationId });
       });
     }
+    optionSets.push(options);
     transports.push(transport);
     return transport;
   });
@@ -101,11 +104,15 @@ const gameplayHarness = vi.hoisted(() => {
     get firstTransport() {
       return transports[0]!;
     },
+    get options() {
+      return optionSets.at(-1)!;
+    },
     enableAutomaticSignaling(): void {
       automaticSignaling = true;
     },
     reset(): void {
       transports.splice(0);
+      optionSets.splice(0);
       automaticSignaling = false;
       createGameplayTransport.mockClear();
     }
@@ -405,6 +412,18 @@ describe('createSocketGameClient', () => {
 
     expect(gameplayHarness.transport.sendInput).toHaveBeenCalledWith(value);
     expect(socketHarness.socket.emit).not.toHaveBeenCalledWith('match:input', expect.anything());
+  });
+
+  it('routes an attack edge replay requested by the gameplay fallback through Socket.IO', () => {
+    createSocketGameClient();
+    const attackEdge: InputFrame = {
+      seq: 6, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: true, heavy: false, dash: false
+    };
+
+    gameplayHarness.options.sendFallbackInput(attackEdge);
+
+    expect(socketHarness.socket.emit).toHaveBeenCalledWith('match:input', attackEdge);
+    expect(socketHarness.socket.emit.mock.calls.at(-1)).toHaveLength(2);
   });
 
   it('starts a fresh generation for welcome and disposes the replaced session before restarting', () => {

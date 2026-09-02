@@ -190,6 +190,7 @@ function createHarness(overrides: Readonly<{
   const peer = overrides.peer ?? new FakePeer();
   const sequencer = createSequencer();
   const notifyFallback = vi.fn();
+  const sendFallbackInput = vi.fn();
   const negotiate = vi.fn(overrides.negotiate ?? (async (request: RtcNegotiationRequest) => ({
     ok: true as const,
     data: {
@@ -206,9 +207,10 @@ function createHarness(overrides: Readonly<{
     negotiate,
     activate,
     notifyFallback,
+    sendFallbackInput,
     sequencer
   });
-  return { controller, peer, sequencer, notifyFallback, negotiate, activate };
+  return { controller, peer, sequencer, notifyFallback, sendFallbackInput, negotiate, activate };
 }
 
 async function flushPromises(): Promise<void> {
@@ -238,6 +240,7 @@ describe('createGameplayTransport', () => {
       negotiate: harness.negotiate,
       activate: harness.activate,
       notifyFallback: harness.notifyFallback,
+      sendFallbackInput: harness.sendFallbackInput,
       sequencer: harness.sequencer
     });
 
@@ -291,6 +294,7 @@ describe('createGameplayTransport', () => {
       negotiate: harness.negotiate,
       activate: harness.activate,
       notifyFallback: harness.notifyFallback,
+      sendFallbackInput: harness.sendFallbackInput,
       sequencer: harness.sequencer
     });
 
@@ -535,6 +539,21 @@ describe('createGameplayTransport', () => {
 
     expect(harness.notifyFallback).toHaveBeenCalledOnce();
     expect(harness.controller.sendInput(input())).toBe(false);
+  });
+
+  it('replays the latest attack edge once when a server fallback notice wins the channel-close race', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    const attackEdge = input(17);
+
+    expect(harness.controller.sendInput(attackEdge)).toBe(true);
+    harness.controller.acceptMode({ generationId, mode: 'websocket' });
+    harness.controller.acceptMode({ generationId, mode: 'websocket' });
+
+    expect(harness.sendFallbackInput).toHaveBeenCalledOnce();
+    expect(harness.sendFallbackInput).toHaveBeenCalledWith(attackEdge);
+    expect(harness.controller.sendInput(input(18))).toBe(false);
   });
 
   it('falls back once after a three-heartbeat gap', async () => {

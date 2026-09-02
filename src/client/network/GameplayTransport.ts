@@ -30,6 +30,7 @@ type GameplayTransportOptions = Readonly<{
   negotiate: (request: RtcNegotiationRequest) => Promise<Ack<RtcNegotiationAnswer>>;
   activate: (request: RtcActivationRequest) => Promise<Ack<TransportModeNotice>>;
   notifyFallback: () => void;
+  sendFallbackInput: (input: InputFrame) => void;
   sequencer: MatchPublicationSequencer;
   now?: () => number;
 }>;
@@ -61,6 +62,9 @@ type Generation = {
   activationTimer: ReturnType<typeof setTimeout> | null;
   failed: boolean;
   fallbackNotified: boolean;
+  lastSentInput: InputFrame | null;
+  pendingEdgeInput: InputFrame | null;
+  edgeInputReplayed: boolean;
 };
 
 const encoder = new TextEncoder();
@@ -394,11 +398,23 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     if (current !== generation || generation.failed || generation.fallbackNotified) return;
     generation.mode = generation.socketMode;
     generation.fallbackNotified = true;
+    replayEdgeInput(generation);
     detachAndClose(generation, false);
     try {
       options.notifyFallback();
     } catch {
       // Input arbitration is already on Socket.IO even if the notice cannot be emitted.
+    }
+  }
+
+  function replayEdgeInput(generation: Generation): void {
+    if (generation.edgeInputReplayed) return;
+    generation.edgeInputReplayed = true;
+    if (generation.pendingEdgeInput === null) return;
+    try {
+      options.sendFallbackInput(generation.pendingEdgeInput);
+    } catch {
+      // Fallback still proceeds; the next sampled input remains on Socket.IO.
     }
   }
 
@@ -449,6 +465,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
 
     generation.socketMode = notice.mode;
     generation.mode = notice.mode;
+    replayEdgeInput(generation);
     if (!generation.failed) detachAndClose(generation, false);
   }
 
@@ -619,7 +636,10 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
         activationDeadline,
         activationTimer: null,
         failed: false,
-        fallbackNotified: false
+        fallbackNotified: false,
+        lastSentInput: null,
+        pendingEdgeInput: null,
+        edgeInputReplayed: false
       };
       ownedGeneration = generation;
       current = generation;
@@ -700,6 +720,12 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     if (encoder.encode(serialized).byteLength > CLIENT_MESSAGE_LIMIT_BYTES) return false;
     try {
       generation.fast.send(serialized);
+      if (
+        input.quick
+        || input.dash
+        || (generation.lastSentInput?.heavy === true && !input.heavy)
+      ) generation.pendingEdgeInput = input;
+      generation.lastSentInput = input;
       return true;
     } catch {
       localFallback(generation);
