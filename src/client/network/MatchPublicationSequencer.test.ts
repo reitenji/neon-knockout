@@ -180,6 +180,44 @@ describe('match publication sequencer', () => {
     expect(harness.publishedSnapshots).toHaveLength(0);
   });
 
+  it('retains only the active start marker across rematch churn without weakening epoch barriers', () => {
+    const NativeSet = globalThis.Set;
+    const observedSets: Set<unknown>[] = [];
+
+    class ObservedSet<T> extends NativeSet<T> {
+      constructor(values?: readonly T[] | null) {
+        super(values);
+        observedSets.push(this as Set<unknown>);
+      }
+    }
+
+    globalThis.Set = ObservedSet as SetConstructor;
+    try {
+      const harness = createHarness();
+
+      for (let matchEpoch = 1; matchEpoch <= 1_024; matchEpoch += 1) {
+        harness.sequencer.acceptStarted(started({ matchEpoch }));
+      }
+
+      expect(observedSets).toHaveLength(1);
+      expect(observedSets[0]?.size).toBe(1);
+
+      harness.sequencer.acceptStarted(started({ matchEpoch: 1 }));
+      harness.sequencer.acceptEvent(eventPublication(1_025, event(1)));
+
+      expect(harness.publishedStarts).toHaveLength(1_024);
+      expect(harness.publishedEvents).toHaveLength(0);
+
+      harness.sequencer.acceptStarted(started({ matchEpoch: 1_025 }));
+
+      expect(harness.publishedStarts).toHaveLength(1_025);
+      expect(harness.publishedEvents.map((value) => value.eventId)).toEqual([1]);
+      expect(observedSets[0]?.size).toBe(1);
+    } finally {
+      globalThis.Set = NativeSet;
+    }
+  });
+
   it('waits for a newer epoch start and uses its non-zero event cursor', () => {
     const harness = createHarness();
 

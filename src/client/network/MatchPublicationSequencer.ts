@@ -63,6 +63,11 @@ export function createMatchPublicationSequencer(options: SequencerOptions): Read
         latestSnapshotTicks.delete(epoch);
       }
     }
+    for (const epoch of startedEpochs) {
+      if (epoch < activeEpoch) {
+        startedEpochs.delete(epoch);
+      }
+    }
   }
 
   function hasUnresolvedGap(): boolean {
