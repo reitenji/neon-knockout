@@ -282,6 +282,16 @@ export class GameplayTransportHub {
     return this.sessionsByPlayer.get(playerId)?.mode ?? null;
   }
 
+  generationForPlayerForTest(playerId: string): Readonly<{
+    generationId: string | null;
+    negotiationCount: number;
+  }> | null {
+    const record = this.sessionsByPlayer.get(playerId);
+    return record
+      ? { generationId: record.generationId, negotiationCount: record.negotiationSequence }
+      : null;
+  }
+
   async dropPeerForTest(playerId: string): Promise<void> {
     const record = this.sessionsByPlayer.get(playerId);
     if (!record?.peer || record.disposed) return;
@@ -344,7 +354,7 @@ export class GameplayTransportHub {
       || parsed.data.matchEpoch !== record.matchEpoch
     ) return;
 
-    const result = record.session.inputIngress.accept(parsed.data.payload);
+    const result = record.session.inputIngress.accept(parsed.data.payload, 'webrtc');
     if (result.status === 'error') safeInvoke(() => record.session.emitError(result.error));
   }
 

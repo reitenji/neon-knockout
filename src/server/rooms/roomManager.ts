@@ -273,7 +273,12 @@ export class RoomManager {
     return { playerId, roomCode: room.roomCode, resumeToken: bytesToHex(resumeToken), resumed: false };
   }
 
-  resume(connectionId: string, roomCode: string, resumeToken: string): SessionWelcome {
+  resume(
+    connectionId: string,
+    roomCode: string,
+    resumeToken: string,
+    transport: PlayerNetworkTransport = 'polling'
+  ): SessionWelcome {
     this.assertConnectionAvailable(connectionId);
     const room = this.requireRoom(roomCode);
     const token = this.parseResumeToken(resumeToken);
@@ -284,6 +289,10 @@ export class RoomManager {
     if (!player) {
       throw new DomainError('INVALID_RESUME_TOKEN', 'Yeniden bağlanma anahtarı geçersiz veya süresi dolmuş.', true);
     }
+    const network = room.network.get(player.playerId) ?? createNetworkRuntime(transport);
+    clearNetworkSamples(network);
+    network.transport = transport;
+    room.network.set(player.playerId, network);
     player.connected = true;
     player.expiresAt = null;
     this.connections.set(connectionId, { roomCode: room.roomCode, playerId: player.playerId });

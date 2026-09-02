@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { GAME } from '../../shared/constants.js';
-import type { ServerError } from '../../shared/model.js';
+import type { GameplayTransportMode } from '../../shared/gameplayTransport.js';
+import type { InputFrame, ServerError } from '../../shared/model.js';
 import { matchInputSchema } from '../../shared/protocol.js';
 import { DomainError } from '../rooms/domainError.js';
 import type { RoomManager } from '../rooms/roomManager.js';
@@ -18,7 +19,7 @@ export type MatchInputIngressResult =
   | Readonly<{ status: 'error'; error: ServerError }>;
 
 export type MatchInputIngress = Readonly<{
-  accept(payload: unknown): MatchInputIngressResult;
+  accept(payload: unknown, source: GameplayTransportMode): MatchInputIngressResult;
   reset(): void;
 }>;
 
@@ -27,6 +28,7 @@ type MatchInputIngressOptions = Readonly<{
   rooms: RoomManager;
   now: () => number;
   logger: ErrorLogger;
+  onAccepted?: (input: InputFrame, source: GameplayTransportMode) => void;
 }>;
 
 const INVALID_PAYLOAD: ServerError = {
@@ -70,7 +72,7 @@ export function createMatchInputIngress(options: MatchInputIngressOptions): Matc
     bucket.tokens -= 1;
     return true;
   };
-  const accept = (payload: unknown): MatchInputIngressResult => {
+  const accept = (payload: unknown, source: GameplayTransportMode): MatchInputIngressResult => {
     const parsed = matchInputSchema.safeParse(payload);
     if (!parsed.success) return { status: 'error', error: INVALID_PAYLOAD };
     if (rooms.isInResult(connectionId)) return { status: 'dropped' };
@@ -80,6 +82,7 @@ export function createMatchInputIngress(options: MatchInputIngressOptions): Matc
     try {
       rooms.applyInput(connectionId, parsed.data);
       lastAcceptedInputSeq = parsed.data.seq;
+      options.onAccepted?.(parsed.data, source);
       return { status: 'accepted' };
     } catch (error) {
       if (error instanceof DomainError) return { status: 'error', error: domainError(error) };

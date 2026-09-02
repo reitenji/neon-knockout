@@ -6,6 +6,42 @@ import type { ArenaInput } from './ArenaInput.js';
 const acceptsInput = (snapshot: MatchSnapshot): boolean =>
   snapshot.phase === 'REGULATION' || snapshot.phase === 'SUDDEN_DEATH';
 
+const E2E_OBSERVER_LIMIT = 256;
+
+type E2eInputObserver = {
+  inputs: Array<Readonly<{
+    sequence: number;
+    sampledAtMs: number;
+    moveX: number;
+    moveY: number;
+    quick: boolean;
+    heavy: boolean;
+    dash: boolean;
+  }>>;
+  acceptedSnapshots: Array<Readonly<{
+    tick: number;
+    lastProcessedInputSeq: number;
+    acceptedAtMs: number;
+  }>>;
+};
+
+function e2eObserver(): E2eInputObserver | null {
+  const candidate = (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: unknown })
+    .__NEON_E2E_INPUT_OBSERVER__;
+  if (
+    typeof candidate !== 'object'
+    || candidate === null
+    || !Array.isArray((candidate as Partial<E2eInputObserver>).inputs)
+    || !Array.isArray((candidate as Partial<E2eInputObserver>).acceptedSnapshots)
+  ) return null;
+  return candidate as E2eInputObserver;
+}
+
+function pushBounded<T>(values: T[], value: T): void {
+  values.push(value);
+  if (values.length > E2E_OBSERVER_LIMIT) values.splice(0, values.length - E2E_OBSERVER_LIMIT);
+}
+
 function playerById(snapshot: MatchSnapshot, playerId: string): MatchPlayer | null {
   return snapshot.players.find((player) => player.playerId === playerId) ?? null;
 }
@@ -50,7 +86,8 @@ export class ArenaSession {
       this.releaseHeldInput(false);
       return this.localPresentation;
     }
-    const sampledFrame = this.input.sample(this.inputSequence, this.now());
+    const sampledAtMs = this.now();
+    const sampledFrame = this.input.sample(this.inputSequence, sampledAtMs);
     if (!sampledFrame) return this.localPresentation;
     const sequence = this.bridge.reserveInputSequence?.(this.inputSequence) ?? this.inputSequence;
     this.inputSequence = sequence + 1;
@@ -62,6 +99,18 @@ export class ArenaSession {
       this.latestSnapshot.platformProgress
     );
     this.bridge.sendInput(frame);
+    const observer = e2eObserver();
+    if (observer) {
+      pushBounded(observer.inputs, {
+        sequence: frame.seq,
+        sampledAtMs,
+        moveX: frame.moveX,
+        moveY: frame.moveY,
+        quick: frame.quick,
+        heavy: frame.heavy,
+        dash: frame.dash
+      });
+    }
     return this.localPresentation;
   }
 
@@ -85,13 +134,22 @@ export class ArenaSession {
 
   private acceptSnapshot(snapshot: MatchSnapshot): void {
     this.latestSnapshot = snapshot;
-    this.onSnapshot(snapshot, this.now());
+    const acceptedAtMs = this.now();
+    this.onSnapshot(snapshot, acceptedAtMs);
     const localPlayer = playerById(snapshot, this.localPlayerId);
     if (!localPlayer) {
       this.prediction.reset();
       this.bridge.publishRollbackFrames?.(null);
       this.localPresentation = null;
       return;
+    }
+    const observer = e2eObserver();
+    if (observer) {
+      pushBounded(observer.acceptedSnapshots, {
+        tick: snapshot.tick,
+        lastProcessedInputSeq: localPlayer.lastProcessedInputSeq,
+        acceptedAtMs
+      });
     }
     this.inputSequence = Math.max(this.inputSequence, localPlayer.lastProcessedInputSeq + 1);
     this.localPresentation = this.prediction.reconcile(

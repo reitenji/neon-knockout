@@ -567,6 +567,13 @@ describe('Socket.IO FFA game server flow', () => {
   it('replaces a disconnected peer on resume and emits a fresh epoch boundary before later snapshots', async () => {
     const match = await startMatch();
     const oldPeer = await negotiateAndActivate(match.guestClient);
+    const guestConnectionId = match.guestClient.id;
+    if (!guestConnectionId) throw new Error('Expected the guest Socket.IO connection id.');
+    server.rooms.setWebRtcMedian(guestConnectionId, 33, performance.now());
+    server.rooms.advance(STEP_MS);
+    expect(snapshot(match.roomCode).network[match.guest.playerId]).toMatchObject({
+      transport: 'webrtc', currentMs: 33, medianMs: 33
+    });
 
     harness().disconnectPlayer(match.roomCode, match.guest.playerId);
     await waitFor(() => oldPeer.closeCalls === 1, 'disconnected peer closure');
@@ -575,6 +582,11 @@ describe('Socket.IO FFA game server flow', () => {
     resumedClient.on('match:started', () => publicationOrder.push('started'));
     resumedClient.on('match:snapshot', () => publicationOrder.push('snapshot'));
     const cursorBeforeResume = eventMarker(match.roomCode);
+    const firstPeerObservedResumeSnapshot = expectEvent(
+      match.hostClient,
+      'match:snapshot',
+      (publication) => publication.eventCursor > cursorBeforeResume
+    );
     const boundary = expectEvent(
       resumedClient,
       'match:started',
@@ -591,7 +603,14 @@ describe('Socket.IO FFA game server flow', () => {
     });
 
     expect(resumed).toMatchObject({ playerId: match.guest.playerId, resumed: true });
-    const [boundaryPublication, snapshotPublication] = await Promise.all([boundary, laterSnapshot]);
+    const [boundaryPublication, snapshotPublication, peerObservedResumeSnapshot] = await Promise.all([
+      boundary,
+      laterSnapshot,
+      firstPeerObservedResumeSnapshot
+    ]);
+    expect(peerObservedResumeSnapshot.snapshot.network[match.guest.playerId]).toEqual({
+      transport: 'websocket', currentMs: null, medianMs: null, jitterMs: null
+    });
     expect(boundaryPublication).toMatchObject({
       matchEpoch: 1,
       eventCursor: cursorBeforeResume + 1,

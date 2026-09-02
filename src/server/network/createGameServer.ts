@@ -6,7 +6,7 @@ import express from 'express';
 import { Server } from 'socket.io';
 import { GAME } from '../../shared/constants.js';
 import type { GameplayTransportMode } from '../../shared/gameplayTransport.js';
-import type { GameEvent, MatchSnapshot, SessionWelcome, Vec2 } from '../../shared/model.js';
+import type { GameEvent, InputFrame, MatchSnapshot, SessionWelcome, Vec2 } from '../../shared/model.js';
 import type { ClientToServerEvents, ServerToClientEvents } from '../../shared/protocol.js';
 import {
   RoomManager,
@@ -35,9 +35,16 @@ export interface GameServer {
     recentEvents(roomCode: string): readonly GameEvent[];
     matchSnapshot(roomCode: string): MatchSnapshot | null;
     transportMode(playerId: string): GameplayTransportMode | null;
+    transportGeneration(playerId: string): Readonly<{ generationId: string | null; negotiationCount: number }> | null;
+    acceptedInputs(playerId: string): readonly AcceptedInputRecord[];
     dropWebRtc(playerId: string): Promise<void>;
   } | null;
 }
+
+export type AcceptedInputRecord = Readonly<{
+  sequence: number;
+  source: GameplayTransportMode;
+}>;
 
 export type CreateGameServerOptions = Readonly<{
   host?: string;
@@ -55,6 +62,7 @@ export type CreateGameServerOptions = Readonly<{
 type PlayerConnection = Readonly<{ roomCode: string; socketId: string }>;
 
 const TEST_EVENT_HISTORY_LIMIT = 256;
+const TEST_INPUT_HISTORY_LIMIT = 256;
 
 function updateSnapshot(snapshot: MatchSnapshot, publication: Extract<RoomPublication, { type: 'MATCH_EVENT' }>): MatchSnapshot {
   const event = publication.event;
@@ -84,6 +92,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
   const roomCodes = new Set<string>();
   const snapshots = new Map<string, MatchSnapshot>();
   const testEventHistory = options.enableTestHarness ? new Map<string, GameEvent[]>() : null;
+  const testInputHistory = options.enableTestHarness ? new Map<string, AcceptedInputRecord[]>() : null;
   const playerConnections = new Map<string, PlayerConnection>();
   const testTransport = options.enableTestHarness ? options.testGameplayTransport : undefined;
   const transportHub = new GameplayTransportHub({
@@ -118,6 +127,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
       for (const [playerId, connection] of playerConnections) {
         if (connection.roomCode !== publication.roomCode) continue;
         playerConnections.delete(playerId);
+        testInputHistory?.delete(playerId);
         void transportHub.detachSession(connection.socketId);
       }
     }
@@ -193,6 +203,15 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     transportHub,
     onSession: (socket: GameSocket, welcome: SessionWelcome) => {
       playerConnections.set(welcome.playerId, { roomCode: welcome.roomCode, socketId: socket.id });
+    },
+    onAcceptedInput: (playerId: string, input: InputFrame, source: GameplayTransportMode) => {
+      if (!testInputHistory) return;
+      const history = testInputHistory.get(playerId) ?? [];
+      history.push({ sequence: input.seq, source });
+      if (history.length > TEST_INPUT_HISTORY_LIMIT) {
+        history.splice(0, history.length - TEST_INPUT_HISTORY_LIMIT);
+      }
+      testInputHistory.set(playerId, history);
     },
     onLeave: (socket: GameSocket, roomCode: string) => {
       for (const [playerId, connection] of playerConnections) {
@@ -287,6 +306,7 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
         roomCodes.clear();
         snapshots.clear();
         testEventHistory?.clear();
+        testInputHistory?.clear();
         playerConnections.clear();
         activeAddress = null;
       } finally {
@@ -320,6 +340,9 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
           return snapshot ? structuredClone(snapshot) : null;
         },
         transportMode: (playerId: string): GameplayTransportMode | null => transportHub.modeForPlayer(playerId),
+        transportGeneration: (playerId: string) => transportHub.generationForPlayerForTest(playerId),
+        acceptedInputs: (playerId: string): readonly AcceptedInputRecord[] =>
+          structuredClone(testInputHistory?.get(playerId) ?? []),
         dropWebRtc: (playerId: string): Promise<void> => transportHub.dropPeerForTest(playerId)
       }
     : null;

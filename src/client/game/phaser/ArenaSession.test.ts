@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import type { GameEvent, InputFrame, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
@@ -67,6 +67,43 @@ function controls(): ArenaInputSource & { movementHeld: Record<'up' | 'down' | '
 }
 
 describe('ArenaSession', () => {
+  afterEach(() => {
+    delete (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: unknown })
+      .__NEON_E2E_INPUT_OBSERVER__;
+  });
+
+  it('records exact sampled sequences and accepted local snapshot acknowledgements in a bounded opt-in observer', () => {
+    const observer = { inputs: [] as unknown[], acceptedSnapshots: [] as unknown[] };
+    (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: typeof observer })
+      .__NEON_E2E_INPUT_OBSERVER__ = observer;
+    const bridge = new Bridge();
+    const source = controls();
+    let now = 10;
+    const session = new ArenaSession(bridge, 'p-local', new ArenaInput(source), () => now);
+    session.start();
+
+    source.movementHeld.right = true;
+    now = 20;
+    session.step(16);
+    bridge.current = { ...snapshot(player({ lastProcessedInputSeq: 0 })), tick: 2 };
+    now = 35;
+    for (const listener of bridge.snapshotListeners) listener(bridge.current);
+
+    expect(observer.inputs).toContainEqual(expect.objectContaining({
+      sequence: 0, sampledAtMs: 20, moveX: 1, quick: false, dash: false
+    }));
+    expect(observer.acceptedSnapshots).toContainEqual({
+      tick: 2, lastProcessedInputSeq: 0, acceptedAtMs: 35
+    });
+
+    for (let index = 0; index < 300; index += 1) {
+      now += 1;
+      bridge.current = { ...snapshot(player({ lastProcessedInputSeq: index })), tick: index + 3 };
+      for (const listener of bridge.snapshotListeners) listener(bridge.current);
+    }
+    expect(observer.acceptedSnapshots).toHaveLength(256);
+  });
+
   it('clears countdown-held combat without forcing a fresh release when regulation begins', () => {
     const bridge = new Bridge();
     bridge.current = { ...snapshot(), phase: 'COUNTDOWN' };

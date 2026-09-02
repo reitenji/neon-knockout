@@ -76,7 +76,7 @@ describe('MatchInputIngress', () => {
       connectionId: 'host-socket', rooms, now: () => 0, logger: { error: vi.fn() }
     });
 
-    expect(ingress.accept({ seq: 7 })).toEqual({
+    expect(ingress.accept({ seq: 7 }, 'websocket')).toEqual({
       status: 'error',
       error: { code: 'INVALID_PAYLOAD', message: 'İstek verisi geçersiz.', recoverable: true }
     });
@@ -88,9 +88,9 @@ describe('MatchInputIngress', () => {
       connectionId: 'host-socket', rooms: subject.rooms, now: () => 0, logger: { error: vi.fn() }
     });
 
-    expect(ingress.accept(input({ seq: 7 }))).toEqual({ status: 'accepted' });
-    expect(ingress.accept(input({ seq: 7 }))).toEqual({ status: 'dropped' });
-    expect(ingress.accept(input({ seq: 6 }))).toEqual({ status: 'dropped' });
+    expect(ingress.accept(input({ seq: 7 }), 'websocket')).toEqual({ status: 'accepted' });
+    expect(ingress.accept(input({ seq: 7 }), 'webrtc')).toEqual({ status: 'dropped' });
+    expect(ingress.accept(input({ seq: 6 }), 'webrtc')).toEqual({ status: 'dropped' });
     subject.rooms.advance(50);
 
     expect(player(subject.snapshot(), subject.host.playerId).lastProcessedInputSeq).toBe(7);
@@ -102,7 +102,7 @@ describe('MatchInputIngress', () => {
     const ingress = createMatchInputIngress({ connectionId: 'host-socket', rooms: subject.rooms, now: () => 0, logger });
     finishMatch(subject);
 
-    expect(ingress.accept(input({ seq: 7 }))).toEqual({ status: 'dropped' });
+    expect(ingress.accept(input({ seq: 7 }), 'websocket')).toEqual({ status: 'dropped' });
     expect(logger.error).not.toHaveBeenCalled();
   });
 
@@ -110,21 +110,21 @@ describe('MatchInputIngress', () => {
     const subject = fixture();
     const ingress = createMatchInputIngress({ connectionId: 'host-socket', rooms: subject.rooms, now: () => 0, logger: { error: vi.fn() } });
     for (let seq = 0; seq < GAME.maxInputFramesPerSecond; seq += 1) {
-      expect(ingress.accept(input({ seq }))).toEqual({ status: 'accepted' });
+      expect(ingress.accept(input({ seq }), 'websocket')).toEqual({ status: 'accepted' });
     }
-    expect(ingress.accept(input({ seq: GAME.maxInputFramesPerSecond }))).toEqual({ status: 'dropped' });
+    expect(ingress.accept(input({ seq: GAME.maxInputFramesPerSecond }), 'websocket')).toEqual({ status: 'dropped' });
   });
 
   it('silently drops frames that exceed the incoming input bucket before the accepted bucket', () => {
     const subject = fixture();
     const ingress = createMatchInputIngress({ connectionId: 'host-socket', rooms: subject.rooms, now: () => 0, logger: { error: vi.fn() } });
 
-    expect(ingress.accept(input({ seq: 0 }))).toEqual({ status: 'accepted' });
+    expect(ingress.accept(input({ seq: 0 }), 'websocket')).toEqual({ status: 'accepted' });
     for (let attempt = 1; attempt < GAME.inputRateLimitPerSecond; attempt += 1) {
-      expect(ingress.accept(input({ seq: 0 }))).toEqual({ status: 'dropped' });
+      expect(ingress.accept(input({ seq: 0 }), 'websocket')).toEqual({ status: 'dropped' });
     }
 
-    expect(ingress.accept(input({ seq: 1 }))).toEqual({ status: 'dropped' });
+    expect(ingress.accept(input({ seq: 1 }), 'websocket')).toEqual({ status: 'dropped' });
   });
 
   it('maps a room domain failure to a safe server error', () => {
@@ -133,7 +133,7 @@ describe('MatchInputIngress', () => {
       connectionId: 'host-socket', rooms: subject.rooms, now: () => 0, logger: { error: vi.fn() }
     });
 
-    expect(ingress.accept(input({ seq: 7 }))).toEqual({
+    expect(ingress.accept(input({ seq: 7 }), 'websocket')).toEqual({
       status: 'error',
       error: { code: 'INVALID_PHASE', message: 'Bu işlem şu anda kullanılamaz.', recoverable: true }
     });
@@ -144,13 +144,30 @@ describe('MatchInputIngress', () => {
     const ingress = createMatchInputIngress({
       connectionId: 'host-socket', rooms: subject.rooms, now: () => 0, logger: { error: vi.fn() }
     });
-    expect(ingress.accept(input({ seq: 7 }))).toEqual({ status: 'accepted' });
+    expect(ingress.accept(input({ seq: 7 }), 'websocket')).toEqual({ status: 'accepted' });
     subject.rooms.advance(50);
 
     ingress.reset();
-    expect(ingress.accept(input({ seq: 0 }))).toEqual({ status: 'accepted' });
+    expect(ingress.accept(input({ seq: 0 }), 'websocket')).toEqual({ status: 'accepted' });
     subject.rooms.advance(50);
 
     expect(player(subject.snapshot(), subject.host.playerId).lastProcessedInputSeq).toBe(7);
+  });
+
+  it('records only accepted input with its exact gameplay transport source', () => {
+    const subject = fixture();
+    const onAccepted = vi.fn();
+    const ingress = createMatchInputIngress({
+      connectionId: 'host-socket', rooms: subject.rooms, now: () => 0,
+      logger: { error: vi.fn() }, onAccepted
+    });
+
+    expect(ingress.accept(input({ seq: 21 }), 'webrtc')).toEqual({ status: 'accepted' });
+    expect(ingress.accept(input({ seq: 21 }), 'websocket')).toEqual({ status: 'dropped' });
+    expect(ingress.accept(input({ seq: 22 }), 'websocket')).toEqual({ status: 'accepted' });
+
+    expect(onAccepted).toHaveBeenCalledTimes(2);
+    expect(onAccepted).toHaveBeenNthCalledWith(1, input({ seq: 21 }), 'webrtc');
+    expect(onAccepted).toHaveBeenNthCalledWith(2, input({ seq: 22 }), 'websocket');
   });
 });

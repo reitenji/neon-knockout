@@ -343,6 +343,10 @@ describe('GameplayTransportHub', () => {
     peer.openBothChannels();
     expect(hub.activate('s1', { generationId: FIRST_GENERATION })).toBe(true);
     expect(hub.modeForPlayer('p1')).toBe('webrtc');
+    expect(hub.generationForPlayerForTest('p1')).toEqual({
+      generationId: FIRST_GENERATION,
+      negotiationCount: 1
+    });
     expect(first.networkModes).toEqual(['webrtc']);
   });
 

@@ -1,12 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
 import type { z } from 'zod';
-import type { Ack, ServerError, SessionWelcome } from '../../shared/model.js';
+import type { Ack, InputFrame, ServerError, SessionWelcome } from '../../shared/model.js';
 import { GAME } from '../../shared/constants.js';
 import {
   rtcActivationRequestSchema,
   rtcNegotiationRequestSchema
 } from '../../shared/gameplayTransport.js';
+import type { GameplayTransportMode } from '../../shared/gameplayTransport.js';
 import {
   lobbyChassisSchema,
   lobbyReadySchema,
@@ -39,6 +40,7 @@ type SocketHandlerOptions = Readonly<{
   logger: ErrorLogger;
   transportHub: GameplayTransportHub;
   onSession: (socket: GameSocket, welcome: SessionWelcome, inputIngress: MatchInputIngress) => void;
+  onAcceptedInput?: (playerId: string, input: InputFrame, source: GameplayTransportMode) => void;
   onLeave: (socket: GameSocket, roomCode: string) => void;
   onDisconnect: (socket: GameSocket) => void;
 }>;
@@ -123,11 +125,19 @@ class SocketRateLimiter {
 }
 
 export function registerSocketHandlers(options: SocketHandlerOptions): void {
-  const { io, rooms, now, logger, transportHub, onSession, onLeave, onDisconnect } = options;
+  const { io, rooms, now, logger, transportHub, onSession, onAcceptedInput, onLeave, onDisconnect } = options;
 
   io.on('connection', (socket) => {
     const limiter = new SocketRateLimiter(now);
-    const inputIngress = createMatchInputIngress({ connectionId: socket.id, rooms, now, logger });
+    const inputIngress = createMatchInputIngress({
+      connectionId: socket.id,
+      rooms,
+      now,
+      logger,
+      onAccepted: (input, source) => {
+        if (activePlayerId !== null) onAcceptedInput?.(activePlayerId, input, source);
+      }
+    });
     let latencySampling = false;
     let latencyTimer: ReturnType<typeof setTimeout> | null = null;
     let latencyProbeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -330,7 +340,12 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         sessionResumeSchema,
         payload,
         callback,
-        (validated) => rooms.resume(socket.id, validated.roomCode, validated.resumeToken),
+        (validated) => rooms.resume(
+          socket.id,
+          validated.roomCode,
+          validated.resumeToken,
+          currentTransport(socket)
+        ),
         establishSession
       );
     });
@@ -405,7 +420,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       });
     });
     socket.on('match:input', (payload) => {
-      const result = inputIngress.accept(payload);
+      const result = inputIngress.accept(payload, currentTransport(socket));
       if (result.status === 'error') socket.emit('server:error', result.error);
     });
     socket.on('disconnect', () => {

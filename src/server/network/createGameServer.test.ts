@@ -40,6 +40,8 @@ describe('createGameServer scheduler', () => {
     expect(testServer.testHarness?.runCombatScript).toBeTypeOf('function');
     expect(testServer.testHarness?.transportMode).toBeTypeOf('function');
     expect(testServer.testHarness?.dropWebRtc).toBeTypeOf('function');
+    expect(testServer.testHarness?.acceptedInputs).toBeTypeOf('function');
+    expect(testServer.testHarness?.transportGeneration).toBeTypeOf('function');
   });
 });
 

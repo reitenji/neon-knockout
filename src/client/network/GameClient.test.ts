@@ -64,6 +64,7 @@ const gameplayHarness = vi.hoisted(() => {
     acceptSocketStarted: ReturnType<typeof vi.fn>;
     acceptSocketSnapshot: ReturnType<typeof vi.fn>;
     acceptSocketEvent: ReturnType<typeof vi.fn>;
+    acceptAuthoritativeSnapshot: ReturnType<typeof vi.fn>;
     sendInput: ReturnType<typeof vi.fn>;
     fallback: ReturnType<typeof vi.fn>;
     dispose: ReturnType<typeof vi.fn>;
@@ -74,6 +75,7 @@ const gameplayHarness = vi.hoisted(() => {
     acceptSocketStarted: vi.fn(),
     acceptSocketSnapshot: vi.fn(),
     acceptSocketEvent: vi.fn(),
+    acceptAuthoritativeSnapshot: vi.fn(),
     sendInput: vi.fn(() => false),
     fallback: vi.fn(),
     dispose: vi.fn()
@@ -313,10 +315,8 @@ describe('createSocketGameClient', () => {
       ['result:ready', { ready: false }, expect.any(Function)],
       ['result:lobby', {}, expect.any(Function)]
     ]);
-    expect(formerTransport.dispose).toHaveBeenCalledOnce();
-    expect(formerSequencer.dispose).toHaveBeenCalledOnce();
-    expect(gameplayHarness.transport).not.toBe(formerTransport);
-    expect(gameplayHarness.transport.start).toHaveBeenCalledOnce();
+    expect(formerTransport.dispose).not.toHaveBeenCalled();
+    expect(formerSequencer.dispose).not.toHaveBeenCalled();
   });
 
   it('automatically negotiates a fresh transport from result return before the epoch-two countdown starts', async () => {
@@ -359,7 +359,10 @@ describe('createSocketGameClient', () => {
     expect(observedRoomStates.at(-1)?.phase).toBe('RESULT');
     socketHarness.socket.emit.mockClear();
 
-    await expect(client.returnToLobby()).resolves.toEqual({ ok: true, data: null });
+    const lobbyReturn = client.returnToLobby();
+    socketHarness.trigger('room:state', roomState());
+    socketHarness.trigger('room:state', roomState());
+    await expect(lobbyReturn).resolves.toEqual({ ok: true, data: null });
     await Promise.resolve();
     await Promise.resolve();
 
@@ -388,6 +391,39 @@ describe('createSocketGameClient', () => {
     socketHarness.trigger('match:started', epochTwoStart);
     expect(rematchTransport.acceptSocketStarted).toHaveBeenCalledWith(epochTwoStart);
     expect(firstTransport.acceptSocketStarted).not.toHaveBeenCalled();
+  });
+
+  it('renegotiates once for a guest when the authoritative room phase returns from result to lobby', async () => {
+    const client = createSocketGameClient();
+    socketHarness.trigger('session:welcome', welcome({ playerId: 'guest-1' }));
+    const firstTransport = gameplayHarness.transport;
+    socketHarness.trigger('room:state', {
+      ...roomState(),
+      phase: 'RESULT',
+      result: { winnerPlayerId: 'player-1', reason: 'TARGET_SCORE', players: [] }
+    });
+
+    socketHarness.trigger('room:state', roomState());
+    socketHarness.trigger('room:state', roomState());
+
+    expect(gameplayHarness.transports).toHaveLength(2);
+    expect(firstTransport.dispose).toHaveBeenCalledOnce();
+    expect(gameplayHarness.transport.start).toHaveBeenCalledOnce();
+    expect(socketHarness.socket.emit).not.toHaveBeenCalledWith('result:lobby', expect.anything(), expect.anything());
+    client.disconnect();
+  });
+
+  it('acknowledges an input latch only from a sequencer-accepted snapshot for the welcomed local player', () => {
+    createSocketGameClient();
+    socketHarness.trigger('session:welcome', welcome({ playerId: 'player-1' }));
+    const accepted = {
+      ...matchSnapshot(7),
+      players: [{ playerId: 'player-1', lastProcessedInputSeq: 41 }]
+    } as unknown as MatchSnapshot;
+
+    sequencerHarness.sequencer.options.onSnapshot(accepted);
+
+    expect(gameplayHarness.transport.acceptAuthoritativeSnapshot).toHaveBeenCalledWith(accepted, 'player-1');
   });
 
   it('sends match input fire-and-forget without an acknowledgement callback', () => {

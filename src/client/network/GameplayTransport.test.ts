@@ -422,26 +422,22 @@ describe('createGameplayTransport', () => {
     expect(harness.controller.sendInput(input(8))).toBe(true);
   });
 
-  it('repeats a transient quick edge long enough to survive one dropped and one reordered fast frame exactly once', async () => {
+  it('latches a quick edge across arbitrary newer neutral frames until an authoritative acknowledgement', async () => {
     const harness = createHarness();
     await activateHarness(harness);
     harness.controller.acceptSocketStarted(started());
     const neutral = (seq: number): InputFrame => ({ ...input(seq), quick: false });
 
     harness.controller.sendInput(input(40));
-    harness.controller.sendInput(neutral(41));
-    harness.controller.sendInput(neutral(42));
-    harness.controller.sendInput(neutral(43));
+    for (let sequence = 41; sequence <= 48; sequence += 1) {
+      harness.controller.sendInput(neutral(sequence));
+    }
 
     const sentInputs = harness.peer.fast.send.mock.calls.map(([serialized]) =>
       (JSON.parse(serialized) as { payload: InputFrame }).payload
     );
-    expect(sentInputs.map(({ seq, quick }) => ({ seq, quick }))).toEqual([
-      { seq: 40, quick: true },
-      { seq: 41, quick: true },
-      { seq: 42, quick: true },
-      { seq: 43, quick: false }
-    ]);
+    expect(sentInputs).toHaveLength(9);
+    expect(sentInputs.every((frame) => frame.quick)).toBe(true);
 
     const state = createMatchState([
       { playerId: 'p1', name: 'Ada', accent: 0 },
@@ -449,41 +445,47 @@ describe('createGameplayTransport', () => {
     ], 0, DEFAULT_ROOM_SETTINGS);
     state.phase = 'REGULATION';
 
-    // Drop the original edge, then deliver the final redundant sample before the earlier one.
-    stepMatch(state, new Map([['p1', sentInputs[2]!]]), 1_000 / 60);
-    stepMatch(state, new Map([['p1', sentInputs[1]!]]), 1_000 / 60);
-    stepMatch(state, new Map([['p1', sentInputs[3]!]]), 1_000 / 60);
-    stepMatch(state, new Map([['p1', neutral(44)]]),
+    // Drop the original and every intermediate packet. The arbitrarily newer latched
+    // successor still owns the edge, and a later acknowledgement permits release.
+    stepMatch(state, new Map([['p1', sentInputs.at(-1)!]]), 1_000 / 60);
+    harness.controller.acceptAuthoritativeSnapshot({
+      ...snapshot(9),
+      players: [{ ...initialPlayerSnapshot().players[0]!, playerId: 'p1', lastProcessedInputSeq: 48 }]
+    }, 'p1');
+    harness.controller.sendInput(neutral(49));
+    const released = (JSON.parse(harness.peer.fast.send.mock.calls.at(-1)![0]) as { payload: InputFrame }).payload;
+    expect(released).toMatchObject({ seq: 49, quick: false });
+    stepMatch(state, new Map([['p1', released]]),
       GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs + GAME.quickCombo[0].recoveryMs);
 
     expect(state.players.p1.stats.completedAttacks).toBe(1);
     expect(state.players.p1.previousQuick).toBe(false);
   });
 
-  it('repeats and then releases a transient dash edge within the same bounded window', async () => {
+  it('releases quick and dash latches only after their own acknowledged sequence and permits combo cadence', async () => {
     const harness = createHarness();
     await activateHarness(harness);
     harness.controller.acceptSocketStarted(started());
-    const frame = (seq: number, dash: boolean): InputFrame => ({
-      ...input(seq),
-      quick: false,
-      dash
-    });
+    const neutral = (seq: number): InputFrame => ({ ...input(seq), quick: false, dash: false });
 
-    harness.controller.sendInput(frame(50, true));
-    harness.controller.sendInput(frame(51, false));
-    harness.controller.sendInput(frame(52, false));
-    harness.controller.sendInput(frame(53, false));
+    harness.controller.sendInput({ ...neutral(50), quick: true });
+    harness.controller.sendInput({ ...neutral(51), dash: true });
+    harness.controller.acceptAuthoritativeSnapshot({
+      ...snapshot(10),
+      players: [{ ...initialPlayerSnapshot().players[0]!, lastProcessedInputSeq: 50 }]
+    }, 'player-1');
+    harness.controller.sendInput(neutral(52));
+    let payload = (JSON.parse(harness.peer.fast.send.mock.calls.at(-1)![0]) as { payload: InputFrame }).payload;
+    expect(payload).toMatchObject({ seq: 52, quick: false, dash: true });
 
-    expect(harness.peer.fast.send.mock.calls.map(([serialized]) => {
-      const payload = (JSON.parse(serialized) as { payload: InputFrame }).payload;
-      return { seq: payload.seq, dash: payload.dash };
-    })).toEqual([
-      { seq: 50, dash: true },
-      { seq: 51, dash: true },
-      { seq: 52, dash: true },
-      { seq: 53, dash: false }
-    ]);
+    harness.controller.acceptAuthoritativeSnapshot({
+      ...snapshot(11),
+      players: [{ ...initialPlayerSnapshot().players[0]!, lastProcessedInputSeq: 52 }]
+    }, 'player-1');
+    harness.controller.sendInput(neutral(53));
+    harness.controller.sendInput({ ...neutral(54), quick: true });
+    payload = (JSON.parse(harness.peer.fast.send.mock.calls.at(-1)![0]) as { payload: InputFrame }).payload;
+    expect(payload).toMatchObject({ seq: 54, quick: true, dash: false });
   });
 
   it('does not arm a delayed fast-channel edge when the original input falls through to Socket.IO', async () => {
@@ -500,7 +502,7 @@ describe('createGameplayTransport', () => {
     expect(JSON.parse(harness.peer.fast.send.mock.calls[0]![0]).payload).toEqual(neutral(61));
   });
 
-  it('abandons remaining redundancy when a follow-up falls through to Socket.IO', async () => {
+  it('moves a pending edge wholly to Socket.IO on backpressure without allowing neutral fallthrough', async () => {
     const harness = createHarness();
     await activateHarness(harness);
     harness.controller.acceptSocketStarted(started());
@@ -508,11 +510,50 @@ describe('createGameplayTransport', () => {
 
     expect(harness.controller.sendInput(input(70))).toBe(true);
     harness.peer.fast.bufferedAmount = FAST_CHANNEL_MAX_BUFFERED_BYTES + 1;
-    expect(harness.controller.sendInput(neutral(71))).toBe(false);
+    expect(harness.controller.sendInput(neutral(71))).toBe(true);
+    expect(harness.sendFallbackInput).toHaveBeenCalledWith(expect.objectContaining({ seq: 71, quick: true }));
+    expect(harness.notifyFallback).toHaveBeenCalledOnce();
     harness.peer.fast.bufferedAmount = 0;
     expect(harness.controller.sendInput(neutral(72))).toBe(true);
+    expect(harness.sendFallbackInput).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 72, quick: true }));
 
-    expect(JSON.parse(harness.peer.fast.send.mock.calls[1]![0]).payload).toEqual(neutral(72));
+    harness.controller.acceptAuthoritativeSnapshot({
+      ...snapshot(12),
+      players: [{ ...initialPlayerSnapshot().players[0]!, lastProcessedInputSeq: 72 }]
+    }, 'player-1');
+    expect(harness.controller.sendInput(neutral(73))).toBe(false);
+  });
+
+  it('expires a pending WebRTC edge into acknowledged Socket.IO latching and clears it on dispose', async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    const neutral = (seq: number): InputFrame => ({ ...input(seq), quick: false });
+
+    expect(harness.controller.sendInput(input(80))).toBe(true);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(harness.notifyFallback).toHaveBeenCalledOnce();
+    expect(harness.controller.sendInput(neutral(81))).toBe(true);
+    expect(harness.sendFallbackInput).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 81, quick: true }));
+
+    harness.controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
+    expect(harness.controller.sendInput(neutral(82))).toBe(false);
+  });
+
+  it('does not latch or replay a heavy release as a quick or dash action', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    const heavy = { ...input(90), quick: false, heavy: true };
+    const released = { ...heavy, seq: 91, heavy: false };
+
+    expect(harness.controller.sendInput(heavy)).toBe(true);
+    expect(harness.controller.sendInput(released)).toBe(true);
+    harness.controller.acceptMode({ generationId, mode: 'websocket' });
+
+    expect(harness.sendFallbackInput).not.toHaveBeenCalled();
   });
 
   it('rejects unopened, backpressured, oversized, and throwing fast sends', async () => {
@@ -650,7 +691,8 @@ describe('createGameplayTransport', () => {
 
     expect(harness.sendFallbackInput).toHaveBeenCalledOnce();
     expect(harness.sendFallbackInput).toHaveBeenCalledWith(attackEdge);
-    expect(harness.controller.sendInput(input(18))).toBe(false);
+    expect(harness.controller.sendInput({ ...input(18), quick: false })).toBe(true);
+    expect(harness.sendFallbackInput).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 18, quick: true }));
   });
 
   it('falls back once after a three-heartbeat gap', async () => {

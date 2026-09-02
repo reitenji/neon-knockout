@@ -77,6 +77,8 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
   let connectionState: GameClientConnectionState = 'idle';
   let hasConnected = false;
   let hasSession = false;
+  let localPlayerId: string | null = null;
+  let roomPhase: RoomState['phase'] | null = null;
 
   const publish = <E extends keyof GameClientEvents>(event: E, ...args: Parameters<GameClientEvents[E]>): void => {
     for (const listener of listeners[event]) {
@@ -114,7 +116,12 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     let owner: GameplayTransportBundle | null = null;
     const sequencer = createMatchPublicationSequencer({
       onStarted: (snapshot) => publish('match:started', snapshot),
-      onSnapshot: (snapshot) => publish('match:snapshot', snapshot),
+      onSnapshot: (snapshot) => {
+        if (owner !== null && activeBundle === owner && !owner.disposed && localPlayerId !== null) {
+          owner.transport.acceptAuthoritativeSnapshot(snapshot, localPlayerId);
+        }
+        publish('match:snapshot', snapshot);
+      },
       onEvent: (event) => publish('match:event', event),
       onTransportGap: () => {
         if (owner !== null && activeBundle === owner && !owner.disposed) owner.transport.fallback();
@@ -168,6 +175,8 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     if (!socket.active) {
       disposeActiveBundle();
       hasSession = false;
+      localPlayerId = null;
+      roomPhase = null;
     }
     setConnectionState(socket.active ? 'reconnecting' : 'disconnected');
   });
@@ -175,9 +184,16 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     if (hasSession) replaceBundleAndStart();
     else void ensureBundle().transport.start();
     hasSession = true;
+    localPlayerId = welcome.playerId;
+    roomPhase = null;
     publish('session:welcome', welcome);
   });
-  socket.on('room:state', (state) => publish('room:state', state));
+  socket.on('room:state', (state) => {
+    const startsFreshGeneration = hasSession && roomPhase === 'RESULT' && state.phase === 'LOBBY';
+    roomPhase = state.phase;
+    if (startsFreshGeneration) replaceBundleAndStart();
+    publish('room:state', state);
+  });
   socket.on('transport:mode', (notice) => activeBundle?.transport.acceptMode(notice));
   socket.on('match:started', (publication) => activeBundle?.transport.acceptSocketStarted(publication));
   socket.on('match:snapshot', (publication) => activeBundle?.transport.acceptSocketSnapshot(publication));
@@ -194,6 +210,8 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     disconnect(): void {
       disposeActiveBundle();
       hasSession = false;
+      localPlayerId = null;
+      roomPhase = null;
       socket.disconnect();
       setConnectionState('disconnected');
     },
@@ -229,6 +247,8 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
       if (acknowledgement.ok) {
         disposeActiveBundle();
         hasSession = false;
+        localPlayerId = null;
+        roomPhase = null;
       }
       return acknowledgement;
     },
@@ -241,12 +261,10 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     setResultReady(ready: boolean): Promise<Ack<null>> {
       return withAckTimeout((acknowledge) => socket.emit('result:ready', { ready }, acknowledge));
     },
-    async returnToLobby(): Promise<Ack<null>> {
-      const acknowledgement = await withAckTimeout<null>((acknowledge) => {
+    returnToLobby(): Promise<Ack<null>> {
+      return withAckTimeout<null>((acknowledge) => {
         socket.emit('result:lobby', {}, acknowledge);
       });
-      if (acknowledgement.ok) replaceBundleAndStart();
-      return acknowledgement;
     }
   };
 }
