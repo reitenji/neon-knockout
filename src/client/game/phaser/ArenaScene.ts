@@ -86,6 +86,7 @@ export class ArenaScene extends Phaser.Scene {
   private latestAcceptedSnapshot: MatchSnapshot | null = null;
   private latestAcceptedSnapshotAtMs: number | null = null;
   private presentationTargetTick: number | null = null;
+  private connected = false;
 
   constructor(
     private readonly bridge: GamePresentationBridge,
@@ -109,6 +110,7 @@ export class ArenaScene extends Phaser.Scene {
     this.latestAcceptedSnapshot = null;
     this.latestAcceptedSnapshotAtMs = null;
     this.presentationTargetTick = null;
+    this.connected = this.bridge.isConnected();
     this.cameras.main.setBackgroundColor('#02050a');
     this.arenaView = createArenaView(this, { reducedMotion: this.reducedMotion });
     this.impactFx = new ImpactFx(
@@ -140,6 +142,7 @@ export class ArenaScene extends Phaser.Scene {
     );
     this.session.start();
     this.unsubscribers.push(
+      this.bridge.subscribeConnected((connected) => this.acceptConnection(connected)),
       this.bridge.subscribeEvent((event) => {
         if (this.consumedEventIds.has(event.eventId)) return;
         this.consumedEventIds.add(event.eventId);
@@ -165,6 +168,7 @@ export class ArenaScene extends Phaser.Scene {
 
   update(): void {
     this.session?.step(INPUT_STEP_MS);
+    if (!this.connected) return;
     this.renderPresentation(performance.now());
   }
 
@@ -173,11 +177,23 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   private acceptTimelineSnapshot(snapshot: MatchSnapshot, receivedAtMs: number): void {
+    if (!this.connected) return;
     if (this.latestAcceptedSnapshotTick !== null && snapshot.tick <= this.latestAcceptedSnapshotTick) return;
     this.timeline.push(snapshot, receivedAtMs);
     this.latestAcceptedSnapshotTick = snapshot.tick;
     this.latestAcceptedSnapshot = snapshot;
     this.latestAcceptedSnapshotAtMs = receivedAtMs;
+  }
+
+  private acceptConnection(connected: boolean): void {
+    if (this.connected === connected) return;
+    this.connected = connected;
+    if (connected) return;
+    this.timeline.clear();
+    this.latestAcceptedSnapshotTick = null;
+    this.latestAcceptedSnapshot = null;
+    this.latestAcceptedSnapshotAtMs = null;
+    this.presentationTargetTick = null;
   }
 
   private renderPresentation(nowMs: number): void {
@@ -329,6 +345,7 @@ export class ArenaScene extends Phaser.Scene {
     this.latestAcceptedSnapshot = null;
     this.latestAcceptedSnapshotAtMs = null;
     this.presentationTargetTick = null;
+    this.connected = false;
     this.impactFx?.dispose();
     this.impactFx = null;
     this.gameAudio?.dispose();

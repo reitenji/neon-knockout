@@ -174,21 +174,27 @@ function latestPlayerCall(playerId: string): unknown[] | undefined {
 
 class Bridge implements GamePresentationBridge {
   current: MatchSnapshot = snapshot();
+  connected = true;
   readonly snapshotListeners = new Set<(snapshot: MatchSnapshot) => void>();
+  readonly connectedListeners = new Set<(connected: boolean) => void>();
   readonly eventListeners = new Set<(event: GameEvent) => void>();
   readonly muteListeners = new Set<(muted: boolean) => void>();
+  connectedUnsubscribes = 0;
   eventUnsubscribes = 0;
   muteUnsubscribes = 0;
   publishBufferUnderrun = vi.fn();
   publishExtrapolatedFrames = vi.fn();
 
   getSnapshot = (): MatchSnapshot => this.current;
-  isConnected = (): boolean => true;
+  isConnected = (): boolean => this.connected;
   subscribeSnapshot = (listener: (snapshot: MatchSnapshot) => void): (() => void) => {
     this.snapshotListeners.add(listener);
     return () => this.snapshotListeners.delete(listener);
   };
-  subscribeConnected = (): (() => void) => () => undefined;
+  subscribeConnected = (listener: (connected: boolean) => void): (() => void) => {
+    this.connectedListeners.add(listener);
+    return () => { this.connectedListeners.delete(listener); this.connectedUnsubscribes += 1; };
+  };
   subscribeEvent = (listener: (event: GameEvent) => void): (() => void) => {
     this.eventListeners.add(listener);
     return () => { this.eventListeners.delete(listener); this.eventUnsubscribes += 1; };
@@ -199,6 +205,10 @@ class Bridge implements GamePresentationBridge {
     return () => { this.muteListeners.delete(listener); this.muteUnsubscribes += 1; };
   };
   sendInput = (): void => undefined;
+  setConnected(connected: boolean): void {
+    this.connected = connected;
+    for (const listener of this.connectedListeners) listener(connected);
+  }
   emitEvent(event: GameEvent): void { for (const listener of this.eventListeners) listener(event); }
   publish(snapshot: MatchSnapshot): void {
     this.current = snapshot;
@@ -356,6 +366,62 @@ describe('ArenaScene live presentation integration', () => {
 
     scene.update();
     expect(scopedBridge.getPresentationDelayMs?.()).toBeCloseTo(33.3333333333, 8);
+  });
+
+  it('stops stale remote presentation on disconnect and snaps to the first fresh reconnect snapshot', () => {
+    const bridge = new Bridge();
+    bridge.current = snapshot({
+      players: [
+        player(),
+        player({ playerId: 'p2', position: { x: 100, y: 360 }, velocity: { x: 600, y: 0 } })
+      ]
+    });
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+    scene.create();
+    scene.update();
+
+    now.mockReturnValue(100);
+    scene.update();
+    expect(latestPlayerCall('p2')?.[1]).toEqual({ x: 120, y: 360 });
+    const callsBeforeDisconnect = probes.fighterApply.mock.calls.length;
+
+    bridge.setConnected(false);
+    now.mockReturnValue(200);
+    scene.update();
+    bridge.publish(snapshot({
+      tick: 11,
+      players: [
+        player(),
+        player({ playerId: 'p2', position: { x: 300, y: 360 }, velocity: { x: 600, y: 0 } })
+      ]
+    }));
+    scene.update();
+
+    expect(probes.fighterApply).toHaveBeenCalledTimes(callsBeforeDisconnect);
+    expect(scene.getPresentationTargetTick()).toBeNull();
+
+    bridge.setConnected(true);
+    scene.update();
+    expect(probes.fighterApply).toHaveBeenCalledTimes(callsBeforeDisconnect);
+
+    probes.snapshotReceivedAtMs = 210;
+    now.mockReturnValue(210);
+    bridge.publish(snapshot({
+      tick: 12,
+      players: [
+        player(),
+        player({ playerId: 'p2', position: { x: 500, y: 360 }, velocity: { x: 600, y: 0 } })
+      ]
+    }));
+    scene.update();
+
+    expect(latestPlayerCall('p2')?.[1]).toEqual({ x: 500, y: 360 });
+    expect(scene.getPresentationTargetTick()).toBe(12);
+    expect(bridge.publishExtrapolatedFrames).toHaveBeenLastCalledWith(0);
+
+    (scene.events as unknown as FakeEvents).emit(Phaser.Scenes.Events.SHUTDOWN);
+    expect(bridge.connectedUnsubscribes).toBe(1);
   });
 
   it('passes authoritative attack and charge direction state to every fighter view', () => {
