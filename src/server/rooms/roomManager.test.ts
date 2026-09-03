@@ -123,6 +123,7 @@ function spawnFullChargePulse(subject: ReturnType<typeof fixture>): void {
 
 const idleInput = (seq: number): InputFrame => ({
   seq,
+  viewTick: 0,
   moveX: 0,
   moveY: 0,
   aimX: 1,

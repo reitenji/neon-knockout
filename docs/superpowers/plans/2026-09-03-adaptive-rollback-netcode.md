@@ -36,7 +36,7 @@ The result is visible in two ways. First, unit and integration tests prove the f
 - [x] (2026-09-03) Implemented Task 1: shared adaptive policy plus honest WebRTC latest-five RTT jitter publication; focused policy, transport, and room tests pass.
 - [x] (2026-09-03) Implemented Task 2 and committed the monotonic sixteen-snapshot remote presentation timeline.
 - [x] (2026-09-03 21:12 +03:00) Implemented Task 3 bounded local reconciliation, semantic correction telemetry, and timeline-owned rollback-budget delivery.
-- [ ] Implement Task 4 and commit gameplay protocol v2 with required `viewTick`.
+- [x] (2026-09-03 21:42 +03:00) Implemented Task 4 gameplay protocol v2, required `viewTick`, explicit fixture migration, and ArenaScene presentation-target delivery.
 - [ ] Implement Task 5 and commit twelve-frame combat history with conservative melee-only rewind.
 - [ ] Implement Task 6 and commit the deterministic impairment harness and RTT-tier browser acceptance.
 - [ ] Run code review and full verification, restart the LAN service, push the feature branch, fast-forward the public `main`, and verify remote refs.
@@ -57,6 +57,9 @@ The result is visible in two ways. First, unit and integration tests prove the f
 
 - Observation: Preserving every unacknowledged action edge can temporarily require more than twelve stored records during a realistic input burst.
   Evidence: The Task 3 overflow test retains thirteen quick, heavy-transition, and dash edges plus the newest continuous frame while discarding every obsolete movement-only record.
+
+- Observation: Protocol-version fixtures existed beyond the focused shared transport tests, including WebRTC heartbeat/probe and publication expectations.
+  Evidence: Task 4 migrated the `GameplayTransportHub` fixtures to `GAMEPLAY_PROTOCOL_VERSION` while keeping explicit version-1 rejection cases at the shared and hub boundaries.
 
 ## Decision Log
 
@@ -88,9 +91,13 @@ The result is visible in two ways. First, unit and integration tests prove the f
   Rationale: `SnapshotTimeline` owns the adaptive budget, so a structured constructor closure is the narrow truthful dependency and can add presentation target tick in Task 4 without overloading replay telemetry `getRollbackFrames`.
   Date/Author: 2026-09-03 / Task 3 implementation, approved by task owner.
 
+- Decision: Keep `ArenaInput` as the shared keyboard/touch control sampler and attach normalized `viewTick` in `ArenaSession` before same-frame prediction and send.
+  Rationale: The presentation tick belongs to the scene/session boundary, while both input sources must retain identical sampling and transport timing.
+  Date/Author: 2026-09-03 / Task 4 implementation.
+
 ## Outcomes & Retrospective
 
-Tasks 1 through 3 now provide the adaptive policy, monotonic remote timeline, and bounded local reconciliation slice. Task 3 preserves all unacknowledged action edges, caps normal continuous history at twelve and active replay telemetry at two through ten, blends corrections below 160 px, snaps semantic recovery and corrections at or above 160 px, and exposes correction records only through internal bridge/test observer paths. Protocol, server combat rewind, impairment E2E, and live acceptance remain for Tasks 4 through 7.
+Tasks 1 through 4 now provide the adaptive policy, monotonic remote timeline, bounded local reconciliation, and protocol-v2 `viewTick` input slice. `ArenaSession` sends the floored non-negative presentation target, falling back to the newest accepted authoritative tick before the first timeline sample; protocol validation rejects missing, malformed, negative, fractional, and version-1 inputs while accepting future integers for Task 5 to clamp. Server combat rewind, impairment E2E, and live acceptance remain for Tasks 5 through 7.
 
 ## Context and Orientation
 
@@ -659,6 +666,8 @@ At every stopping point, append the exact command you ran and a one-line outcome
 
 If a task requires touching a wide fixture surface, do it in the same task as the interface change that forced it. Do not spread one breaking interface across multiple commits because that leaves the branch in a partially migrated state that a novice cannot safely resume.
 
+Task 4 recovery boundary: all production producers and typed test inputs now carry explicit protocol-v2 `viewTick`; continue Task 5 from this complete wire contract and do not add a version-1 adapter or schema default.
+
 ## Validation and Acceptance
 
 The implementation is accepted only when all of the following are true in the final branch state:
@@ -699,6 +708,10 @@ As work progresses, append short evidence bullets here. Keep each bullet to one 
 - `npm test -- --run src/client/game/phaser/ArenaScene.integration.test.ts` -> RED: `1 failed, 17 passed` because the timeline-owned rollback provider was not passed to `ArenaSession`.
 - `npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts src/client/game/phaser/ArenaScene.integration.test.ts` -> `60 tests passed` after Task 3 implementation.
 - `npm run typecheck` and focused ESLint over the seven Task 3 files -> passed; `git diff --check` -> passed.
+- Task 4 focused RED -> `7 failed, 63 passed`, covering required `viewTick`, version 2, future tick parsing, fallback tick, flooring, and non-negative client clamping.
+- Task 4 focused GREEN -> `5 files / 70 tests passed`; neighboring modified unit fixtures -> `7 files / 186 tests passed`.
+- Task 4 integration/load fixture run -> initial stale Task 1 `setWebRtcMedian` fixture failed; after surgical migration to `setWebRtcNetworkSample(..., 0, ...)`, `2 files / 26 tests passed`.
+- Task 4 full Vitest run -> initial Task 3 provider-shape fixture exposed missing `targetTick`; after explicit migration, `66 files / 647 tests passed`.
 
 ## Interfaces and Dependencies
 
@@ -713,3 +726,5 @@ The shared adaptive policy is the single source of truth for frame-budget math. 
 2026-09-03: Replaced the initial outline with a full ExecPlan that names exact files, interfaces, red-green commands, review gates, restart steps, and publication checks so execution can proceed task by task without prior conversation context.
 
 2026-09-03: Recorded Task 3 completion evidence, the action-edge capacity ruling, and the approved minimal ArenaScene provider extension so the living plan matches the implementation.
+
+2026-09-03: Recorded Task 4 protocol-v2 completion, explicit fixture migration, presentation-target ownership, and the same-slice cleanup of the stale Task 1 integration API fixture.

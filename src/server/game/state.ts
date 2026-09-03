@@ -113,6 +113,7 @@ export type MatchState = {
 export function createEmptyInput(): InputFrame {
   return {
     seq: -1,
+    viewTick: 0,
     moveX: 0,
     moveY: 0,
     aimX: 1,

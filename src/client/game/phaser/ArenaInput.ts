@@ -21,6 +21,8 @@ export type ArenaInputLifecycle = Readonly<{
   onShutdown(listener: () => void): () => void;
 }>;
 
+type SampledArenaInput = Omit<InputFrame, 'viewTick'>;
+
 const INPUT_STEP_MS = 1_000 / GAME.maxInputFramesPerSecond;
 const SCENE_PAUSE_EVENT = 'pause';
 const SCENE_SLEEP_EVENT = 'sleep';
@@ -69,12 +71,14 @@ export class ArenaInput {
     );
   }
 
-  sample(seq: number, nowMs: number): InputFrame | null {
+  sample(seq: number, nowMs: number): SampledArenaInput | null {
     if (nowMs - this.lastSampleAtMs + Number.EPSILON < INPUT_STEP_MS) return null;
     this.lastSampleAtMs = nowMs;
     const movementHeld = this.source.movement();
     const attackHeld = this.source.attack();
-    if (this.suppressHeldUntilRelease && !this.releaseGateIsOpen(movementHeld, attackHeld)) return this.idleFrame(seq);
+    if (this.suppressHeldUntilRelease && !this.releaseGateIsOpen(movementHeld, attackHeld)) {
+      return this.idleFrame(seq);
+    }
     this.suppressHeldUntilRelease = false;
     const pressEdges = this.source.consumePressEdges?.() ?? { quick: false, dash: false };
 
@@ -125,7 +129,7 @@ export class ArenaInput {
     this.source.dispose?.();
   }
 
-  private idleFrame(seq: number): InputFrame {
+  private idleFrame(seq: number): SampledArenaInput {
     return { seq, moveX: 0, moveY: 0, aimX: this.lastAttackFacing.x, aimY: this.lastAttackFacing.y, quick: false, heavy: false, dash: false };
   }
 

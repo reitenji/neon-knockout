@@ -7,7 +7,7 @@ import { advanceCombatTimers, startActions } from './combat.js';
 import { createMatchState, type MatchState, type MutableMatchPlayer } from './state.js';
 
 const input = (seq: number, overrides: Partial<MutableMatchPlayer['latestInput']> = {}) => ({
-  seq, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides
+  seq, viewTick: 0, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides
 });
 
 function createState(): MatchState {

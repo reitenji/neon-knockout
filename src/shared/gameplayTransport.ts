@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { GameEvent, InputFrame, MatchSnapshot } from './model.js';
 
-export const GAMEPLAY_PROTOCOL_VERSION = 1 as const;
+export const GAMEPLAY_PROTOCOL_VERSION = 2 as const;
 export const FAST_CHANNEL_LABEL = 'match-fast';
 export const RELIABLE_CHANNEL_LABEL = 'match-reliable';
 export const CLIENT_MESSAGE_LIMIT_BYTES = 8 * 1024;
@@ -50,6 +50,7 @@ function serializedClientMessageSchema<T extends z.ZodType>(messageSchema: T) {
 export const matchInputSchema = z
   .object({
     seq: finiteNonNegativeIntegerSchema,
+    viewTick: finiteNonNegativeIntegerSchema,
     moveX: finiteAxisSchema,
     moveY: finiteAxisSchema,
     aimX: finiteAxisSchema,
@@ -122,14 +123,14 @@ export type TransportModeNotice = Readonly<{ generationId: string | null; mode: 
 
 export type ClientFastMessage =
   | Readonly<{
-    version: 1;
+    version: 2;
     generationId: string;
     matchEpoch: number;
     kind: 'input';
     payload: InputFrame;
   }>
   | Readonly<{
-    version: 1;
+    version: 2;
     generationId: string;
     kind: 'probe-ack';
     nonce: number;
@@ -137,26 +138,26 @@ export type ClientFastMessage =
 
 export type ServerFastMessage =
   | Readonly<{
-    version: 1;
+    version: 2;
     generationId: string;
     kind: 'snapshot';
     payload: MatchSnapshotPublication;
   }>
   | Readonly<{
-    version: 1;
+    version: 2;
     generationId: string;
     kind: 'probe';
     nonce: number;
   }>;
 
 export type ClientReliableMessage = Readonly<{
-  version: 1;
+  version: 2;
   generationId: string;
   kind: 'heartbeat-ack';
   nonce: number;
 }>;
 
 export type ServerReliableMessage =
-  | Readonly<{ version: 1; generationId: string; kind: 'started'; payload: MatchStartedPublication }>
-  | Readonly<{ version: 1; generationId: string; kind: 'event'; payload: MatchEventPublication }>
-  | Readonly<{ version: 1; generationId: string; kind: 'heartbeat'; nonce: number }>;
+  | Readonly<{ version: 2; generationId: string; kind: 'started'; payload: MatchStartedPublication }>
+  | Readonly<{ version: 2; generationId: string; kind: 'event'; payload: MatchEventPublication }>
+  | Readonly<{ version: 2; generationId: string; kind: 'heartbeat'; nonce: number }>;

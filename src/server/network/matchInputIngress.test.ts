@@ -6,6 +6,7 @@ import { createMatchInputIngress } from './matchInputIngress.js';
 
 const input = (overrides: Partial<InputFrame> = {}): InputFrame => ({
   seq: 0,
+  viewTick: 0,
   moveX: 0,
   moveY: 0,
   aimX: 1,

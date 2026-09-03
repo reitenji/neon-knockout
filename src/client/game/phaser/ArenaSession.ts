@@ -32,9 +32,10 @@ type E2eInputObserver = {
 
 export type ArenaSessionPresentationState = Readonly<{
   rollbackWindowFrames: number;
+  targetTick: number | null;
 }>;
 
-const DEFAULT_PRESENTATION_STATE: ArenaSessionPresentationState = { rollbackWindowFrames: 4 };
+const DEFAULT_PRESENTATION_STATE: ArenaSessionPresentationState = { rollbackWindowFrames: 4, targetTick: null };
 
 function e2eObserver(): E2eInputObserver | null {
   const candidate = (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: unknown })
@@ -99,11 +100,13 @@ export class ArenaSession {
       return this.localPresentation;
     }
     const sampledAtMs = this.now();
+    const targetTick = this.presentationState().targetTick ?? this.latestSnapshot.tick;
+    const viewTick = Math.max(0, Math.floor(targetTick));
     const sampledFrame = this.input.sample(this.inputSequence, sampledAtMs);
     if (!sampledFrame) return this.localPresentation;
     const sequence = this.bridge.reserveInputSequence?.(this.inputSequence) ?? this.inputSequence;
     this.inputSequence = sequence + 1;
-    const frame = sequence === sampledFrame.seq ? sampledFrame : { ...sampledFrame, seq: sequence };
+    const frame = { ...sampledFrame, seq: sequence, viewTick };
     this.localPresentation = this.prediction.predict(
       frame,
       localPlayer,

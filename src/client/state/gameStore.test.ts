@@ -488,7 +488,7 @@ describe('createGameStore', () => {
     client.emit('room:state', roomState({ phase: 'MATCH' }));
     client.emit('match:started', snapshot);
     client.emit('match:event', event);
-    bridge.sendInput({ seq: 1, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false });
+    bridge.sendInput({ seq: 1, viewTick: 0, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false });
     expect(bridge.getSnapshot()).toBe(snapshot);
     expect(snapshotListener).toHaveBeenCalledWith(snapshot);
     expect(eventListener).toHaveBeenCalledWith(event);

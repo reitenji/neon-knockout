@@ -10,7 +10,7 @@ import { forceKnockout, resumePausedMatch, setMatchPaused, setPlayerConnected, s
 import { createMatchState, type AttackRuntime, type MatchState } from './state.js';
 
 const idle = (seq: number, overrides: Partial<InputFrame> = {}): InputFrame => ({
-  seq, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides
+  seq, viewTick: 0, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides
 });
 const seeds = () => [
   { playerId: 'p1', name: 'Ada', accent: 0 as const, chassis: 'RIFT' as const },

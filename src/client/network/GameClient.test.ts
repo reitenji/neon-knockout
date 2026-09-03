@@ -429,7 +429,7 @@ describe('createSocketGameClient', () => {
   it('sends match input fire-and-forget without an acknowledgement callback', () => {
     const client = createSocketGameClient();
     const input: InputFrame = {
-      seq: 4, moveX: 1, moveY: 0, aimX: 0.8, aimY: -0.2, quick: true, heavy: false, dash: true
+      seq: 4, viewTick: 3, moveX: 1, moveY: 0, aimX: 0.8, aimY: -0.2, quick: true, heavy: false, dash: true
     };
     client.sendInput(input);
     expect(gameplayHarness.transport.sendInput).toHaveBeenCalledWith(input);
@@ -441,7 +441,7 @@ describe('createSocketGameClient', () => {
     const client = createSocketGameClient();
     gameplayHarness.transport.sendInput.mockReturnValue(true);
     const value: InputFrame = {
-      seq: 5, moveX: 0, moveY: 1, aimX: -1, aimY: 0, quick: false, heavy: true, dash: false
+      seq: 5, viewTick: 4, moveX: 0, moveY: 1, aimX: -1, aimY: 0, quick: false, heavy: true, dash: false
     };
 
     client.sendInput(value);
@@ -453,7 +453,7 @@ describe('createSocketGameClient', () => {
   it('routes an attack edge replay requested by the gameplay fallback through Socket.IO', () => {
     createSocketGameClient();
     const attackEdge: InputFrame = {
-      seq: 6, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: true, heavy: false, dash: false
+      seq: 6, viewTick: 5, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: true, heavy: false, dash: false
     };
 
     gameplayHarness.options.sendFallbackInput(attackEdge);

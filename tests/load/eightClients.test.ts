@@ -85,6 +85,7 @@ function input(seq: number, clientIndex: number): InputFrame {
   const aim = charging && cycle >= 82 ? steered : cardinal;
   return {
     seq,
+    viewTick: seq,
     moveX: movementActive ? cardinal.x : 0,
     moveY: movementActive ? cardinal.y : 0,
     aimX: aim.x,

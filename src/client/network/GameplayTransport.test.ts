@@ -22,6 +22,7 @@ const SECOND_GENERATION = '22222222-2222-4222-8222-222222222222';
 
 const input = (seq = 1): InputFrame => ({
   seq,
+  viewTick: 0,
   moveX: 1,
   moveY: 0,
   aimX: 0.5,

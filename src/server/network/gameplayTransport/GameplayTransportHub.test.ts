@@ -27,6 +27,7 @@ const UDP_PORT_RANGE = [53100, 53131] as const;
 
 const input: InputFrame = {
   seq: 9,
+  viewTick: 8,
   moveX: 1,
   moveY: 0,
   aimX: 0.6,
@@ -479,6 +480,7 @@ describe('GameplayTransportHub', () => {
 
     peer.receiveFast('{');
     peer.receiveFast('x'.repeat(CLIENT_MESSAGE_LIMIT_BYTES + 1));
+    peer.receiveFast({ ...fastInput(), version: 1 });
     peer.receiveFast({ ...fastInput(), extra: true });
     peer.receiveFast(fastInput(SECOND_GENERATION));
     peer.receiveFast(fastInput(FIRST_GENERATION, 3));
@@ -497,14 +499,14 @@ describe('GameplayTransportHub', () => {
     const heartbeat = JSON.parse(oldPeer.reliableSent.at(-1)!);
     const probe = JSON.parse(oldPeer.fastSent.at(-1)!);
     oldPeer.receiveReliable({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'heartbeat-ack',
       nonce: heartbeat.nonce
     });
     await vi.advanceTimersByTimeAsync(50);
     oldPeer.receiveFast({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'probe-ack',
       nonce: probe.nonce
@@ -564,7 +566,7 @@ describe('GameplayTransportHub', () => {
     hub.publish(snapshotPublication('AB2Z', 2, { ...snapshot, tick: 43 }));
 
     expect(peer.fastSent.map((message) => JSON.parse(message))).toEqual([{
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'snapshot',
       payload: { matchEpoch: 2, eventCursor: 7, snapshot }
@@ -600,13 +602,13 @@ describe('GameplayTransportHub', () => {
     hub.publish(eventPublication());
     expect(peer.reliableSent.map((message) => JSON.parse(message))).toEqual([
       {
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'started',
         payload: { matchEpoch: 2, eventCursor: 7, snapshot }
       },
       {
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'event',
         payload: { matchEpoch: 2, event }
@@ -630,7 +632,7 @@ describe('GameplayTransportHub', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     const heartbeat1 = JSON.parse(peer.reliableSent.at(-1)!);
     peer.receiveReliable({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'heartbeat-ack',
       nonce: heartbeat1.nonce + 1
@@ -638,7 +640,7 @@ describe('GameplayTransportHub', () => {
     await vi.advanceTimersByTimeAsync(1_000);
     const heartbeat2 = JSON.parse(peer.reliableSent.at(-1)!);
     peer.receiveReliable({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'heartbeat-ack',
       nonce: heartbeat2.nonce
@@ -684,21 +686,21 @@ describe('GameplayTransportHub', () => {
     const firstProbe = JSON.parse(peer.fastSent.at(-1)!);
     await advanceServerClock(50);
     peer.receiveFast({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: SECOND_GENERATION,
       kind: 'probe-ack',
       nonce: firstProbe.nonce
     });
     expect(first.networkSamples).toEqual([]);
     peer.receiveReliable({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'heartbeat-ack',
       nonce: firstHeartbeat.nonce
     });
     expect(first.networkSamples).toEqual([]);
     peer.receiveFast({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'probe-ack',
       nonce: firstProbe.nonce
@@ -706,13 +708,13 @@ describe('GameplayTransportHub', () => {
     expect(first.networkSamples).toEqual([{ medianMs: 50, jitterMs: 0, sampledAt: 51_050 }]);
 
     peer.receiveFast({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'probe-ack',
       nonce: firstProbe.nonce
     });
     peer.receiveFast({
-      version: 1,
+      version: GAMEPLAY_PROTOCOL_VERSION,
       generationId: FIRST_GENERATION,
       kind: 'probe-ack',
       nonce: firstProbe.nonce + 1
@@ -725,14 +727,14 @@ describe('GameplayTransportHub', () => {
       const heartbeat = JSON.parse(peer.reliableSent.at(-1)!);
       const probe = JSON.parse(peer.fastSent.at(-1)!);
       peer.receiveReliable({
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'heartbeat-ack',
         nonce: heartbeat.nonce
       });
       await advanceServerClock(delayMs);
       peer.receiveFast({
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'probe-ack',
         nonce: probe.nonce
@@ -762,7 +764,7 @@ describe('GameplayTransportHub', () => {
       await vi.advanceTimersByTimeAsync(1_000);
       const heartbeat = JSON.parse(peer.reliableSent.at(-1)!);
       peer.receiveReliable({
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'heartbeat-ack',
         nonce: heartbeat.nonce
@@ -792,14 +794,14 @@ describe('GameplayTransportHub', () => {
       const heartbeatMessage = JSON.parse(peer.reliableSent.at(-1)!);
       const probeMessage = JSON.parse(peer.fastSent.at(-1)!);
       peer.receiveReliable({
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'heartbeat-ack',
         nonce: heartbeatMessage.nonce
       });
       serverNow += elapsedMs;
       peer.receiveFast({
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'probe-ack',
         nonce: probeMessage.nonce
@@ -843,14 +845,14 @@ describe('GameplayTransportHub', () => {
       const heartbeatMessage = JSON.parse(peer.reliableSent.at(-1)!);
       const probeMessage = JSON.parse(peer.fastSent.at(-1)!);
       peer.receiveReliable({
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'heartbeat-ack',
         nonce: heartbeatMessage.nonce
       });
       serverNow += elapsedMs;
       peer.receiveFast({
-        version: 1,
+        version: GAMEPLAY_PROTOCOL_VERSION,
         generationId: FIRST_GENERATION,
         kind: 'probe-ack',
         nonce: probeMessage.nonce

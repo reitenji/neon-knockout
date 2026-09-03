@@ -27,6 +27,7 @@ describe('shared input boundary protocol', () => {
     expect(
       protocol.matchInputSchema.safeParse({
         seq: 7,
+        viewTick: 6,
         moveX: 1,
         moveY: 0,
         aimX: 0.6,
@@ -39,6 +40,7 @@ describe('shared input boundary protocol', () => {
     expect(
       protocol.matchInputSchema.safeParse({
         seq: 7,
+        viewTick: 6,
         moveX: 1,
         moveY: 0,
         aimX: 0.6,
@@ -52,6 +54,7 @@ describe('shared input boundary protocol', () => {
     expect(
       protocol.matchInputSchema.safeParse({
         seq: 8,
+        viewTick: 6,
         moveX: 1.01,
         moveY: 0,
         aimX: 1,
@@ -64,6 +67,7 @@ describe('shared input boundary protocol', () => {
     expect(
       protocol.matchInputSchema.safeParse({
         seq: 8,
+        viewTick: 6,
         up: true,
         down: false,
         left: false,
@@ -74,6 +78,7 @@ describe('shared input boundary protocol', () => {
     expect(
       protocol.matchInputSchema.safeParse({
         seq: 8,
+        viewTick: 6,
         moveX: Number.NaN,
         moveY: 0,
         aimX: 1,
@@ -86,6 +91,7 @@ describe('shared input boundary protocol', () => {
     expect(
       protocol.matchInputSchema.safeParse({
         seq: 8,
+        viewTick: 6,
         moveX: 0,
         moveY: 0,
         aimX: Number.POSITIVE_INFINITY,
@@ -95,6 +101,28 @@ describe('shared input boundary protocol', () => {
         dash: false
       }).success
     ).toBe(false);
+  });
+
+  it('requires a finite non-negative integer view tick and preserves valid future ticks', () => {
+    const validInput = {
+      seq: 7,
+      viewTick: 50_000,
+      moveX: 1,
+      moveY: 0,
+      aimX: 0.6,
+      aimY: -0.8,
+      quick: true,
+      heavy: false,
+      dash: false
+    };
+
+    expect(protocol.matchInputSchema.parse(validInput)).toEqual(validInput);
+    for (const viewTick of [-1, 2.5, '9', Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(protocol.matchInputSchema.safeParse({ ...validInput, viewTick }).success).toBe(false);
+    }
+    const missingViewTick: Partial<typeof validInput> = { ...validInput };
+    delete missingViewTick.viewTick;
+    expect(protocol.matchInputSchema.safeParse(missingViewTick).success).toBe(false);
   });
 
   it('normalizes valid room codes and rejects invalid codes for join and resume', () => {

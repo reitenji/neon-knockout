@@ -25,6 +25,7 @@ export type Polygon = readonly Vec2[];
 
 export type InputFrame = Readonly<{
   seq: number;
+  viewTick: number;
   moveX: number;
   moveY: number;
   aimX: number;

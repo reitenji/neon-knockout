@@ -27,7 +27,7 @@ function player(overrides: Partial<MatchPlayer> = {}): MatchPlayer {
 }
 
 function frame(seq: number, overrides: Partial<InputFrame> = {}): InputFrame {
-  return { seq, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides };
+  return { seq, viewTick: 0, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides };
 }
 
 function snapshot(tick: number, players: readonly MatchPlayer[]): MatchSnapshot {

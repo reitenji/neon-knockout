@@ -139,7 +139,10 @@ export class ArenaScene extends Phaser.Scene {
       inputController,
       () => performance.now(),
       (snapshot, receivedAtMs) => this.acceptTimelineSnapshot(snapshot, receivedAtMs),
-      () => ({ rollbackWindowFrames: this.timeline.rollbackWindowFrames() })
+      () => ({
+        rollbackWindowFrames: this.timeline.rollbackWindowFrames(),
+        targetTick: this.presentationTargetTick
+      })
     );
     this.session.start();
     this.unsubscribers.push(

@@ -322,7 +322,7 @@ describe('ArenaScene live presentation integration', () => {
     scene.update();
 
     expect(scopedBridge.getPresentationDelayMs?.()).toBeCloseTo(66.6666666667, 8);
-    expect(probes.sessionPresentationState?.()).toEqual({ rollbackWindowFrames: 10 });
+    expect(probes.sessionPresentationState?.()).toEqual({ rollbackWindowFrames: 10, targetTick: 10 });
     expect(scene.getPresentationTargetTick()).toBe(10);
     expect(bridge.publishBufferUnderrun).toHaveBeenLastCalledWith(false);
     expect(bridge.publishExtrapolatedFrames).toHaveBeenLastCalledWith(0);

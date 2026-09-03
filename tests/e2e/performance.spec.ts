@@ -339,6 +339,7 @@ function companionInput(seq: number, index: number): InputFrame {
   const moving = cycle < 8 || (cycle >= 90 && cycle < 98);
   return {
     seq,
+    viewTick: seq,
     moveX: moving ? facing.x : 0,
     moveY: moving ? facing.y : 0,
     aimX: facing.x,
@@ -408,6 +409,7 @@ async function spawnLivePulseThroughMatchInput(
   const heldSequence = authoritativePlayer(game, code, playerId).lastProcessedInputSeq + 1;
   client.emit('match:input', {
     seq: heldSequence,
+    viewTick: 0,
     moveX: 0,
     moveY: 0,
     aimX: 1,
@@ -421,6 +423,7 @@ async function spawnLivePulseThroughMatchInput(
 
   client.emit('match:input', {
     seq: heldSequence + 1,
+    viewTick: 0,
     moveX: 0,
     moveY: 0,
     aimX: 1,
@@ -711,14 +714,14 @@ test('holds browser frame time below 50 ms through four simultaneous hit-driven 
           elapsedMs: 0,
           inputs: combatants.map((player) => ({
             playerId: player.playerId,
-            input: { seq: 0, moveX: 0, moveY: 0, aimX: player.facing.x, aimY: player.facing.y, quick: player.attacking, heavy: false, dash: false }
+            input: { seq: 0, viewTick: 0, moveX: 0, moveY: 0, aimX: player.facing.x, aimY: player.facing.y, quick: player.attacking, heavy: false, dash: false }
           }))
         },
         {
           elapsedMs: 70,
           inputs: combatants.map((player) => ({
             playerId: player.playerId,
-            input: { seq: 1, moveX: 0, moveY: 0, aimX: player.facing.x, aimY: player.facing.y, quick: false, heavy: false, dash: false }
+            input: { seq: 1, viewTick: 0, moveX: 0, moveY: 0, aimX: player.facing.x, aimY: player.facing.y, quick: false, heavy: false, dash: false }
           }))
         },
         { elapsedMs: 1_000 / GAME.tickRate },

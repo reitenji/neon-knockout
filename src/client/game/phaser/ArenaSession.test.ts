@@ -218,7 +218,7 @@ describe('ArenaSession', () => {
       new ArenaInput(source),
       () => now,
       () => undefined,
-      () => ({ rollbackWindowFrames: 2 })
+      () => ({ rollbackWindowFrames: 2, targetTick: null })
     );
     session.start();
 
@@ -251,6 +251,47 @@ describe('ArenaSession', () => {
       correctionDistancePx: 0,
       hardSnap: false
     });
+  });
+
+  it('uses the newest accepted authoritative tick before a presentation target has been sampled', () => {
+    const bridge = new Bridge();
+    bridge.current = { ...snapshot(), tick: 37 };
+    const session = new ArenaSession(
+      bridge,
+      'p-local',
+      new ArenaInput(controls()),
+      () => 0,
+      () => undefined,
+      () => ({ rollbackWindowFrames: 4, targetTick: null })
+    );
+    session.start();
+
+    session.step(16);
+
+    expect(bridge.sent).toHaveLength(1);
+    expect(bridge.sent[0]?.viewTick).toBe(37);
+  });
+
+  it('sends the clamped integer presentation target in the same sampled input frame', () => {
+    const bridge = new Bridge();
+    let targetTick = 12.9;
+    let now = 0;
+    const session = new ArenaSession(
+      bridge,
+      'p-local',
+      new ArenaInput(controls()),
+      () => now,
+      () => undefined,
+      () => ({ rollbackWindowFrames: 4, targetTick })
+    );
+    session.start();
+
+    session.step(16);
+    targetTick = -1.2;
+    now = 17;
+    session.step(16);
+
+    expect(bridge.sent.map((frame) => frame.viewTick)).toEqual([12, 0]);
   });
 
   it('subscribes once, disposes connection and snapshot listeners, and never sends after disposal', () => {

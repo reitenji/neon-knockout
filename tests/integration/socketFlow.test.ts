@@ -237,6 +237,7 @@ async function connectClient(origin: string): Promise<GameClient> {
 
 const input = (seq: number, overrides: Partial<InputFrame> = {}): InputFrame => ({
   seq,
+  viewTick: 0,
   moveX: 0,
   moveY: 0,
   aimX: 1,
@@ -709,7 +710,7 @@ describe('Socket.IO FFA game server flow', () => {
     const oldPeer = await negotiateAndActivate(match.guestClient);
     const guestConnectionId = match.guestClient.id;
     if (!guestConnectionId) throw new Error('Expected the guest Socket.IO connection id.');
-    server.rooms.setWebRtcMedian(guestConnectionId, 33, performance.now());
+    server.rooms.setWebRtcNetworkSample(guestConnectionId, 33, 0, performance.now());
     server.rooms.advance(STEP_MS);
     expect(snapshot(match.roomCode).network[match.guest.playerId]).toMatchObject({
       transport: 'webrtc', currentMs: 33, medianMs: 33
