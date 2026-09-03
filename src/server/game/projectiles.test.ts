@@ -27,6 +27,7 @@ function heavy(attackId: number, chargeMs: number = GAME.heavyMaxChargeMs): Atta
   const profile = profileForAttack('HEAVY');
   return {
     attackId,
+    viewTick: 0,
     kind: 'HEAVY',
     profileId: profile.id,
     phase: 'ACTIVE',

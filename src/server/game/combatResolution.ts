@@ -11,6 +11,7 @@ import type { AttackKind, GameEvent } from '../../shared/model.js';
 import { clamp, normalize, subtract } from './geometry.js';
 import type { AttackRuntime, MatchState, MutableMatchPlayer } from './state.js';
 import { removePulse } from './projectiles.js';
+import type { CombatFrameHistory } from './CombatFrameHistory.js';
 
 export type ActiveAttackShape = Readonly<{
   playerId: string;
@@ -329,7 +330,8 @@ function pulseTravelParameter(
 
 export function resolveSurvivingContacts(
   state: MatchState,
-  shapes: readonly ActiveAttackShape[]
+  shapes: readonly ActiveAttackShape[],
+  history?: CombatFrameHistory
 ): readonly GameEvent[] {
   const dodges: DodgeEventData[] = [];
   const hits: HitEventData[] = [];
@@ -341,26 +343,43 @@ export function resolveSurvivingContacts(
     const { player: attacker, attack } = runtime;
     const profile = profileForAttack(attack.kind);
     const effects = attackEffects(profile, attack);
+    const historicalFrame = history?.get(attack.viewTick);
     const targets = Object.values(state.players)
-      .filter((target) =>
-        target.playerId !== attacker.playerId &&
-        activePlayer(target) &&
-        target.protectionRemainingMs <= 0 &&
-        !attack.resolvedPlayerIds.has(target.playerId) &&
-        !attack.hitPlayerIds.has(target.playerId) &&
-        capsuleIntersectsCircle(shape.capsule, {
+      .map((target) => {
+        if (target.playerId === attacker.playerId ||
+          !activePlayer(target) ||
+          target.protectionRemainingMs > 0 ||
+          attack.resolvedPlayerIds.has(target.playerId) ||
+          attack.hitPlayerIds.has(target.playerId)) {
+          return null;
+        }
+        const currentCircle = {
           center: target.position,
           radius: GAME.collisionRadius
-        }))
-      .sort((left, right) => compareStableIds(left.playerId, right.playerId));
+        };
+        if (capsuleIntersectsCircle(shape.capsule, currentCircle)) {
+          return { target, circle: currentCircle, currentContact: true };
+        }
+        const historical = historicalFrame?.players[target.playerId];
+        if (!historical || !historical.connected || historical.respawning || historical.protected ||
+          historical.dashInvulnerable || target.dashInvulnerabilityRemainingMs > 0) {
+          return null;
+        }
+        const historicalCircle = {
+          center: historical.position,
+          radius: historical.collisionRadius
+        };
+        return capsuleIntersectsCircle(shape.capsule, historicalCircle)
+          ? { target, circle: historicalCircle, currentContact: false }
+          : null;
+      })
+      .filter((contact): contact is NonNullable<typeof contact> => contact !== null)
+      .sort((left, right) => compareStableIds(left.target.playerId, right.target.playerId));
 
-    for (const target of targets) {
+    for (const { target, circle, currentContact } of targets) {
       attack.resolvedPlayerIds.add(target.playerId);
-      const impactPosition = nearestCircleBoundaryPointToCapsule(shape.capsule, {
-        center: target.position,
-        radius: GAME.collisionRadius
-      });
-      if (target.dashInvulnerabilityRemainingMs > 0) {
+      const impactPosition = nearestCircleBoundaryPointToCapsule(shape.capsule, circle);
+      if (currentContact && target.dashInvulnerabilityRemainingMs > 0) {
         applyPerfectDodge(target, {
           type: 'PERFECT_DODGE',
           playerId: target.playerId,
@@ -454,10 +473,11 @@ export function resolveSurvivingContacts(
 
 export function resolveMeleeInteractions(
   state: MatchState,
-  shapes: readonly ActiveAttackShape[]
+  shapes: readonly ActiveAttackShape[],
+  history?: CombatFrameHistory
 ): readonly GameEvent[] {
   return [
     ...resolveClashesAndPulseBreaks(state, shapes),
-    ...resolveSurvivingContacts(state, shapes)
+    ...resolveSurvivingContacts(state, shapes, history)
   ];
 }

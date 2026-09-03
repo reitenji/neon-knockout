@@ -14,6 +14,7 @@ function beginAttack(state: MatchState, player: MutableMatchPlayer, kind: Attack
   const profile = profileForAttack(kind);
   player.attack = {
     attackId: state.nextAttackId++,
+    viewTick: player.latestInput.viewTick,
     kind,
     profileId: profile.id,
     phase: 'WINDUP',

@@ -14,6 +14,7 @@ import { clamp, isKnockedOut } from './geometry.js';
 import { advancePlayers, chooseSafestSpawn, platformAt, separateActivePlayers } from './movement.js';
 import { advancePulses, clearPulses, spawnNeonPulse } from './projectiles.js';
 import { createEmptyInput, type MatchState, type MutableMatchPlayer } from './state.js';
+import type { CombatFrameHistory } from './CombatFrameHistory.js';
 
 const compareStableIds = (left: string, right: string): number => left < right ? -1 : left > right ? 1 : 0;
 
@@ -248,7 +249,8 @@ function evaluateResult(state: MatchState): readonly GameEvent[] {
 export function stepMatch(
   state: MatchState,
   inputs: ReadonlyMap<string, InputFrame>,
-  stepMs: number
+  stepMs: number,
+  combatHistory?: CombatFrameHistory
 ): readonly GameEvent[] {
   if (state.phase === 'FINISHED') return [];
   if (state.phase === 'PAUSED') {
@@ -274,7 +276,7 @@ export function stepMatch(
   advancePulses(state, stepMs);
   const shapes = buildActiveAttackShapes(state, combatStep.activeSlices);
   events.push(...resolveClashesAndPulseBreaks(state, shapes));
-  events.push(...resolveSurvivingContacts(state, shapes));
+  events.push(...resolveSurvivingContacts(state, shapes, combatHistory));
   const knockoutEvents = resolveBoundaries(state);
   events.push(...knockoutEvents);
   advanceRespawns(state, stepMs, events, knockoutEvents);

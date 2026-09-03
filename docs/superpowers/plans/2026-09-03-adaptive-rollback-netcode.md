@@ -37,7 +37,7 @@ The result is visible in two ways. First, unit and integration tests prove the f
 - [x] (2026-09-03) Implemented Task 2 and committed the monotonic sixteen-snapshot remote presentation timeline.
 - [x] (2026-09-03 21:12 +03:00) Implemented Task 3 bounded local reconciliation, semantic correction telemetry, and timeline-owned rollback-budget delivery.
 - [x] (2026-09-03 21:42 +03:00) Implemented Task 4 gameplay protocol v2, required `viewTick`, explicit fixture migration, and ArenaScene presentation-target delivery.
-- [ ] Implement Task 5 and commit twelve-frame combat history with conservative melee-only rewind.
+- [x] (2026-09-03 22:11 +03:00) Implemented Task 5 twelve-frame combat history, server-owned `viewTick` bounds, and conservative melee-only rewind.
 - [ ] Implement Task 6 and commit the deterministic impairment harness and RTT-tier browser acceptance.
 - [ ] Run code review and full verification, restart the LAN service, push the feature branch, fast-forward the public `main`, and verify remote refs.
 
@@ -60,6 +60,9 @@ The result is visible in two ways. First, unit and integration tests prove the f
 
 - Observation: Protocol-version fixtures existed beyond the focused shared transport tests, including WebRTC heartbeat/probe and publication expectations.
   Evidence: Task 4 migrated the `GameplayTransportHub` fixtures to `GAMEPLAY_PROTOCOL_VERSION` while keeping explicit version-1 rejection cases at the shared and hub boundaries.
+
+- Observation: `AttackRuntime` fixtures also existed in projectile and shared-protocol tests outside Task 5's focused file list.
+  Evidence: The required `viewTick` field exposed those typed fixtures during the two-project TypeScript gate; both received only the explicit neutral test tick.
 
 ## Decision Log
 
@@ -95,9 +98,17 @@ The result is visible in two ways. First, unit and integration tests prove the f
   Rationale: The presentation tick belongs to the scene/session boundary, while both input sources must retain identical sampling and transport timing.
   Date/Author: 2026-09-03 / Task 4 implementation.
 
+- Decision: Export one stateless adaptive-budget target function and use it for both client policy and server rewind admission.
+  Rationale: The server must not drift from the client's approved RTT/jitter frame formula; server compensation supplies zero arrival jitter and uses the neutral four-frame fallback when telemetry is stale.
+  Date/Author: 2026-09-03 / Task 5 implementation.
+
+- Decision: Evaluate current-pose melee contact before historical contact and permit history to create contact only when both current and historical eligibility pass.
+  Rationale: Existing authoritative hits and perfect dodges remain unchanged, while a rewind-created hit cannot bypass connection, respawn, protection, or dash invulnerability at either pose.
+  Date/Author: 2026-09-03 / Task 5 implementation.
+
 ## Outcomes & Retrospective
 
-Tasks 1 through 4 now provide the adaptive policy, monotonic remote timeline, bounded local reconciliation, and protocol-v2 `viewTick` input slice. `ArenaSession` sends the floored non-negative presentation target, falling back to the newest accepted authoritative tick before the first timeline sample; protocol validation rejects missing, malformed, negative, fractional, and version-1 inputs while accepting future integers for Task 5 to clamp. Server combat rewind, impairment E2E, and live acceptance remain for Tasks 5 through 7.
+Tasks 1 through 5 now provide the adaptive policy, monotonic remote timeline, bounded local reconciliation, protocol-v2 `viewTick`, and conservative server combat rewind. Every active room retains twelve immutable collision/eligibility frames; input admission constrains the claimed presentation tick with fresh server-owned RTT/jitter or the neutral four-frame fallback; attacks copy that bounded tick and may use only the historical target circle after current contact misses. Current clash, pulse, knockout, score, and result behavior remains authoritative and unrevised. Deterministic impairment E2E and live acceptance remain for Tasks 6 and 7.
 
 ## Context and Orientation
 
@@ -461,11 +472,11 @@ At the end of this task, `src/server/game/netcodeCompensation.ts` must export:
       historyOldestTick: number | null;
     }>): number
 
-- [ ] Step 1: Write failing unit tests for `CombatFrameHistory` and `clampClaimedViewTick`.
+- [x] Step 1: Write failing unit tests for `CombatFrameHistory` and `clampClaimedViewTick`.
 
   Cover capacity twelve, immutable stored frames, exact lookup, oldest and newest lookup after wraparound, stale-neutral four-frame clamp, and future-claim clamp to current tick.
 
-- [ ] Step 2: Run the focused new tests and confirm red.
+- [x] Step 2: Run the focused new tests and confirm red.
 
   Run:
 
@@ -473,15 +484,15 @@ At the end of this task, `src/server/game/netcodeCompensation.ts` must export:
 
   Expected red signal: missing modules or failing clamp behavior.
 
-- [ ] Step 3: Implement history capture and tick clamping.
+- [x] Step 3: Implement history capture and tick clamping.
 
   `CombatFrameHistory.capture(state)` should snapshot only the data needed for melee target eligibility and collision. Use a fixed twelve-entry circular buffer. `clampClaimedViewTick` must derive the legal rollback span from fresh `medianRttMs` and `jitterMs` using the same spec formula as the shared policy, fall back to four frames when stale, then clamp into `[currentTick - rollbackFrames, currentTick]` and finally into the retained-history window.
 
-- [ ] Step 4: Add failing combat-resolution and simulation tests.
+- [x] Step 4: Add failing combat-resolution and simulation tests.
 
   Add cases for in-window historical contact hitting exactly once, out-of-window claim failing to extend history, current or historical protection blocking, current or historical dash invulnerability blocking, respawn or disconnect blocking, future claim clamping, simultaneous legal hits both landing once, and unchanged clash, pulse, knockout, score, and result semantics.
 
-- [ ] Step 5: Run the focused combat tests and confirm red.
+- [x] Step 5: Run the focused combat tests and confirm red.
 
   Run:
 
@@ -489,11 +500,11 @@ At the end of this task, `src/server/game/netcodeCompensation.ts` must export:
 
   Expected red signal: missing history, missing `viewTick`, or current-only contact logic.
 
-- [ ] Step 6: Implement conservative melee-only rewind.
+- [x] Step 6: Implement conservative melee-only rewind.
 
   In `combat.ts`, bind the `viewTick` from the input that starts the attack. In `roomManager.ts`, own a `CombatFrameHistory` per active room, clear it on match start, lobby return, result completion, room deletion, and any match-epoch replacement, and capture one frame per authoritative tick. In `combatResolution.ts`, keep attacker geometry and clashes on the current authoritative tick, but allow the melee target-circle contact check to use the target's historical position if the attack's bounded tick points to a retained frame. Even if the historical position overlaps, reject the hit if either current or historical state says the target is disconnected, respawning, protected, or dash-invulnerable. Apply the resulting hit exactly once to the current authoritative state. Do not route pulses through history.
 
-- [ ] Step 7: Rerun the focused tests and commit the green slice.
+- [x] Step 7: Rerun the focused tests and commit the green slice.
 
   Run:
 
@@ -668,6 +679,8 @@ If a task requires touching a wide fixture surface, do it in the same task as th
 
 Task 4 recovery boundary: all production producers and typed test inputs now carry explicit protocol-v2 `viewTick`; continue Task 5 from this complete wire contract and do not add a version-1 adapter or schema default.
 
+Task 5 recovery boundary: active rooms now own a twelve-frame collision/eligibility history and input admission stores only a server-bounded `viewTick`. Continue Task 6 without widening the HUD or applying history to attacker geometry, clashes, pulses, ring-outs, scores, or results.
+
 ## Validation and Acceptance
 
 The implementation is accepted only when all of the following are true in the final branch state:
@@ -712,6 +725,11 @@ As work progresses, append short evidence bullets here. Keep each bullet to one 
 - Task 4 focused GREEN -> `5 files / 70 tests passed`; neighboring modified unit fixtures -> `7 files / 186 tests passed`.
 - Task 4 integration/load fixture run -> initial stale Task 1 `setWebRtcMedian` fixture failed; after surgical migration to `setWebRtcNetworkSample(..., 0, ...)`, `2 files / 26 tests passed`.
 - Task 4 full Vitest run -> initial Task 3 provider-shape fixture exposed missing `targetTick`; after explicit migration, `66 files / 647 tests passed`.
+- Task 5 history/compensation RED -> `2 suites failed` because both new modules were absent; the shared formula RED then failed `1 of 8` tests because the stateless export did not exist.
+- Task 5 combat/simulation RED -> `3 failed, 70 passed`, proving retained historical contacts and attack tick binding were missing; room integration RED -> `2 failed, 29 passed`, proving history ownership and admission clamping were missing.
+- `npm test -- --run src/server/game/CombatFrameHistory.test.ts src/server/game/netcodeCompensation.test.ts src/server/game/combatResolution.test.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.test.ts src/shared/netcodePolicy.test.ts` -> `6 files / 118 tests passed`.
+- Task 5 neighboring server/shared run -> `12 files / 166 tests passed`; full Vitest -> `68 files / 666 tests passed`.
+- Task 5 `npm run typecheck`, focused ESLint over all changed production and fixture files, `git diff --check`, and `git show --check` -> passed.
 
 ## Interfaces and Dependencies
 
@@ -728,3 +746,5 @@ The shared adaptive policy is the single source of truth for frame-budget math. 
 2026-09-03: Recorded Task 3 completion evidence, the action-edge capacity ruling, and the approved minimal ArenaScene provider extension so the living plan matches the implementation.
 
 2026-09-03: Recorded Task 4 protocol-v2 completion, explicit fixture migration, presentation-target ownership, and the same-slice cleanup of the stale Task 1 integration API fixture.
+
+2026-09-03: Recorded Task 5 completion, shared client/server budget calculation, twelve-frame room history, current-contact-first conservative melee rewind, lifecycle resets, and complete red-green verification evidence.

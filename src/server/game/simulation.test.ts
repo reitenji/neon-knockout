@@ -8,6 +8,7 @@ import { advanceCombatTimers } from './combat.js';
 import { spawnNeonPulse } from './projectiles.js';
 import { forceKnockout, resumePausedMatch, setMatchPaused, setPlayerConnected, snapshotMatch, stepMatch } from './simulation.js';
 import { createMatchState, type AttackRuntime, type MatchState } from './state.js';
+import { CombatFrameHistory } from './CombatFrameHistory.js';
 
 const idle = (seq: number, overrides: Partial<InputFrame> = {}): InputFrame => ({
   seq, viewTick: 0, moveX: 0, moveY: 0, aimX: 1, aimY: 0, quick: false, heavy: false, dash: false, ...overrides
@@ -32,6 +33,7 @@ function activeAttack(
   const profile = profileForAttack(kind);
   const attack: AttackRuntime = {
     attackId,
+    viewTick: state.tick,
     kind,
     profileId: profile.id,
     phase: 'ACTIVE',
@@ -48,6 +50,26 @@ function activeAttack(
 }
 
 describe('authoritative match simulation', () => {
+  it('binds input viewTick to the attack and resolves its retained target pose through simulation', () => {
+    const state = regulationState();
+    state.players.p1.position = { x: 600, y: 360 };
+    state.players.p2.position = { x: 650, y: 360 };
+    const history = new CombatFrameHistory();
+    history.capture(state);
+    state.players.p2.position = { x: 900, y: 360 };
+
+    expect(stepMatch(state, new Map([['p1', idle(0, { quick: true, viewTick: 0 })]]), 0, history)).toEqual([]);
+    expect(state.players.p1.attack?.viewTick).toBe(0);
+    const events = stepMatch(
+      state,
+      new Map([['p1', idle(1, { viewTick: 1 })]]),
+      GAME.quickCombo[0].windupMs + GAME.quickCombo[0].activeMs,
+      history
+    );
+
+    expect(events).toEqual([expect.objectContaining({ type: 'HIT', attackerId: 'p1', targetId: 'p2' })]);
+  });
+
   it('snapshots scores as a record and connected players in stable order', () => {
     const snapshot = snapshotMatch(createMatchState(seeds().reverse(), 0, DEFAULT_ROOM_SETTINGS));
     expect(snapshot).toMatchObject({ tick: 0, phase: 'COUNTDOWN', remainingMs: GAME.countdownMs, scores: { p1: 0, p2: 0 } });

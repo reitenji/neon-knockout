@@ -16,6 +16,7 @@ import { advanceCombatTimers, startActions } from './combat.js';
 import { advancePulses, spawnNeonPulse } from './projectiles.js';
 import { snapshotMatch } from './simulation.js';
 import { createMatchState, type AttackRuntime, type MatchState } from './state.js';
+import { CombatFrameHistory } from './CombatFrameHistory.js';
 
 function createState(): MatchState {
   const state = createMatchState([
@@ -43,6 +44,7 @@ function attack(
   const profile = profileForAttack(kind);
   const runtime: AttackRuntime = {
     attackId,
+    viewTick: state.tick,
     kind,
     profileId: profile.id,
     phase: 'ACTIVE',
@@ -56,6 +58,13 @@ function attack(
   };
   state.players[playerId].attack = runtime;
   return runtime;
+}
+
+function capturedHistory(state: MatchState, tick: number): CombatFrameHistory {
+  state.tick = tick;
+  const history = new CombatFrameHistory();
+  history.capture(state);
+  return history;
 }
 
 function shape(
@@ -74,6 +83,123 @@ function shape(
 }
 
 describe('shared-shape melee resolution', () => {
+  it('uses an eligible retained target pose only after current-pose contact misses, and resolves it once', () => {
+    const state = createState();
+    const history = capturedHistory(state, 6);
+    state.tick = 10;
+    state.players.p2.position = { x: 900, y: 360 };
+    const runtime = attack(state, 'p1', 1, 'QUICK_1');
+    runtime.viewTick = 6;
+    const sweep = shape('p1', runtime, { x: 600, y: 360 }, { x: 640, y: 360 });
+
+    expect(resolveSurvivingContacts(state, [sweep], history)).toEqual([
+      expect.objectContaining({
+        type: 'HIT',
+        attackerId: 'p1',
+        targetId: 'p2',
+        impactPosition: { x: 626, y: 360 }
+      })
+    ]);
+    expect(resolveSurvivingContacts(state, [sweep], history)).toEqual([]);
+    expect(runtime.hitPlayerIds).toEqual(new Set(['p2']));
+  });
+
+  it('does not extend contact to a claimed tick that has fallen out of retained history', () => {
+    const state = createState();
+    const history = capturedHistory(state, 1);
+    state.players.p2.position = { x: 900, y: 360 };
+    for (let tick = 2; tick <= 13; tick += 1) {
+      state.tick = tick;
+      history.capture(state);
+    }
+    const runtime = attack(state, 'p1', 1, 'QUICK_1');
+    runtime.viewTick = 1;
+
+    expect(resolveSurvivingContacts(state, [
+      shape('p1', runtime, { x: 620, y: 340 }, { x: 660, y: 380 })
+    ], history)).toEqual([]);
+    expect(state.players.p2.overload).toBe(0);
+  });
+
+  it.each([
+    ['protection', (state: MatchState, active: boolean) => { state.players.p2.protectionRemainingMs = active ? 1 : 0; }],
+    ['dash invulnerability', (state: MatchState, active: boolean) => {
+      state.players.p2.dashInvulnerabilityRemainingMs = active ? 1 : 0;
+    }],
+    ['respawn', (state: MatchState, active: boolean) => { state.players.p2.respawnRemainingMs = active ? 1 : 0; }],
+    ['disconnect', (state: MatchState, active: boolean) => { state.players.p2.connected = !active; }]
+  ])('blocks rewind-created contact when %s exists in either current or historical state', (_name, setIneligible) => {
+    for (const side of ['historical', 'current'] as const) {
+      const state = createState();
+      if (side === 'historical') setIneligible(state, true);
+      const history = capturedHistory(state, 6);
+      setIneligible(state, side === 'current');
+      state.tick = 10;
+      state.players.p2.position = { x: 900, y: 360 };
+      const runtime = attack(state, 'p1', 1, 'QUICK_1');
+      runtime.viewTick = 6;
+
+      expect(resolveSurvivingContacts(state, [
+        shape('p1', runtime, { x: 620, y: 340 }, { x: 660, y: 380 })
+      ], history), side).toEqual([]);
+      expect(state.players.p2.overload, side).toBe(0);
+    }
+  });
+
+  it('keeps an eligible current-pose hit authoritative even when the historical pose was protected', () => {
+    const state = createState();
+    state.players.p2.protectionRemainingMs = 1;
+    const history = capturedHistory(state, 6);
+    state.players.p2.protectionRemainingMs = 0;
+    state.tick = 10;
+    const runtime = attack(state, 'p1', 1, 'QUICK_1');
+    runtime.viewTick = 6;
+
+    expect(resolveSurvivingContacts(state, [
+      shape('p1', runtime, { x: 620, y: 340 }, { x: 660, y: 380 })
+    ], history)).toEqual([expect.objectContaining({ type: 'HIT', targetId: 'p2' })]);
+  });
+
+  it('allows simultaneous rewind-created melee hits to land once each', () => {
+    const state = createState();
+    const history = capturedHistory(state, 6);
+    state.tick = 10;
+    state.players.p1.position = { x: 400, y: 360 };
+    state.players.p2.position = { x: 900, y: 360 };
+    const left = attack(state, 'p1', 1, 'QUICK_1');
+    const right = attack(state, 'p2', 2, 'QUICK_1', { x: -1, y: 0 });
+    left.viewTick = 6;
+    right.viewTick = 6;
+
+    const events = resolveSurvivingContacts(state, [
+      shape('p1', left, { x: 620, y: 340 }, { x: 660, y: 380 }),
+      shape('p2', right, { x: 600, y: 340 }, { x: 560, y: 380 })
+    ], history);
+
+    expect(events).toEqual([
+      expect.objectContaining({ type: 'HIT', attackerId: 'p1', targetId: 'p2' }),
+      expect.objectContaining({ type: 'HIT', attackerId: 'p2', targetId: 'p1' })
+    ]);
+    expect(left.hitPlayerIds).toEqual(new Set(['p2']));
+    expect(right.hitPlayerIds).toEqual(new Set(['p1']));
+  });
+
+  it('never uses combat history for neon pulse contact', () => {
+    const state = createState();
+    const history = capturedHistory(state, 6);
+    state.tick = 10;
+    state.players.p2.position = { x: 900, y: 360 };
+    state.players.p3.position = { x: 1_000, y: 360 };
+    const origin = attack(state, 'p1', 1, 'HEAVY');
+    origin.viewTick = 6;
+    const pulse = spawnNeonPulse(state, state.players.p1, origin)!.pulse;
+    pulse.previousPosition = { x: 600, y: 360 };
+    pulse.position = { x: 700, y: 360 };
+
+    expect(resolveSurvivingContacts(state, [], history)).toEqual([]);
+    expect(state.pulses).toHaveProperty('1');
+  });
+
   it('rejects an associated capsule on the next tick even while the same attack remains live', () => {
     const state = createState();
     state.players.p1.position = { x: 600, y: 360 };

@@ -134,6 +134,69 @@ const idleInput = (seq: number): InputFrame => ({
 });
 
 describe('RoomManager FFA lifecycle', () => {
+  it('owns a twelve-tick combat history per match and clears it across result, lobby, and epoch replacement', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject);
+
+    expect(subject.manager.debugRoom(roomCode)).toMatchObject({
+      historyOldestTick: 0,
+      historyLatestTick: 0
+    });
+    advanceCountdown(subject);
+    expect(subject.manager.debugRoom(roomCode)).toMatchObject({
+      historyOldestTick: 169,
+      historyLatestTick: 180
+    });
+
+    forceTargetResult(
+      subject,
+      roomCode,
+      players[0].playerId,
+      players[1].playerId,
+      DEFAULT_ROOM_SETTINGS.knockoutTarget
+    );
+    expect(subject.manager.debugRoom(roomCode)).toMatchObject({
+      phase: 'RESULT',
+      historyOldestTick: null,
+      historyLatestTick: null
+    });
+
+    subject.manager.returnToLobby('c-1');
+    expect(subject.manager.debugRoom(roomCode)).toMatchObject({
+      phase: 'LOBBY',
+      historyOldestTick: null,
+      historyLatestTick: null
+    });
+    subject.manager.setReady('c-1', true);
+    subject.manager.setReady('c-2', true);
+    subject.manager.startMatch('c-1');
+    expect(subject.manager.debugRoom(roomCode)).toMatchObject({
+      historyOldestTick: 0,
+      historyLatestTick: 0
+    });
+  });
+
+  it('clamps admitted view ticks with stale-neutral, fresh-network, history, and future bounds', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject);
+    const hostId = players[0].playerId;
+    advanceCountdown(subject);
+
+    subject.manager.applyInput('c-1', { ...idleInput(0), viewTick: 0 });
+    subject.manager.advance(17);
+    expect(subject.manager.debugRoom(roomCode)?.playerViewTicks?.[hostId]).toBe(176);
+
+    subject.manager.setTransport('c-1', 'webrtc');
+    subject.manager.setWebRtcNetworkSample('c-1', 100, 20, subject.clock.now());
+    subject.manager.applyInput('c-1', { ...idleInput(1), viewTick: 0 });
+    subject.manager.advance(17);
+    expect(subject.manager.debugRoom(roomCode)?.playerViewTicks?.[hostId]).toBe(172);
+
+    subject.manager.applyInput('c-1', { ...idleInput(2), viewTick: 999 });
+    subject.manager.advance(17);
+    expect(subject.manager.debugRoom(roomCode)?.playerViewTicks?.[hostId]).toBe(182);
+  });
+
   it('retries room-code collisions and assigns the lowest unused accent with cycling chassis defaults', () => {
     const subject = fixture();
     subject.bytes.queue(4, [0, 0, 0, 0], [0, 0, 0, 0], [1, 1, 1, 1]);

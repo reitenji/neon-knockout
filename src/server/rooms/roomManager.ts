@@ -32,6 +32,8 @@ import {
   snapshotMatch,
   stepMatch
 } from '../game/simulation.js';
+import { CombatFrameHistory } from '../game/CombatFrameHistory.js';
+import { clampClaimedViewTick } from '../game/netcodeCompensation.js';
 import { createEmptyInput, createMatchState, createPlayerStats, type MatchState } from '../game/state.js';
 import { clearPulses, removePulsesOwnedBy } from '../game/projectiles.js';
 import { DomainError } from './domainError.js';
@@ -86,6 +88,7 @@ type Room = {
   match: MatchState | null;
   resultPlayers: Map<string, ResultPlayerRecord> | null;
   network: Map<string, PlayerNetworkRuntime>;
+  combatHistory: CombatFrameHistory | null;
   inputs: Map<string, InputFrame>;
   accumulatorMs: number;
   snapshotAccumulatorMs: number;
@@ -139,6 +142,9 @@ export type DebugRoom = Readonly<{
   playerIds: readonly string[];
   tick: number | null;
   scores: Readonly<Record<string, number>> | null;
+  historyOldestTick: number | null;
+  historyLatestTick: number | null;
+  playerViewTicks: Readonly<Record<string, number>> | null;
 }>;
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -198,6 +204,7 @@ export class RoomManager {
   reset(): void {
     for (const room of this.rooms.values()) {
       if (room.match) clearPulses(room.match);
+      room.combatHistory?.clear();
     }
     this.rooms.clear();
     this.connections.clear();
@@ -233,6 +240,7 @@ export class RoomManager {
       match: null,
       resultPlayers: null,
       network: new Map([[playerId, createNetworkRuntime()]]),
+      combatHistory: null,
       inputs: new Map(),
       accumulatorMs: 0,
       snapshotAccumulatorMs: 0
@@ -354,6 +362,7 @@ export class RoomManager {
     if (leavingHost) this.reassignHost(room);
     if (room.players.size === 0) {
       if (room.match) clearPulses(room.match);
+      room.combatHistory?.clear();
       this.rooms.delete(room.roomCode);
       this.deps.publish({ type: 'ROOM_CLOSED', roomCode: room.roomCode });
       return room.roomCode;
@@ -387,6 +396,7 @@ export class RoomManager {
       candidate.reconnectAnchor = null;
     }
     if (room.match) clearPulses(room.match);
+    room.combatHistory?.clear();
     room.matchEpoch += 1;
     room.match = createMatchState([...room.players.values()].map((candidate) => ({
       playerId: candidate.playerId,
@@ -402,6 +412,8 @@ export class RoomManager {
     }
     room.resultPlayers = null;
     room.phase = 'COUNTDOWN';
+    room.combatHistory = new CombatFrameHistory();
+    room.combatHistory.capture(room.match);
     room.inputs.clear();
     room.accumulatorMs = 0;
     room.snapshotAccumulatorMs = 0;
@@ -423,10 +435,26 @@ export class RoomManager {
     const queued = room.inputs.get(player.playerId);
     const processed = room.match.players[player.playerId]?.lastProcessedInputSeq ?? -1;
     if (input.seq <= Math.max(queued?.seq ?? -1, processed)) return;
+    const status = networkStatus(room.network.get(player.playerId) ?? createNetworkRuntime(), this.deps.now());
+    const boundedInput = {
+      ...input,
+      viewTick: clampClaimedViewTick({
+        currentTick: room.match.tick,
+        claimedViewTick: input.viewTick,
+        medianRttMs: status.medianMs,
+        jitterMs: status.jitterMs,
+        historyOldestTick: room.combatHistory?.oldestTick() ?? null
+      })
+    };
     const unprocessed = queued && queued.seq > processed ? queued : null;
     room.inputs.set(player.playerId, unprocessed
-      ? { ...input, quick: unprocessed.quick || input.quick, dash: unprocessed.dash || input.dash }
-      : input);
+      ? {
+        ...boundedInput,
+        viewTick: unprocessed.quick && !boundedInput.quick ? unprocessed.viewTick : boundedInput.viewTick,
+        quick: unprocessed.quick || boundedInput.quick,
+        dash: unprocessed.dash || boundedInput.dash
+      }
+      : boundedInput);
   }
 
   setPing(
@@ -544,7 +572,15 @@ export class RoomManager {
       reservedCount: ordered.filter((player) => !player.connected).length,
       playerIds: ordered.map((player) => player.playerId),
       tick: room.match?.tick ?? null,
-      scores: room.match ? { ...room.match.scores } : null
+      scores: room.match ? { ...room.match.scores } : null,
+      historyOldestTick: room.combatHistory?.oldestTick() ?? null,
+      historyLatestTick: room.combatHistory?.latestTick() ?? null,
+      playerViewTicks: room.match
+        ? Object.fromEntries(Object.keys(room.match.players).sort().map((playerId) => [
+          playerId,
+          room.match!.players[playerId].latestInput.viewTick
+        ]))
+        : null
     };
   }
 
@@ -579,6 +615,7 @@ export class RoomManager {
     room.inputs.delete(player.playerId);
     if (room.match?.players[player.playerId]) {
       this.publishMatchEvents(room, setPlayerConnected(room.match, player.playerId, false));
+      room.combatHistory?.capture(room.match);
       this.reconcilePopulation(room);
     }
     if (room.hostPlayerId === player.playerId) this.migrateHost(room);
@@ -606,6 +643,7 @@ export class RoomManager {
       }
       if (room.players.size === 0) {
         if (room.match) clearPulses(room.match);
+        room.combatHistory?.clear();
         this.rooms.delete(room.roomCode);
         this.deps.publish({ type: 'ROOM_CLOSED', roomCode: room.roomCode });
         continue;
@@ -630,8 +668,9 @@ export class RoomManager {
           room.match.countdownRemainingMs <= SIMULATION_STEP_MS + TIMER_EPSILON_MS
           ? room.match.countdownRemainingMs
           : SIMULATION_STEP_MS;
-        let events = [...stepMatch(room.match, room.inputs, stepDuration)];
+        let events = [...stepMatch(room.match, room.inputs, stepDuration, room.combatHistory ?? undefined)];
         events = this.finalizeReconnectAnchors(room, events);
+        room.combatHistory?.capture(room.match);
         room.accumulatorMs -= SIMULATION_STEP_MS;
         room.snapshotAccumulatorMs += SIMULATION_STEP_MS;
         steps += 1;
@@ -749,6 +788,7 @@ export class RoomManager {
 
   private publishSnapshot(room: Room): void {
     if (!room.match) return;
+    room.combatHistory?.capture(room.match!);
     this.deps.publish({
       type: 'MATCH_SNAPSHOT',
       roomCode: room.roomCode,
@@ -761,6 +801,8 @@ export class RoomManager {
   private enterResult(room: Room): void {
     if (!room.match) return;
     clearPulses(room.match);
+    room.combatHistory?.clear();
+    room.combatHistory = null;
     room.phase = 'RESULT';
     room.accumulatorMs = 0;
     room.snapshotAccumulatorMs = 0;
@@ -777,7 +819,9 @@ export class RoomManager {
 
   private resetMatchToLobby(room: Room): void {
     if (room.match) clearPulses(room.match);
+    room.combatHistory?.clear();
     room.match = null;
+    room.combatHistory = null;
     room.resultPlayers = null;
     room.phase = 'LOBBY';
     room.inputs.clear();
@@ -852,6 +896,7 @@ export class RoomManager {
     }
 
     if (!script.preservePulses) clearPulses(room.match);
+    room.combatHistory?.clear();
     room.inputs.clear();
     room.accumulatorMs = 0;
     room.snapshotAccumulatorMs = 0;
@@ -883,11 +928,13 @@ export class RoomManager {
       player.lastAttackerId = null;
       player.lastAttackerAtMs = null;
     }
+    room.combatHistory?.capture(room.match);
 
     for (const step of script.steps) {
       for (const entry of step.inputs ?? []) room.inputs.set(entry.playerId, entry.input);
-      let events = [...stepMatch(room.match, room.inputs, step.elapsedMs)];
+      let events = [...stepMatch(room.match, room.inputs, step.elapsedMs, room.combatHistory ?? undefined)];
       events = this.finalizeReconnectAnchors(room, events);
+      room.combatHistory?.capture(room.match);
       this.publishMatchEvents(room, events);
       this.publishSnapshot(room);
       if (events.some((event) => event.type === 'RESULT')) break;
@@ -922,6 +969,8 @@ export class RoomManager {
     player.previousHeavy = false;
     player.previousDash = false;
     room.inputs.delete(playerId);
+    const match = room.match;
+    if (match) room.combatHistory?.capture(match);
     this.publishSnapshot(room);
   }
 

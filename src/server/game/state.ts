@@ -31,6 +31,7 @@ export type MutablePlayerStats = {
 
 export type AttackRuntime = {
   attackId: number;
+  viewTick: number;
   kind: AttackKind;
   profileId: AttackProfileId;
   phase: AttackPhase;

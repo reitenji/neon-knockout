@@ -242,6 +242,7 @@ describe('shared input boundary protocol', () => {
     ], 0, DEFAULT_ROOM_SETTINGS);
     state.players.p1.attack = {
       attackId: 17,
+      viewTick: 0,
       kind: 'HEAVY',
       profileId: 'heavy-melee',
       phase: 'ACTIVE',
@@ -327,6 +328,7 @@ describe('shared input boundary protocol', () => {
       }
     ]);
 
+    if (!state.players.p1.attack) throw new Error('Expected attack runtime');
     state.players.p1.attack.phaseElapsedMs = -10;
     expect(snapshotMatch(state).players[0]?.action.activeProgress).toBe(0);
   });

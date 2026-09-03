@@ -12,30 +12,43 @@ export type AdaptiveNetcodeBudget = Readonly<{
 }>;
 
 const TICK_MS = 1_000 / 60;
-const NEUTRAL_BUDGET: AdaptiveNetcodeBudget = { delayFrames: 1, rollbackFrames: 4 };
+export const NEUTRAL_ADAPTIVE_NETCODE_BUDGET: AdaptiveNetcodeBudget = { delayFrames: 1, rollbackFrames: 4 };
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
 }
 
+export function calculateAdaptiveNetcodeTarget(
+  sample: Pick<
+    AdaptiveNetcodeSample,
+    'medianRttMs' | 'transportJitterMs' | 'arrivalJitterMs' | 'bufferUnderrun'
+  >,
+  currentDelayFrames = NEUTRAL_ADAPTIVE_NETCODE_BUDGET.delayFrames
+): AdaptiveNetcodeBudget {
+  if (sample.medianRttMs === null || sample.transportJitterMs === null) return NEUTRAL_ADAPTIVE_NETCODE_BUDGET;
+
+  const jitterMs = Math.max(sample.transportJitterMs, sample.arrivalJitterMs * 1.5);
+  let delayFrames = clamp(Math.ceil((TICK_MS + jitterMs) / TICK_MS), 1, 5);
+  if (sample.bufferUnderrun) delayFrames = Math.max(delayFrames, Math.min(5, currentDelayFrames + 1));
+  return {
+    delayFrames,
+    rollbackFrames: clamp(
+      Math.ceil((sample.medianRttMs / 2 + 2 * sample.transportJitterMs) / TICK_MS) + delayFrames,
+      2,
+      10
+    )
+  };
+}
+
 export class AdaptiveNetcodePolicy {
-  private budget = NEUTRAL_BUDGET;
+  private budget = NEUTRAL_ADAPTIVE_NETCODE_BUDGET;
   private lastFreshSampleAtMs: number | null = null;
   private lastUnderrunAtMs: number | null = null;
   private stableFreshSamples = 0;
 
   update(sample: AdaptiveNetcodeSample): AdaptiveNetcodeBudget {
     if (sample.medianRttMs === null || sample.transportJitterMs === null) return this.reset();
-
-    const jitterMs = Math.max(sample.transportJitterMs, sample.arrivalJitterMs * 1.5);
-    let delayFrames = clamp(Math.ceil((TICK_MS + jitterMs) / TICK_MS), 1, 5);
-    if (sample.bufferUnderrun) delayFrames = Math.max(delayFrames, Math.min(5, this.budget.delayFrames + 1));
-    const rollbackFrames = clamp(
-      Math.ceil((sample.medianRttMs / 2 + 2 * sample.transportJitterMs) / TICK_MS) + delayFrames,
-      2,
-      10
-    );
-    const target = { delayFrames, rollbackFrames };
+    const target = calculateAdaptiveNetcodeTarget(sample, this.budget.delayFrames);
 
     const hasNewFreshSample = this.lastFreshSampleAtMs !== sample.sampledAtMs;
     if (hasNewFreshSample) this.lastFreshSampleAtMs = sample.sampledAtMs;
@@ -69,7 +82,7 @@ export class AdaptiveNetcodePolicy {
   }
 
   reset(): AdaptiveNetcodeBudget {
-    this.budget = NEUTRAL_BUDGET;
+    this.budget = NEUTRAL_ADAPTIVE_NETCODE_BUDGET;
     this.lastFreshSampleAtMs = null;
     this.lastUnderrunAtMs = null;
     this.stableFreshSamples = 0;

@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { AdaptiveNetcodePolicy } from './netcodePolicy.js';
+import { AdaptiveNetcodePolicy, calculateAdaptiveNetcodeTarget } from './netcodePolicy.js';
+
+describe('calculateAdaptiveNetcodeTarget', () => {
+  it('exposes the stateless formula shared by client policy and server compensation', () => {
+    expect(calculateAdaptiveNetcodeTarget({
+      medianRttMs: 100,
+      transportJitterMs: 20,
+      arrivalJitterMs: 6,
+      bufferUnderrun: false
+    })).toEqual({ delayFrames: 3, rollbackFrames: 9 });
+  });
+});
 
 describe('AdaptiveNetcodePolicy', () => {
   it('uses the neutral budget when the server network status is absent', () => {
