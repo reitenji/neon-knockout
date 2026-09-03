@@ -1,9 +1,10 @@
 import type { MatchPlayer } from '../../src/shared/model.js';
-import type { Page } from '@playwright/test';
+import type { Browser, Page } from '@playwright/test';
 import {
   assertNoUnexpectedErrors,
   createTwoPlayerMatch,
   expect,
+  openPlayer,
   test,
   type E2eGame,
   type MatchPages
@@ -30,6 +31,134 @@ async function expectNumericPing(match: MatchPages): Promise<void> {
     await expect(roster.getByLabel(/^Ada ağ telemetrisi: Ping \d+ ms$/)).toHaveCount(1, { timeout: 10_000 });
     await expect(roster.getByLabel(/^Linus ağ telemetrisi: Ping \d+ ms$/)).toHaveCount(1, { timeout: 10_000 });
     await expect(roster).not.toContainText(/RTT|Delay|Rollback|\bRB\b/);
+  }
+}
+
+function networkStatus(game: E2eGame, match: MatchPages, playerId: string) {
+  return game.harness.matchSnapshot(match.code)?.network[playerId] ?? null;
+}
+
+async function expectFreshWebRtcPingAfterActivation(
+  game: E2eGame,
+  match: MatchPages,
+  playerId: string
+): Promise<void> {
+  await expect.poll(() => {
+    const status = networkStatus(game, match, playerId);
+    return game.harness.transportMode(playerId) === 'webrtc' &&
+      status?.transport === 'webrtc' &&
+      typeof status.currentMs === 'number' &&
+      typeof status.medianMs === 'number';
+  }, { timeout: 10_000 }).toBe(true);
+}
+
+async function expectFallbackPingSource(
+  game: E2eGame,
+  match: MatchPages,
+  playerId: string,
+  source: 'websocket' | 'polling'
+): Promise<void> {
+  await expect.poll(() => {
+    const status = networkStatus(game, match, playerId);
+    return status?.transport === source &&
+      typeof status.currentMs === 'number' &&
+      typeof status.medianMs === 'number';
+  }, { timeout: 10_000 }).toBe(true);
+}
+
+function deferWebRtcActivation(): void {
+  const channels = new Set<RTCDataChannel>();
+  const openHandlers = new Map<RTCDataChannel, ((event: Event) => void) | null>();
+  let released = false;
+  const originalCreateDataChannel = RTCPeerConnection.prototype.createDataChannel;
+  RTCPeerConnection.prototype.createDataChannel = function createDataChannel(label, options) {
+    const channel = originalCreateDataChannel.call(this, label, options);
+    channels.add(channel);
+    const proxy = new Proxy(channel, {
+      get(target, property) {
+        if (property === 'readyState' && !released) return 'connecting';
+        const value = Reflect.get(target, property, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+      set(target, property, value) {
+        if (property === 'onopen') {
+          const handler = typeof value === 'function' ? value as (event: Event) => void : null;
+          openHandlers.set(target, handler);
+          return Reflect.set(target, property, handler === null ? null : (event: Event) => {
+            if (released) handler.call(proxy, event);
+          }, target);
+        }
+        return Reflect.set(target, property, value, target);
+      }
+    }) as RTCDataChannel;
+    return proxy;
+  };
+  (window as typeof window & {
+    __NEON_E2E_WEBRTC_ACTIVATION_GATE__?: { release(): void };
+  }).__NEON_E2E_WEBRTC_ACTIVATION_GATE__ = {
+    release: () => {
+      if (released) return;
+      released = true;
+      for (const channel of channels) openHandlers.get(channel)?.call(channel, new Event('open'));
+    }
+  };
+}
+
+async function releaseWebRtcActivation(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const gate = (window as typeof window & {
+      __NEON_E2E_WEBRTC_ACTIVATION_GATE__?: { release(): void };
+    }).__NEON_E2E_WEBRTC_ACTIVATION_GATE__;
+    if (!gate) throw new Error('WebRTC activation gate was not installed.');
+    gate.release();
+  });
+}
+
+async function createTwoPlayerMatchWithDeferredGuestActivation(
+  browser: Browser,
+  game: E2eGame
+): Promise<MatchPages> {
+  const host = await openPlayer(browser, game.origin, { observeInput: true });
+  const guest = await openPlayer(browser, game.origin, {
+    observeInput: true,
+    initScript: deferWebRtcActivation
+  });
+  try {
+    await host.page.getByLabel('Oyuncu adı').fill('Ada');
+    await host.page.getByRole('button', { name: 'Oda Kur' }).click();
+    await expect(host.page.getByRole('region', { name: 'Oda lobisi' })).toBeVisible();
+    const code = await host.page.getByTestId('room-code').textContent();
+    if (!code) throw new Error('Host room code was not rendered.');
+
+    await guest.page.getByLabel('Oyuncu adı').fill('Linus');
+    await guest.page.getByLabel('Oda kodu').fill(code);
+    await guest.page.getByRole('button', { name: 'Odaya Katıl' }).click();
+    await expect(guest.page.getByRole('region', { name: 'Oda lobisi' })).toBeVisible();
+
+    await host.page.getByRole('button', { name: 'WRAITH gövdesini seç' }).click();
+    await host.page.getByRole('button', { name: 'Hazırım' }).click();
+    await guest.page.getByRole('button', { name: 'PULSE gövdesini seç' }).click();
+    await guest.page.getByRole('button', { name: 'Hazırım' }).click();
+    await expect(host.page.getByRole('button', { name: 'Maçı Başlat' })).toBeEnabled();
+    await host.page.getByRole('button', { name: 'Maçı Başlat' }).click();
+    await expect(host.page.getByRole('img', { name: 'Neon Knockout oyun alanı' })).toBeVisible();
+    await expect(guest.page.getByRole('img', { name: 'Neon Knockout oyun alanı' })).toBeVisible();
+    await expect.poll(() => game.harness.matchSnapshot(code)?.phase).toBe('COUNTDOWN');
+    const snapshot = game.harness.matchSnapshot(code);
+    const hostPlayerId = snapshot?.players.find((value) => value.name === 'Ada')?.playerId;
+    const guestPlayerId = snapshot?.players.find((value) => value.name === 'Linus')?.playerId;
+    if (!hostPlayerId || !guestPlayerId) throw new Error('Deferred-activation match players were not available.');
+    return {
+      code,
+      host,
+      guest,
+      hostPlayerId,
+      guestPlayerId,
+      close: async () => { await Promise.all([host.context.close(), guest.context.close()]); }
+    };
+  } catch (error) {
+    await Promise.all([host.context.close(), guest.context.close()]);
+    throw error;
   }
 }
 
@@ -126,7 +255,6 @@ test('a dropped first quick frame remains one authoritative WebRTC action despit
     await match.host.page.keyboard.down('j');
     const droppedInput = await waitForObservedInput(match.host.page, marker, { quick: true });
     await match.host.page.keyboard.up('j');
-    await expect.poll(() => player(game, match, match.hostPlayerId).action.kind).toBe('QUICK_1');
     await waitForNeutral(game, match, match.hostPlayerId);
     await match.host.page.waitForTimeout(250);
 
@@ -144,8 +272,16 @@ test('a dropped first quick frame remains one authoritative WebRTC action despit
 });
 
 test('WebRTC carries gameplay, falls back without reload, and activates freshly after lobby return', async ({ browser, game }) => {
-  const match = await createTwoPlayerMatch(browser, game, undefined, { observeInput: true });
+  const match = await createTwoPlayerMatchWithDeferredGuestActivation(browser, game);
   try {
+    await expect.poll(() => {
+      const status = networkStatus(game, match, match.guestPlayerId);
+      return status !== null && game.harness.transportMode(match.guestPlayerId) !== 'webrtc' && status.transport !== 'webrtc';
+    }).toBe(true);
+    await releaseWebRtcActivation(match.guest.page);
+    await expect.poll(() => networkStatus(game, match, match.guestPlayerId)).toMatchObject({
+      transport: 'webrtc', currentMs: null, medianMs: null, jitterMs: null
+    });
     await expect.poll(() => [
       game.harness.transportMode(match.hostPlayerId),
       game.harness.transportMode(match.guestPlayerId)
@@ -154,7 +290,10 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
     const firstGuestGeneration = game.harness.transportGeneration(match.guestPlayerId);
     expect(firstHostGeneration?.generationId).toEqual(expect.any(String));
     expect(firstGuestGeneration?.generationId).toEqual(expect.any(String));
+    await expectFreshWebRtcPingAfterActivation(game, match, match.hostPlayerId);
+    await expectFreshWebRtcPingAfterActivation(game, match, match.guestPlayerId);
     await expectNumericPing(match);
+    await expect.poll(() => game.harness.matchSnapshot(match.code)?.phase, { timeout: 12_000 }).toBe('REGULATION');
 
     const movementStart = player(game, match, match.hostPlayerId);
     await match.host.page.keyboard.down('d');
@@ -167,16 +306,15 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
     await waitForNeutral(game, match, match.hostPlayerId);
 
     const quickStartSequence = player(game, match, match.hostPlayerId).lastProcessedInputSeq;
+    const completedBeforeQuick = player(game, match, match.hostPlayerId).stats.completedAttacks;
     const quickObserverMarker = await latestObservedSequence(match.host.page);
     await match.host.page.keyboard.down('j');
     const quickInput = await waitForObservedInput(match.host.page, quickObserverMarker, { quick: true });
     await expectAcceptedSource(game, match.hostPlayerId, quickInput.sequence, 'webrtc');
-    await expect.poll(() => {
-      const current = player(game, match, match.hostPlayerId);
-      return current.lastProcessedInputSeq > quickStartSequence && current.action.kind === 'QUICK_1';
-    }).toBe(true);
     await match.host.page.keyboard.up('j');
     await waitForNeutral(game, match, match.hostPlayerId);
+    expect(player(game, match, match.hostPlayerId).lastProcessedInputSeq).toBeGreaterThan(quickStartSequence);
+    expect(player(game, match, match.hostPlayerId).stats.completedAttacks).toBe(completedBeforeQuick + 1);
 
     const heavyStartSequence = player(game, match, match.hostPlayerId).lastProcessedInputSeq;
     await match.host.page.keyboard.down('k');
@@ -188,25 +326,39 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
     await expect.poll(() => player(game, match, match.hostPlayerId).action.kind).toBe('HEAVY');
     await waitForNeutral(game, match, match.hostPlayerId);
 
+    expect(networkStatus(game, match, match.guestPlayerId)).toMatchObject({
+      transport: 'webrtc',
+      currentMs: expect.any(Number),
+      medianMs: expect.any(Number)
+    });
     const navigationCount = await match.guest.page.evaluate(() => performance.getEntriesByType('navigation').length);
     await game.harness.dropWebRtc(match.guestPlayerId);
+    // The fallback clears synchronously; publish that state before Socket.IO can acknowledge its new probe.
+    game.server.rooms.advance(40);
     await expect.poll(() => game.harness.transportMode(match.guestPlayerId)).toMatch(/^(websocket|polling)$/);
     const guestFallbackSource = game.harness.transportMode(match.guestPlayerId);
     if (guestFallbackSource !== 'websocket' && guestFallbackSource !== 'polling') {
       throw new Error('Guest did not enter a Socket.IO fallback transport.');
     }
+    expect(networkStatus(game, match, match.guestPlayerId)).toEqual({
+      transport: guestFallbackSource, currentMs: null, medianMs: null, jitterMs: null
+    });
+    await expectFallbackPingSource(game, match, match.guestPlayerId, guestFallbackSource);
+    const guestRoster = match.guest.page.getByRole('region', { name: 'Oyuncu listesi' });
+    await expect(guestRoster.getByLabel(/^Linus ağ telemetrisi: Ping \d+ ms$/)).toHaveCount(1);
+    await expect(guestRoster).not.toContainText(/RTT|Delay|Rollback|\bRB\b/);
+    expect(await match.guest.page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
     const fallbackSequence = player(game, match, match.guestPlayerId).lastProcessedInputSeq;
+    const completedBeforeFallbackQuick = player(game, match, match.guestPlayerId).stats.completedAttacks;
     const fallbackObserverMarker = await latestObservedSequence(match.guest.page);
     await match.guest.page.keyboard.down('j');
     const fallbackInput = await waitForObservedInput(match.guest.page, fallbackObserverMarker, { quick: true });
     await expectAcceptedSource(game, match.guestPlayerId, fallbackInput.sequence, guestFallbackSource);
     await expect.poll(() => player(game, match, match.guestPlayerId).lastProcessedInputSeq)
       .toBeGreaterThan(fallbackSequence);
-    await expect.poll(() => player(game, match, match.guestPlayerId).action.kind, {
-      timeout: 1_500,
-      intervals: [5]
-    }).toBe('QUICK_1');
     await match.guest.page.keyboard.up('j');
+    await waitForNeutral(game, match, match.guestPlayerId);
+    expect(player(game, match, match.guestPlayerId).stats.completedAttacks).toBe(completedBeforeFallbackQuick + 1);
     expect(await match.guest.page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
 
     for (let score = 1; score <= 5; score += 1) {

@@ -123,7 +123,7 @@ Result, rematch, and return-to-lobby transitions do not reuse stale channel stat
 
 The match list displays one field named `Ping` for every player, including the local player.
 
-For an active WebRTC player, the server samples the selected ICE candidate pair's `currentRoundTripTime` every two seconds, converts seconds to milliseconds, and publishes the median of the latest five valid samples in the existing network status included with authoritative snapshots. A sample is valid for six seconds. When no fresh sample exists, Ping is an em dash. The client never supplies the authoritative displayed value.
+For an active WebRTC player, Ping is the server-clock application RTT of the existing reliable DataChannel heartbeat: the authoritative Node server timestamps a heartbeat when it sends it and measures the elapsed time when the browser returns the matching acknowledgement. Unlike ICMP, this application measurement includes browser and Node scheduling as well as transport time. Only a distinct acknowledgement matching the currently pending heartbeat enters the latest-five median published in the existing network status included with authoritative snapshots. A sample is valid for six seconds. When no fresh sample exists, Ping is an em dash. The client never supplies the authoritative displayed value.
 
 For a player entering Socket.IO fallback, the old WebRTC sample is cleared and an application RTT probe is requested immediately, then every two seconds. Ping remains an em dash until the first fresh fallback sample arrives. The UI still shows only one Ping field; transport mode is retained in the network model for diagnostics and tests rather than adding another wide HUD column.
 
