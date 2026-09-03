@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import type { InputFrame, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import {
-  MAX_INTERPOLATION_DELAY_MS,
   REMOTE_SNAP_DISTANCE,
   PredictionBuffer,
   SnapshotTimeline,
+  extrapolateRemotePlayer,
   interpolateRemotePlayer
 } from './prediction.js';
 
@@ -296,77 +296,164 @@ describe('PredictionBuffer', () => {
 });
 
 describe('SnapshotTimeline', () => {
-  it('settles at a 16 ms presentation buffer for regular 60 Hz LAN arrivals', () => {
+  it('retains the newest sixteen authoritative ticks and ignores duplicate or older ticks', () => {
     const timeline = new SnapshotTimeline();
-    const first = snapshot(1, [player({ position: { x: 100, y: 100 } })]);
-    const previous = snapshot(2, [player({ position: { x: 200, y: 100 } })]);
-    const current = snapshot(3, [player({ position: { x: 300, y: 100 } })]);
-    timeline.push(first, 1_000);
-    timeline.push(previous, 1_016 + 2 / 3);
-    timeline.push(current, 1_033 + 1 / 3);
-
-    expect(timeline.delayMs()).toBe(16);
-    const sampled = timeline.sample(1_041)!;
-    expect(sampled).toMatchObject({ previous, current });
-    expect(sampled.alpha).toBeCloseTo(0.5, 10);
-  });
-
-  it('caps high-jitter LAN arrivals at a 24 ms presentation buffer', () => {
-    const timeline = new SnapshotTimeline();
-    const first = snapshot(1, [player()]);
-    const second = snapshot(2, [player()]);
-    const third = snapshot(3, [player()]);
-    timeline.push(first, 1_000);
-    timeline.push(second, 1_016 + 2 / 3);
-    timeline.push(third, 1_160);
-
-    expect(timeline.delayMs()).toBe(MAX_INTERPOLATION_DELAY_MS);
-    expect(timeline.delayMs()).toBe(24);
-  });
-
-  it('keeps delay bounded for every arrival interval', () => {
-    const timeline = new SnapshotTimeline();
-    const arrivals = [1_000, 1_016 + 2 / 3, 1_016 + 2 / 3, 1_160, 1_163, 1_500, 1_516 + 2 / 3];
-
-    for (const [index, receivedAtMs] of arrivals.entries()) {
-      timeline.push(snapshot(index, [player()]), receivedAtMs);
-      expect(timeline.delayMs()).toBeGreaterThanOrEqual(16);
-      expect(timeline.delayMs()).toBeLessThanOrEqual(MAX_INTERPOLATION_DELAY_MS);
+    for (let tick = 1; tick <= 17; tick += 1) {
+      timeline.push(snapshot(tick, [player({ position: { x: tick, y: 100 } })]), tick * 10);
     }
+    timeline.push(snapshot(17, [player({ position: { x: 999, y: 100 } })]), 180);
+    timeline.push(snapshot(16, [player({ position: { x: 998, y: 100 } })]), 190);
+
+    const retained = Reflect.get(timeline, 'samples') as Array<{ snapshot: MatchSnapshot }>;
+    expect(retained.map(({ snapshot }) => snapshot.tick)).toEqual([
+      2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17
+    ]);
+    expect(retained.at(-1)?.snapshot.players[0]?.position.x).toBe(17);
   });
 
-  it('never regresses its render target when a jittery arrival increases delay', () => {
+  it('derives a five-frame delay from transport and accepted-arrival jitter', () => {
     const timeline = new SnapshotTimeline();
-    timeline.push(snapshot(1, [player()]), 1_000);
-    timeline.push(snapshot(2, [player()]), 1_016 + 2 / 3);
-    timeline.sample(1_100);
-    const before = timeline.targetTimeMs();
+    timeline.updateNetwork({
+      medianRttMs: 50,
+      transportJitterMs: 4,
+      arrivalJitterMs: 34,
+      bufferUnderrun: false,
+      sampledAtMs: 1_000
+    });
 
-    timeline.push(snapshot(3, [player()]), 1_200);
-    timeline.sample(1_100);
-
-    expect(timeline.targetTimeMs()).toBeGreaterThanOrEqual(before!);
+    const sampled = timeline.sample(1_000);
+    expect(sampled.delayFrames).toBe(5);
+    expect(timeline.delayMs()).toBeCloseTo(83.3333333333, 8);
   });
 
-  it('clears samples, jitter, delay, and render-target state', () => {
+  it('interpolates continuously around newestTick minus delayFrames', () => {
+    const timeline = new SnapshotTimeline();
+    const tickMs = 1_000 / 60;
+    const tick8 = snapshot(8, [player({ position: { x: 80, y: 100 } })]);
+    const tick9 = snapshot(9, [player({ position: { x: 90, y: 100 } })]);
+    const tick10 = snapshot(10, [player({ position: { x: 100, y: 100 } })]);
+    timeline.push(tick8, 1_000);
+    timeline.push(tick9, 1_000 + tickMs);
+    timeline.push(tick10, 1_000 + tickMs * 2);
+
+    const sampled = timeline.sample(1_000 + tickMs * 2.5);
+    expect(sampled).toMatchObject({
+      frame: { previous: tick9, current: tick10 },
+      targetTick: 9,
+      delayFrames: 1,
+      extrapolatedFrames: 0,
+      bufferUnderrun: false
+    });
+    expect(sampled.frame?.alpha).toBeCloseTo(0.5, 10);
+  });
+
+  it('exposes the current authoritative tick when render progress lands exactly on it', () => {
+    const timeline = new SnapshotTimeline();
+    const tickMs = 1_000 / 60;
+    timeline.push(snapshot(9, [player()]), 1_000);
+    timeline.push(snapshot(10, [player()]), 1_000 + tickMs);
+
+    const sampled = timeline.sample(1_000 + tickMs * 2);
+    expect(sampled.targetTick).toBe(10);
+    expect(sampled.frame?.current.tick).toBe(10);
+    expect(sampled.frame?.alpha).toBeCloseTo(1, 10);
+  });
+
+  it('never decreases its selected authoritative target tick when delay rises', () => {
+    const timeline = new SnapshotTimeline();
+    const tickMs = 1_000 / 60;
+    for (let tick = 8; tick <= 12; tick += 1) {
+      timeline.push(snapshot(tick, [player()]), 1_000 + (tick - 8) * tickMs);
+    }
+    const before = timeline.sample(1_000 + tickMs * 4.5);
+
+    timeline.updateNetwork({
+      medianRttMs: 80,
+      transportJitterMs: 50,
+      arrivalJitterMs: 0,
+      bufferUnderrun: false,
+      sampledAtMs: 2_000
+    });
+    const after = timeline.sample(1_000 + tickMs * 4.5);
+
+    expect(before.targetTick).toBe(11);
+    expect(after.targetTick).toBe(11);
+    expect(after.frame?.alpha).toBeCloseTo(0.5, 10);
+  });
+
+  it.each(['REGULATION', 'SUDDEN_DEATH'] as const)(
+    'extrapolates remote velocity for two ticks during %s, then holds',
+    (phase) => {
+      const timeline = new SnapshotTimeline();
+      const tickMs = 1_000 / 60;
+      const authority = {
+        ...snapshot(10, [player({
+          position: { x: 100, y: 100 },
+          velocity: { x: 600, y: -300 }
+        })]),
+        phase
+      };
+      timeline.push(authority, 1_000);
+
+      const atTwoTicks = timeline.sample(1_000 + tickMs * 3);
+      const afterTwoTicks = timeline.sample(1_000 + tickMs * 8);
+      expect(atTwoTicks.extrapolatedFrames).toBeCloseTo(2, 10);
+      expect(afterTwoTicks.extrapolatedFrames).toBeCloseTo(2, 10);
+      expect(extrapolateRemotePlayer(authority.players[0]!, afterTwoTicks.extrapolatedFrames)).toEqual({
+        x: 120,
+        y: 90
+      });
+    }
+  );
+
+  it('holds instead of extrapolating outside regulation or sudden death', () => {
+    const timeline = new SnapshotTimeline();
+    const authority = { ...snapshot(10, [player()]), phase: 'PAUSED' as const };
+    timeline.push(authority, 1_000);
+
+    const sampled = timeline.sample(2_000);
+    expect(sampled.extrapolatedFrames).toBe(0);
+    expect(sampled.bufferUnderrun).toBe(true);
+  });
+
+  it('clears samples, policy, arrival jitter, and render-target state', () => {
     const timeline = new SnapshotTimeline();
     timeline.push(snapshot(1, [player()]), 1_000);
-    timeline.push(snapshot(2, [player()]), 1_016 + 2 / 3);
-    timeline.push(snapshot(3, [player()]), 1_200);
+    timeline.push(snapshot(2, [player()]), 1_100);
+    timeline.push(snapshot(3, [player()]), 1_117);
+    timeline.updateNetwork({
+      medianRttMs: 80,
+      transportJitterMs: 50,
+      arrivalJitterMs: timeline.arrivalJitterMs(),
+      bufferUnderrun: true,
+      sampledAtMs: 1_117
+    });
     timeline.sample(1_250);
 
     timeline.clear();
 
-    expect(timeline.sample(1_250)).toBeNull();
-    expect(timeline.delayMs()).toBe(16);
-    expect(timeline.targetTimeMs()).toBeNull();
+    expect(timeline.sample(1_250)).toEqual({
+      frame: null,
+      targetTick: null,
+      delayFrames: 1,
+      extrapolatedFrames: 0,
+      bufferUnderrun: false
+    });
+    expect(timeline.delayMs()).toBeCloseTo(16.6666666667, 8);
+    expect(timeline.arrivalJitterMs()).toBe(0);
   });
 
-  it('interpolates the outer remote position but snaps above the named threshold', () => {
+  it('interpolates ordinary remote movement but snaps at the threshold and on respawn', () => {
     const previous = player({ position: { x: 100, y: 100 } });
     const nearby = player({ position: { x: 140, y: 120 } });
     expect(interpolateRemotePlayer(previous, nearby, 0.5)).toEqual({ x: 120, y: 110 });
-    const far = player({ position: { x: 100 + REMOTE_SNAP_DISTANCE + 1, y: 100 } });
+    const far = player({ position: { x: 100 + REMOTE_SNAP_DISTANCE, y: 100 } });
     expect(interpolateRemotePlayer(previous, far, 0.1)).toEqual(far.position);
+    const respawn = player({
+      position: { x: 120, y: 100 },
+      respawnRemainingMs: 500,
+      action: { ...idleAction, kind: 'RESPAWNING' }
+    });
+    expect(interpolateRemotePlayer(previous, respawn, 0.1)).toEqual(respawn.position);
   });
 });

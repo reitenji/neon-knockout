@@ -22,7 +22,8 @@ const probes = vi.hoisted(() => ({
   createPulseView: vi.fn(),
   sessionDispose: vi.fn(),
   sessionPresentation: vi.fn<() => PlayerPresentation | null>(() => null),
-  arenaInputSource: null as ArenaInputSource | null
+  arenaInputSource: null as ArenaInputSource | null,
+  snapshotReceivedAtMs: 0
 }));
 
 class FakeEvents {
@@ -81,8 +82,8 @@ vi.mock('./ArenaSession.js', () => ({
     ) {}
     start(): void {
       const snapshot = this.bridge.getSnapshot();
-      if (snapshot) this.onSnapshot(snapshot, 0);
-      this.removeSnapshot = this.bridge.subscribeSnapshot((next) => this.onSnapshot(next, 0));
+      if (snapshot) this.onSnapshot(snapshot, probes.snapshotReceivedAtMs);
+      this.removeSnapshot = this.bridge.subscribeSnapshot((next) => this.onSnapshot(next, probes.snapshotReceivedAtMs));
     }
     step(): void {}
     getLocalPresentation(): PlayerPresentation | null { return probes.sessionPresentation(); }
@@ -178,6 +179,8 @@ class Bridge implements GamePresentationBridge {
   readonly muteListeners = new Set<(muted: boolean) => void>();
   eventUnsubscribes = 0;
   muteUnsubscribes = 0;
+  publishBufferUnderrun = vi.fn();
+  publishExtrapolatedFrames = vi.fn();
 
   getSnapshot = (): MatchSnapshot => this.current;
   isConnected = (): boolean => true;
@@ -209,6 +212,7 @@ describe('ArenaScene live presentation integration', () => {
     vi.clearAllMocks();
     probes.sessionPresentation.mockReturnValue(null);
     probes.arenaInputSource = null;
+    probes.snapshotReceivedAtMs = 0;
   });
 
   it('builds the visible sweep capsule from shared profile points and thickness', () => {
@@ -286,6 +290,72 @@ describe('ArenaScene live presentation integration', () => {
     expect(probes.sessionDispose).toHaveBeenCalledTimes(1);
     expect(bridge.eventUnsubscribes).toBe(1);
     expect(bridge.muteUnsubscribes).toBe(1);
+  });
+
+  it('derives delay from the local network sample and publishes internal timeline diagnostics', () => {
+    const bridge = new Bridge();
+    const scopedBridge = scopeBridgeToPlayer(bridge, 'p1');
+    const scene = new ArenaScene(scopedBridge, false);
+    vi.spyOn(performance, 'now').mockReturnValue(0);
+    scene.create();
+    scene.update();
+
+    probes.snapshotReceivedAtMs = 1_000 / 60;
+    bridge.publish(snapshot({
+      tick: 11,
+      network: { p1: { currentMs: 90, medianMs: 80, jitterMs: 50, transport: 'webrtc' } }
+    }));
+    vi.spyOn(performance, 'now').mockReturnValue(1_000 / 60);
+    scene.update();
+
+    expect(scopedBridge.getPresentationDelayMs?.()).toBeCloseTo(66.6666666667, 8);
+    expect(scene.getPresentationTargetTick()).toBe(10);
+    expect(bridge.publishBufferUnderrun).toHaveBeenLastCalledWith(false);
+    expect(bridge.publishExtrapolatedFrames).toHaveBeenLastCalledWith(0);
+  });
+
+  it('feeds accepted-arrival jitter into the adaptive presentation delay', () => {
+    const bridge = new Bridge();
+    bridge.current = snapshot({
+      network: { p1: { currentMs: 50, medianMs: 50, jitterMs: 0, transport: 'webrtc' } }
+    });
+    const scopedBridge = scopeBridgeToPlayer(bridge, 'p1');
+    const scene = new ArenaScene(scopedBridge, false);
+    scene.create();
+
+    probes.snapshotReceivedAtMs = 100;
+    bridge.publish(snapshot({
+      tick: 11,
+      network: { p1: { currentMs: 50, medianMs: 50, jitterMs: 0, transport: 'webrtc' } }
+    }));
+    probes.snapshotReceivedAtMs = 117;
+    bridge.publish(snapshot({
+      tick: 12,
+      network: { p1: { currentMs: 50, medianMs: 50, jitterMs: 0, transport: 'webrtc' } }
+    }));
+    vi.spyOn(performance, 'now').mockReturnValue(117);
+    scene.update();
+
+    expect(scopedBridge.getPresentationDelayMs?.()).toBeCloseTo(50, 8);
+  });
+
+  it('feeds the current buffer underrun back into the next render budget', () => {
+    const bridge = new Bridge();
+    bridge.current = snapshot({
+      network: { p1: { currentMs: 30, medianMs: 30, jitterMs: 0, transport: 'webrtc' } }
+    });
+    const scopedBridge = scopeBridgeToPlayer(bridge, 'p1');
+    const scene = new ArenaScene(scopedBridge, false);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+    scene.create();
+    scene.update();
+
+    now.mockReturnValue(100);
+    scene.update();
+    expect(bridge.publishBufferUnderrun).toHaveBeenLastCalledWith(true);
+
+    scene.update();
+    expect(scopedBridge.getPresentationDelayMs?.()).toBeCloseTo(33.3333333333, 8);
   });
 
   it('passes authoritative attack and charge direction state to every fighter view', () => {
@@ -490,6 +560,60 @@ describe('ArenaScene live presentation integration', () => {
       active: true
     }));
     expect((remoteCall?.[4] as { previousProgress: number }).previousProgress).toBeLessThan(0.5);
+  });
+
+  it('hard-snaps a remote player at a 160-pixel authoritative gap', () => {
+    const bridge = new Bridge();
+    bridge.current = snapshot({
+      players: [player(), player({ playerId: 'p2', position: { x: 100, y: 360 } })]
+    });
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+    scene.create();
+    scene.update();
+
+    probes.snapshotReceivedAtMs = 1_000 / 60;
+    bridge.publish(snapshot({
+      tick: 11,
+      players: [player(), player({ playerId: 'p2', position: { x: 260, y: 360 } })]
+    }));
+    now.mockReturnValue(25);
+    scene.update();
+
+    expect(latestPlayerCall('p2')?.[1]).toEqual({ x: 260, y: 360 });
+  });
+
+  it('interpolates pulse authority between buffered ticks and never extrapolates it', () => {
+    const bridge = new Bridge();
+    const pulse = {
+      projectileId: 9, ownerPlayerId: 'p1', originatingAttackId: 4,
+      position: { x: 350, y: 360 }, velocity: { x: 900, y: 0 }, radius: 18,
+      remainingMs: 400, hitTargetIds: []
+    } as const;
+    bridge.current = snapshot({ pulses: [pulse] });
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(0);
+    scene.create();
+    scene.update();
+
+    probes.snapshotReceivedAtMs = 1_000 / 60;
+    bridge.publish(snapshot({
+      tick: 11,
+      pulses: [{ ...pulse, position: { x: 410, y: 360 }, remainingMs: 330 }]
+    }));
+    now.mockReturnValue(25);
+    scene.update();
+    expect(probes.pulseApply).toHaveBeenLastCalledWith(expect.objectContaining({
+      projectileId: 9,
+      position: { x: 380, y: 360 }
+    }));
+
+    now.mockReturnValue(200);
+    scene.update();
+    expect(probes.pulseApply).toHaveBeenLastCalledWith(expect.objectContaining({
+      projectileId: 9,
+      position: { x: 410, y: 360 }
+    }));
   });
 
   it('reconciles authoritative pulse views by projectile ID without duplicates and clears them on removal or result', () => {

@@ -10,6 +10,8 @@ export interface GamePresentationBridge {
   isConnected(): boolean;
   publishPresentationDelay?(delayMs: number): void;
   publishRollbackFrames?(frames: number | null): void;
+  publishBufferUnderrun?(bufferUnderrun: boolean): void;
+  publishExtrapolatedFrames?(frames: number): void;
   subscribeSnapshot(listener: (snapshot: MatchSnapshot) => void): () => void;
   subscribePresentationDelay?(listener: (delayMs: number | null) => void): () => void;
   subscribeRollbackFrames?(listener: (frames: number | null) => void): () => void;

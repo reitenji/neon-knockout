@@ -1,9 +1,9 @@
 import Phaser from 'phaser';
 import { GAME } from '../../../shared/constants.js';
-import type { MatchAction, MatchPlayer, MatchSnapshot, Vec2 } from '../../../shared/model.js';
+import type { MatchAction, MatchPlayer, MatchPulse, MatchSnapshot, Vec2 } from '../../../shared/model.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
 import { localPlayerIdFromBridge } from '../GamePresentationBridge.js';
-import { SnapshotTimeline, interpolateRemotePlayer } from '../prediction.js';
+import { SnapshotTimeline, extrapolateRemotePlayer, interpolateRemotePlayer } from '../prediction.js';
 import { ARENA_SCENE_KEY } from './BootScene.js';
 import { ArenaInput, createPhaserInputSource } from './ArenaInput.js';
 import { combineArenaInputSources } from './TouchInputSource.js';
@@ -26,6 +26,22 @@ const INPUT_STEP_MS = 1_000 / 60;
 
 function playerById(snapshot: MatchSnapshot, playerId: string): MatchPlayer | null {
   return snapshot.players.find((player) => player.playerId === playerId) ?? null;
+}
+
+function pulseById(snapshot: MatchSnapshot, projectileId: number): MatchPulse | null {
+  return snapshot.pulses.find((pulse) => pulse.projectileId === projectileId) ?? null;
+}
+
+function interpolatePulse(previous: MatchPulse, current: MatchPulse, alpha: number): MatchPulse {
+  const progress = Math.max(0, Math.min(1, alpha));
+  return {
+    ...current,
+    position: {
+      x: previous.position.x + (current.position.x - previous.position.x) * progress,
+      y: previous.position.y + (current.position.y - previous.position.y) * progress
+    },
+    remainingMs: previous.remainingMs + (current.remainingMs - previous.remainingMs) * progress
+  };
 }
 
 function chargeIndicator(
@@ -66,6 +82,10 @@ export class ArenaScene extends Phaser.Scene {
   private localCueSequence = 0;
   private resultPresented = false;
   private cleaned = false;
+  private latestAcceptedSnapshotTick: number | null = null;
+  private latestAcceptedSnapshot: MatchSnapshot | null = null;
+  private latestAcceptedSnapshotAtMs: number | null = null;
+  private presentationTargetTick: number | null = null;
 
   constructor(
     private readonly bridge: GamePresentationBridge,
@@ -85,6 +105,10 @@ export class ArenaScene extends Phaser.Scene {
     this.consumedEventIds.clear();
     this.localActionAudio.reset();
     this.localCueSequence = 0;
+    this.latestAcceptedSnapshotTick = null;
+    this.latestAcceptedSnapshot = null;
+    this.latestAcceptedSnapshotAtMs = null;
+    this.presentationTargetTick = null;
     this.cameras.main.setBackgroundColor('#02050a');
     this.arenaView = createArenaView(this, { reducedMotion: this.reducedMotion });
     this.impactFx = new ImpactFx(
@@ -112,7 +136,7 @@ export class ArenaScene extends Phaser.Scene {
       this.localPlayerId ?? '',
       inputController,
       () => performance.now(),
-      (snapshot, receivedAtMs) => this.timeline.push(snapshot, receivedAtMs)
+      (snapshot, receivedAtMs) => this.acceptTimelineSnapshot(snapshot, receivedAtMs)
     );
     this.session.start();
     this.unsubscribers.push(
@@ -144,10 +168,36 @@ export class ArenaScene extends Phaser.Scene {
     this.renderPresentation(performance.now());
   }
 
+  getPresentationTargetTick(): number | null {
+    return this.presentationTargetTick;
+  }
+
+  private acceptTimelineSnapshot(snapshot: MatchSnapshot, receivedAtMs: number): void {
+    if (this.latestAcceptedSnapshotTick !== null && snapshot.tick <= this.latestAcceptedSnapshotTick) return;
+    this.timeline.push(snapshot, receivedAtMs);
+    this.latestAcceptedSnapshotTick = snapshot.tick;
+    this.latestAcceptedSnapshot = snapshot;
+    this.latestAcceptedSnapshotAtMs = receivedAtMs;
+  }
+
   private renderPresentation(nowMs: number): void {
-    const frame = this.timeline.sample(nowMs);
-    if (!frame) return;
+    const localNetwork = this.localPlayerId === null || this.latestAcceptedSnapshot === null
+      ? null
+      : this.latestAcceptedSnapshot.network[this.localPlayerId] ?? null;
+    this.timeline.updateNetwork({
+      medianRttMs: localNetwork?.medianMs ?? null,
+      transportJitterMs: localNetwork?.jitterMs ?? null,
+      arrivalJitterMs: this.timeline.arrivalJitterMs(),
+      bufferUnderrun: this.timeline.bufferUnderrun(),
+      sampledAtMs: this.latestAcceptedSnapshotAtMs ?? nowMs
+    });
+    const sample = this.timeline.sample(nowMs);
+    this.presentationTargetTick = sample.targetTick;
     this.bridge.publishPresentationDelay?.(this.timeline.delayMs());
+    this.bridge.publishBufferUnderrun?.(sample.bufferUnderrun);
+    this.bridge.publishExtrapolatedFrames?.(sample.extrapolatedFrames);
+    const frame = sample.frame;
+    if (!frame) return;
     this.arenaView?.apply({
       phase: frame.current.phase,
       remainingMs: frame.current.remainingMs,
@@ -155,7 +205,7 @@ export class ArenaScene extends Phaser.Scene {
       settings: frame.current.settings
     }, nowMs);
     const localPresentation = this.session?.getLocalPresentation() ?? null;
-    this.reconcilePulses(frame.current);
+    this.reconcilePulses(frame.previous, frame.current, frame.alpha);
     const activeIds = this.activePlayerIds;
     activeIds.clear();
     for (const currentPlayer of frame.current.players) {
@@ -201,7 +251,9 @@ export class ArenaScene extends Phaser.Scene {
         nowMs,
         false
       );
-      const position = interpolateRemotePlayer(previousPlayer, currentPlayer, frame.alpha);
+      const position = !isLocal && sample.extrapolatedFrames > 0
+        ? extrapolateRemotePlayer(currentPlayer, sample.extrapolatedFrames)
+        : interpolateRemotePlayer(previousPlayer, currentPlayer, frame.alpha);
       view.apply(
         currentPlayer,
         position,
@@ -225,7 +277,7 @@ export class ArenaScene extends Phaser.Scene {
     return view;
   }
 
-  private reconcilePulses(snapshot: MatchSnapshot): void {
+  private reconcilePulses(previousSnapshot: MatchSnapshot, snapshot: MatchSnapshot, alpha: number): void {
     const activeIds = this.activePulseIds;
     activeIds.clear();
     if (this.resultPresented || snapshot.phase === 'FINISHED' || snapshot.winnerPlayerId !== null) {
@@ -235,9 +287,11 @@ export class ArenaScene extends Phaser.Scene {
     for (const pulse of snapshot.pulses) {
       if (this.retiredPulseIds.has(pulse.projectileId)) continue;
       activeIds.add(pulse.projectileId);
+      const previousPulse = pulseById(previousSnapshot, pulse.projectileId);
+      const presentation = previousPulse ? interpolatePulse(previousPulse, pulse, alpha) : pulse;
       const existing = this.pulseViews.get(pulse.projectileId);
-      if (existing) existing.apply(pulse);
-      else this.pulseViews.set(pulse.projectileId, createPulseView(this, pulse));
+      if (existing) existing.apply(presentation);
+      else this.pulseViews.set(pulse.projectileId, createPulseView(this, presentation));
     }
     for (const projectileId of this.pulseViews.keys()) {
       if (!activeIds.has(projectileId)) this.destroyPulseView(projectileId);
@@ -271,6 +325,10 @@ export class ArenaScene extends Phaser.Scene {
     this.resultPresented = false;
     this.localActionAudio.reset();
     this.localCueSequence = 0;
+    this.latestAcceptedSnapshotTick = null;
+    this.latestAcceptedSnapshot = null;
+    this.latestAcceptedSnapshotAtMs = null;
+    this.presentationTargetTick = null;
     this.impactFx?.dispose();
     this.impactFx = null;
     this.gameAudio?.dispose();

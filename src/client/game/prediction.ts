@@ -1,14 +1,18 @@
 import { ARENA, GAME } from '../../shared/constants.js';
 import { advanceKinematics, normalizeAim, normalizeAxes, type KinematicState } from '../../shared/kinematics.js';
 import type { InputFrame, MatchAction, MatchPlayer, MatchSnapshot, Vec2 } from '../../shared/model.js';
+import { AdaptiveNetcodePolicy } from '../../shared/netcodePolicy.js';
 
-export const MIN_INTERPOLATION_DELAY_MS = 16;
-export const MAX_INTERPOLATION_DELAY_MS = 24;
-export const REMOTE_SNAP_DISTANCE = 180;
+export const MIN_INTERPOLATION_DELAY_MS = 1_000 / 60;
+export const MAX_INTERPOLATION_DELAY_MS = 5_000 / 60;
+export const REMOTE_SNAP_DISTANCE = 160;
 export const LOCAL_CORRECTION_SNAP_DISTANCE = 160;
 const LOCAL_CORRECTION_BLEND = 0.35;
 const INTERVAL_EWMA_ALPHA = 0.2;
 const JITTER_EWMA_ALPHA = 0.25;
+const SNAPSHOT_CAPACITY = 16;
+const MAX_EXTRAPOLATION_FRAMES = 2;
+const TICK_MS = 1_000 / 60;
 
 export type PlayerPresentation = Readonly<KinematicState & { actionStart: MatchAction | null }>;
 
@@ -16,6 +20,22 @@ export type InterpolationFrame = Readonly<{
   previous: MatchSnapshot;
   current: MatchSnapshot;
   alpha: number;
+}>;
+
+export type TimelineNetworkSample = Readonly<{
+  medianRttMs: number | null;
+  transportJitterMs: number | null;
+  arrivalJitterMs: number;
+  bufferUnderrun: boolean;
+  sampledAtMs: number;
+}>;
+
+export type TimelineSample = Readonly<{
+  frame: InterpolationFrame | null;
+  targetTick: number | null;
+  delayFrames: number;
+  extrapolatedFrames: number;
+  bufferUnderrun: boolean;
 }>;
 
 type PendingInput = Readonly<{ frame: InputFrame; elapsedMs: number; platformProgress: number }>;
@@ -338,58 +358,119 @@ export class PredictionBuffer {
 
 export class SnapshotTimeline {
   private readonly samples: TimedSnapshot[] = [];
+  private readonly policy = new AdaptiveNetcodePolicy();
   private averageIntervalMs: number | null = null;
   private jitterMs = 0;
-  private interpolationDelayMs = MIN_INTERPOLATION_DELAY_MS;
-  private lastTargetTimeMs: number | null = null;
+  private delayFrames = 1;
+  private lastTargetProgress: number | null = null;
+  private lastTargetTick: number | null = null;
+  private lastBufferUnderrun = false;
 
   push(snapshot: MatchSnapshot, receivedAtMs: number): void {
     const last = this.samples[this.samples.length - 1];
+    if (last && snapshot.tick <= last.snapshot.tick) return;
     const timestamp = last ? Math.max(receivedAtMs, last.receivedAtMs) : receivedAtMs;
     if (last) this.recordArrivalInterval(timestamp - last.receivedAtMs);
     this.samples.push({ snapshot, receivedAtMs: timestamp });
-    if (this.samples.length > 8) this.samples.shift();
+    if (this.samples.length > SNAPSHOT_CAPACITY) this.samples.shift();
   }
 
-  sample(renderNowMs: number): InterpolationFrame | null {
-    if (this.samples.length === 0) return null;
-    const requestedTargetTime = renderNowMs - this.interpolationDelayMs;
-    const targetTime = this.lastTargetTimeMs === null
-      ? requestedTargetTime
-      : Math.max(this.lastTargetTimeMs, requestedTargetTime);
-    this.lastTargetTimeMs = targetTime;
+  updateNetwork(sample: TimelineNetworkSample): void {
+    this.delayFrames = this.policy.update(sample).delayFrames;
+  }
+
+  sample(renderNowMs: number): TimelineSample {
+    if (this.samples.length === 0) {
+      return {
+        frame: null,
+        targetTick: null,
+        delayFrames: this.delayFrames,
+        extrapolatedFrames: 0,
+        bufferUnderrun: false
+      };
+    }
     const first = this.samples[0]!;
     const last = this.samples[this.samples.length - 1]!;
-    if (targetTime <= first.receivedAtMs) return { previous: first.snapshot, current: first.snapshot, alpha: 1 };
+    const elapsedFrames = clamp((renderNowMs - last.receivedAtMs) / TICK_MS, 0, MAX_EXTRAPOLATION_FRAMES + this.delayFrames);
+    const requestedTargetProgress = last.snapshot.tick + elapsedFrames - this.delayFrames;
+    const targetProgress = this.lastTargetProgress === null
+      ? requestedTargetProgress
+      : Math.max(this.lastTargetProgress, requestedTargetProgress);
+    this.lastTargetProgress = targetProgress;
+
+    if (targetProgress <= first.snapshot.tick) {
+      this.lastTargetTick = first.snapshot.tick;
+      this.lastBufferUnderrun = false;
+      return {
+        frame: { previous: first.snapshot, current: first.snapshot, alpha: 1 },
+        targetTick: this.lastTargetTick,
+        delayFrames: this.delayFrames,
+        extrapolatedFrames: 0,
+        bufferUnderrun: false
+      };
+    }
 
     for (let index = 1; index < this.samples.length; index += 1) {
       const current = this.samples[index]!;
-      if (targetTime > current.receivedAtMs) continue;
+      if (targetProgress > current.snapshot.tick) continue;
       const previous = this.samples[index - 1]!;
-      const duration = Math.max(1, current.receivedAtMs - previous.receivedAtMs);
+      const tickSpan = Math.max(1, current.snapshot.tick - previous.snapshot.tick);
+      this.lastTargetTick = targetProgress >= current.snapshot.tick - 0.000000001
+        ? current.snapshot.tick
+        : Math.max(previous.snapshot.tick, Math.floor(targetProgress));
+      this.lastBufferUnderrun = false;
       return {
-        previous: previous.snapshot,
-        current: current.snapshot,
-        alpha: Math.max(0, Math.min(1, (targetTime - previous.receivedAtMs) / duration))
+        frame: {
+          previous: previous.snapshot,
+          current: current.snapshot,
+          alpha: clamp((targetProgress - previous.snapshot.tick) / tickSpan, 0, 1)
+        },
+        targetTick: this.lastTargetTick,
+        delayFrames: this.delayFrames,
+        extrapolatedFrames: 0,
+        bufferUnderrun: false
       };
     }
-    return { previous: last.snapshot, current: last.snapshot, alpha: 1 };
+
+    const canExtrapolate = last.snapshot.phase === 'REGULATION' || last.snapshot.phase === 'SUDDEN_DEATH';
+    const extrapolatedFrames = canExtrapolate
+      ? clamp(targetProgress - last.snapshot.tick, 0, MAX_EXTRAPOLATION_FRAMES)
+      : 0;
+    this.lastTargetTick = last.snapshot.tick;
+    this.lastBufferUnderrun = targetProgress > last.snapshot.tick;
+    return {
+      frame: { previous: last.snapshot, current: last.snapshot, alpha: 1 },
+      targetTick: this.lastTargetTick,
+      delayFrames: this.delayFrames,
+      extrapolatedFrames,
+      bufferUnderrun: this.lastBufferUnderrun
+    };
   }
 
   clear(): void {
     this.samples.length = 0;
     this.averageIntervalMs = null;
     this.jitterMs = 0;
-    this.interpolationDelayMs = MIN_INTERPOLATION_DELAY_MS;
-    this.lastTargetTimeMs = null;
+    this.delayFrames = this.policy.reset().delayFrames;
+    this.lastTargetProgress = null;
+    this.lastTargetTick = null;
+    this.lastBufferUnderrun = false;
   }
 
   delayMs(): number {
-    return this.interpolationDelayMs;
+    return this.delayFrames * TICK_MS;
   }
 
-  targetTimeMs(): number | null {
-    return this.lastTargetTimeMs;
+  arrivalJitterMs(): number {
+    return this.jitterMs;
+  }
+
+  bufferUnderrun(): boolean {
+    return this.lastBufferUnderrun;
+  }
+
+  targetTick(): number | null {
+    return this.lastTargetTick;
   }
 
   private recordArrivalInterval(intervalMs: number): void {
@@ -400,10 +481,6 @@ export class SnapshotTimeline {
     const deviation = Math.abs(intervalMs - this.averageIntervalMs);
     this.averageIntervalMs += (intervalMs - this.averageIntervalMs) * INTERVAL_EWMA_ALPHA;
     this.jitterMs += (deviation - this.jitterMs) * JITTER_EWMA_ALPHA;
-    this.interpolationDelayMs = Math.max(
-      MIN_INTERPOLATION_DELAY_MS,
-      Math.min(MAX_INTERPOLATION_DELAY_MS, MIN_INTERPOLATION_DELAY_MS + this.jitterMs)
-    );
   }
 }
 
@@ -415,7 +492,18 @@ export function interpolateRemotePlayer(
 ): Vec2 {
   const dx = current.position.x - previous.position.x;
   const dy = current.position.y - previous.position.y;
-  if (Math.hypot(dx, dy) > snapDistance) return current.position;
+  const semanticTeleport = current.respawnRemainingMs > 0 || current.action.kind === 'RESPAWNING' ||
+    previous.respawnRemainingMs > 0 || previous.action.kind === 'RESPAWNING';
+  if (semanticTeleport || Math.hypot(dx, dy) >= snapDistance) return current.position;
   const progress = Math.max(0, Math.min(1, alpha));
   return { x: previous.position.x + dx * progress, y: previous.position.y + dy * progress };
+}
+
+export function extrapolateRemotePlayer(player: MatchPlayer, extrapolatedFrames: number): Vec2 {
+  if (player.respawnRemainingMs > 0 || player.action.kind === 'RESPAWNING') return player.position;
+  const elapsedSeconds = clamp(extrapolatedFrames, 0, MAX_EXTRAPOLATION_FRAMES) * TICK_MS / 1_000;
+  return {
+    x: player.position.x + player.velocity.x * elapsedSeconds,
+    y: player.position.y + player.velocity.y * elapsedSeconds
+  };
 }
