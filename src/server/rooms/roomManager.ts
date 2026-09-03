@@ -450,17 +450,26 @@ export class RoomManager {
     room.network.set(player.playerId, runtime);
   }
 
-  setWebRtcMedian(connectionId: string, medianMs: number, sampledAtMs: number): void {
+  setWebRtcNetworkSample(connectionId: string, medianMs: number, jitterMs: number, sampledAtMs: number): void {
     const { room, player } = this.requireConnectedPlayer(connectionId);
     if (!room.match || (room.phase !== 'COUNTDOWN' && room.phase !== 'MATCH')) return;
     const runtime = room.network.get(player.playerId) ?? createNetworkRuntime();
     if (runtime.transport !== 'webrtc' || !Number.isFinite(sampledAtMs)) return;
     const normalized = Math.round(Math.max(0, Math.min(GAME.maxPingMs, medianMs)));
+    const normalizedJitter = Math.round(Math.max(0, Math.min(GAME.maxPingMs, jitterMs)));
     runtime.currentMs = normalized;
     runtime.medianMs = normalized;
-    runtime.jitterMs = 0;
+    runtime.jitterMs = normalizedJitter;
     runtime.samples = [];
     runtime.sampledAtMs = sampledAtMs;
+    room.network.set(player.playerId, runtime);
+  }
+
+  clearWebRtcNetworkSample(connectionId: string): void {
+    const { room, player } = this.requireConnectedPlayer(connectionId);
+    const runtime = room.network.get(player.playerId) ?? createNetworkRuntime();
+    if (runtime.transport !== 'webrtc') return;
+    clearNetworkSamples(runtime);
     room.network.set(player.playerId, runtime);
   }
 

@@ -33,7 +33,7 @@ The result is visible in two ways. First, unit and integration tests prove the f
 
 - [x] (2026-09-03 11:05 +03:00) Approved the hybrid design and committed the design specification as `bf663e2`.
 - [x] (2026-09-03 11:32 +03:00) Rewrote the outline into a task-by-task ExecPlan with explicit interfaces, verification commands, publication gates, and recovery notes.
-- [ ] Implement Task 1 and commit the adaptive policy and honest WebRTC jitter publication.
+- [x] (2026-09-03) Implemented Task 1: shared adaptive policy plus honest WebRTC latest-five RTT jitter publication; focused policy, transport, and room tests pass.
 - [ ] Implement Task 2 and commit the monotonic sixteen-snapshot remote presentation timeline.
 - [ ] Implement Task 3 and commit bounded local reconciliation with correction telemetry.
 - [ ] Implement Task 4 and commit gameplay protocol v2 with required `viewTick`.
@@ -682,6 +682,8 @@ As work progresses, append short evidence bullets here. Keep each bullet to one 
 - Example entry format: `npm test -- --run src/shared/netcodePolicy.test.ts` -> `5 tests passed in 420 ms`.
 - Example entry format: `git commit -m "feat: add adaptive netcode policy"` -> `created commit <sha>`.
 - Example entry format: `curl --fail --silent http://127.0.0.1:4174/health` -> `{"status":"ok",...}`.
+- `npm test -- --run src/shared/netcodePolicy.test.ts` -> `6 tests passed` after the policy red-green loop.
+- `npm test -- --run src/server/network/gameplayTransport/GameplayTransportHub.test.ts src/server/rooms/roomManager.test.ts` -> `53 tests passed` after the transport/room red-green loop.
 
 ## Interfaces and Dependencies
 

@@ -188,7 +188,7 @@ type SessionHarness = Readonly<{
   emittedSnapshots: MatchSnapshotPublication[];
   emittedEvents: MatchEventPublication[];
   networkModes: Parameters<TransportSession['setNetworkMode']>[0][];
-  networkSamples: Array<Readonly<{ medianMs: number; sampledAt: number }>>;
+  networkSamples: Array<Readonly<{ medianMs: number; jitterMs: number; sampledAt: number }>>;
   networkClearTimes: number[];
 }>;
 
@@ -200,7 +200,7 @@ function session(overrides: Partial<Pick<TransportSession, 'socketId' | 'playerI
   const emittedSnapshots: MatchSnapshotPublication[] = [];
   const emittedEvents: MatchEventPublication[] = [];
   const networkModes: Parameters<TransportSession['setNetworkMode']>[0][] = [];
-  const networkSamples: Array<Readonly<{ medianMs: number; sampledAt: number }>> = [];
+  const networkSamples: Array<Readonly<{ medianMs: number; jitterMs: number; sampledAt: number }>> = [];
   const networkClearTimes: number[] = [];
   const ingress: MatchInputIngress = {
     accept: (payload: unknown): MatchInputIngressResult => {
@@ -221,7 +221,7 @@ function session(overrides: Partial<Pick<TransportSession, 'socketId' | 'playerI
     emitEvent: (value) => emittedEvents.push(value),
     emitError: (value) => emittedErrors.push(value),
     setNetworkMode: (mode) => networkModes.push(mode),
-    setNetworkSample: (medianMs, sampledAt) => networkSamples.push({ medianMs, sampledAt }),
+    setNetworkSample: (medianMs, jitterMs, sampledAt) => networkSamples.push({ medianMs, jitterMs, sampledAt }),
     clearNetworkSample: () => networkClearTimes.push(Date.now())
   };
   return {
@@ -493,6 +493,24 @@ describe('GameplayTransportHub', () => {
     const oldPeer = await negotiateAndActivate(hub, factory);
     hub.publish(started());
 
+    await vi.advanceTimersByTimeAsync(1_000);
+    const heartbeat = JSON.parse(oldPeer.reliableSent.at(-1)!);
+    const probe = JSON.parse(oldPeer.fastSent.at(-1)!);
+    oldPeer.receiveReliable({
+      version: 1,
+      generationId: FIRST_GENERATION,
+      kind: 'heartbeat-ack',
+      nonce: heartbeat.nonce
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    oldPeer.receiveFast({
+      version: 1,
+      generationId: FIRST_GENERATION,
+      kind: 'probe-ack',
+      nonce: probe.nonce
+    });
+    expect(first.networkSamples).toEqual([{ medianMs: 50, jitterMs: 0, sampledAt: 1_050 }]);
+
     await hub.negotiate('s1', {
       generationId: SECOND_GENERATION,
       offer: { type: 'offer', sdp: 'replacement' }
@@ -506,6 +524,7 @@ describe('GameplayTransportHub', () => {
 
     expect(oldPeer.closeCalls).toBe(1);
     expect(first.acceptedInputs).toEqual([]);
+    expect(first.networkClearTimes).toEqual([1_050]);
     expect(hub.modeForPlayer('p1')).toBe('webrtc');
   });
 
@@ -647,7 +666,7 @@ describe('GameplayTransportHub', () => {
     expect(hub.modeForPlayer('p1')).toBe('websocket');
   });
 
-  it('publishes one server-timed RTT per matching fast probe acknowledgement using the latest-five median', async () => {
+  it('publishes one server-timed RTT and median consecutive-sample jitter per matching fast probe acknowledgement', async () => {
     let serverNow = 50_000;
     let fakeTimerNow = 0;
     const advanceServerClock = async (timerDurationMs: number, serverDurationMs = timerDurationMs): Promise<void> => {
@@ -684,7 +703,7 @@ describe('GameplayTransportHub', () => {
       kind: 'probe-ack',
       nonce: firstProbe.nonce
     });
-    expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 51_050 }]);
+    expect(first.networkSamples).toEqual([{ medianMs: 50, jitterMs: 0, sampledAt: 51_050 }]);
 
     peer.receiveFast({
       version: 1,
@@ -698,7 +717,7 @@ describe('GameplayTransportHub', () => {
       kind: 'probe-ack',
       nonce: firstProbe.nonce + 1
     });
-    expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 51_050 }]);
+    expect(first.networkSamples).toEqual([{ medianMs: 50, jitterMs: 0, sampledAt: 51_050 }]);
 
     let nextHeartbeatTimerAt = 2_000;
     for (const [delayMs, expectedMedianMs] of [[10, 30], [30, 30], [100, 40], [20, 30], [0, 20]] as const) {
@@ -723,12 +742,12 @@ describe('GameplayTransportHub', () => {
     }
 
     expect(first.networkSamples).toEqual([
-      { medianMs: 50, sampledAt: 51_050 },
-      { medianMs: 30, sampledAt: 52_010 },
-      { medianMs: 30, sampledAt: 53_030 },
-      { medianMs: 40, sampledAt: 54_100 },
-      { medianMs: 30, sampledAt: 55_020 },
-      { medianMs: 20, sampledAt: 56_000 }
+      { medianMs: 50, jitterMs: 0, sampledAt: 51_050 },
+      { medianMs: 30, jitterMs: 40, sampledAt: 52_010 },
+      { medianMs: 30, jitterMs: 30, sampledAt: 53_030 },
+      { medianMs: 40, jitterMs: 40, sampledAt: 54_100 },
+      { medianMs: 30, jitterMs: 55, sampledAt: 55_020 },
+      { medianMs: 20, jitterMs: 45, sampledAt: 56_000 }
     ]);
   });
 
@@ -791,8 +810,8 @@ describe('GameplayTransportHub', () => {
       acknowledgeFastProbe(100);
       acknowledgeFastProbe(300);
       expect(first.networkSamples).toEqual([
-        { medianMs: 100, sampledAt: 100 },
-        { medianMs: 200, sampledAt: 400 }
+        { medianMs: 100, jitterMs: 0, sampledAt: 100 },
+        { medianMs: 200, jitterMs: 200, sampledAt: 400 }
       ]);
 
       serverNow += 6_000;
@@ -800,7 +819,7 @@ describe('GameplayTransportHub', () => {
       expect(first.networkClearTimes).toHaveLength(1);
 
       acknowledgeFastProbe(50);
-      expect(first.networkSamples.at(-1)).toEqual({ medianMs: 50, sampledAt: 6_450 });
+      expect(first.networkSamples.at(-1)).toEqual({ medianMs: 50, jitterMs: 0, sampledAt: 6_450 });
     } finally {
       heartbeatInterval.mockRestore();
     }
@@ -842,15 +861,15 @@ describe('GameplayTransportHub', () => {
       acknowledgeFastProbe(100);
       acknowledgeFastProbe(300);
       expect(first.networkSamples).toEqual([
-        { medianMs: 100, sampledAt: 100 },
-        { medianMs: 200, sampledAt: 400 }
+        { medianMs: 100, jitterMs: 0, sampledAt: 100 },
+        { medianMs: 200, jitterMs: 200, sampledAt: 400 }
       ]);
 
       serverNow += 6_000;
       expect(first.networkClearTimes).toEqual([]);
 
       acknowledgeFastProbe(50);
-      expect(first.networkSamples.at(-1)).toEqual({ medianMs: 50, sampledAt: 6_450 });
+      expect(first.networkSamples.at(-1)).toEqual({ medianMs: 50, jitterMs: 0, sampledAt: 6_450 });
       expect(first.networkClearTimes).toEqual([]);
     } finally {
       heartbeatInterval.mockRestore();

@@ -292,8 +292,9 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
           if (mode === 'webrtc') sessionRttSampler.stop();
           else sessionRttSampler.start();
         },
-        setNetworkSample: (medianMs, sampledAt) => rooms.setWebRtcMedian(socket.id, medianMs, sampledAt),
-        clearNetworkSample: () => rooms.clearPing(socket.id)
+        setNetworkSample: (medianMs, jitterMs, sampledAt) =>
+          rooms.setWebRtcNetworkSample(socket.id, medianMs, jitterMs, sampledAt),
+        clearNetworkSample: () => rooms.clearWebRtcNetworkSample(socket.id)
       });
       onSession(socket, welcome, inputIngress);
       rooms.setTransport(socket.id, currentTransport(socket));

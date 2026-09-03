@@ -278,13 +278,13 @@ describe('RoomManager FFA lifecycle', () => {
       transport: 'webrtc'
     });
 
-    subject.manager.setWebRtcMedian('c-1', 12, 1_000);
+    subject.manager.setWebRtcNetworkSample('c-1', 12, 7, 1_000);
     subject.clock.advance(5_999);
     subject.manager.advance(40);
     expect(subject.snapshot(roomCode).network[hostId]).toMatchObject({
       currentMs: 12,
       medianMs: 12,
-      jitterMs: 0,
+      jitterMs: 7,
       transport: 'webrtc'
     });
 
@@ -297,7 +297,7 @@ describe('RoomManager FFA lifecycle', () => {
       transport: 'webrtc'
     });
 
-    subject.manager.setWebRtcMedian('c-1', 15, subject.clock.now());
+    subject.manager.setWebRtcNetworkSample('c-1', 15, 3, subject.clock.now());
     subject.manager.setTransport('c-1', 'websocket');
     subject.manager.advance(40);
     expect(subject.snapshot(roomCode).network[hostId]).toEqual({

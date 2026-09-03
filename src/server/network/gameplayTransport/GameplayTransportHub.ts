@@ -38,7 +38,7 @@ export type TransportSession = Readonly<{
   emitEvent(publication: MatchEventPublication): void;
   emitError(error: ServerError): void;
   setNetworkMode(mode: GameplayTransportMode): void;
-  setNetworkSample(medianMs: number, sampledAt: number): void;
+  setNetworkSample(medianMs: number, jitterMs: number, sampledAt: number): void;
   clearNetworkSample(): void;
 }>;
 
@@ -576,8 +576,11 @@ export class GameplayTransportHub {
       record.rttSamples.splice(0, record.rttSamples.length - RTT_SAMPLE_LIMIT);
     }
     record.rttFresh = true;
+    const rttValues = record.rttSamples.map((sample) => sample.value);
+    const differences = rttValues.slice(1).map((value, index) => Math.abs(value - rttValues[index]!));
     safeInvoke(() => record.session.setNetworkSample(
-      median(record.rttSamples.map((sample) => sample.value)),
+      median(rttValues),
+      differences.length === 0 ? 0 : median(differences),
       sampledAt
     ));
     if (record.rttFreshnessTimer) clearTimeout(record.rttFreshnessTimer);
