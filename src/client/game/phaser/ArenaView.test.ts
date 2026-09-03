@@ -91,10 +91,21 @@ describe('ArenaView', () => {
     expect(overlay.calls.filter((call) => call.method === 'setAlpha')).toHaveLength(5);
     expect(overlay.calls.filter((call) => call.method === 'setAlpha').at(-1)?.args)
       .not.toEqual(overlay.calls.filter((call) => call.method === 'setAlpha').at(-2)?.args);
+    const firstPulseLineStyles = overlay.calls.filter((call) => call.method === 'lineStyle')
+      .slice(-11).map((call) => call.args);
+    const firstNodeRadii = overlay.calls.filter((call) => call.method === 'fillCircle')
+      .slice(-8).map((call) => call.args[2]);
 
-    arena.apply(visualState(90_000, 58_399), 1_101);
+    arena.apply(visualState(90_000, 58_468), 1_101);
     expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(3);
     expect(overlay.calls.filter((call) => call.method === 'setAlpha')).toHaveLength(6);
+    expect(overlay.calls.filter((call) => call.method === 'lineStyle')
+      .slice(-11).map((call) => call.args)).not.toEqual(firstPulseLineStyles);
+    expect(overlay.calls.filter((call) => call.method === 'fillCircle')
+      .slice(-8).map((call) => call.args[2])).not.toEqual(firstNodeRadii);
+
+    arena.apply(visualState(90_000, 58_399), 1_101);
+    expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(4);
   });
 
   it('keeps reduced-motion warning opacity stable without pulse-driven redraws', () => {

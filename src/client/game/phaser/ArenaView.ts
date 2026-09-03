@@ -146,6 +146,7 @@ function warningIsVisible(state: ArenaVisualState): boolean {
 type VisualSignature = Readonly<{
   phase: MatchPhase;
   warningStep: number;
+  pulseNowMs: number;
   platformProgress: number;
   durationMs: number;
 }>;
@@ -157,10 +158,20 @@ function warningGeometryStep(state: ArenaVisualState): number {
   return Math.floor(Math.max(0, warningRemainingMs - state.remainingMs) / WARNING_GEOMETRY_STEP_MS);
 }
 
-function visualSignature(state: ArenaVisualState): VisualSignature {
+function quantizedPulseNowMs(state: ArenaVisualState, nowMs: number, reducedMotion: boolean): number {
+  if (reducedMotion || !warningIsVisible(state)) return 0;
+  return Math.floor(Math.max(0, nowMs) / WARNING_GEOMETRY_STEP_MS) * WARNING_GEOMETRY_STEP_MS;
+}
+
+function visualSignature(
+  state: ArenaVisualState,
+  nowMs: number,
+  reducedMotion: boolean
+): VisualSignature {
   return {
     phase: state.phase,
     warningStep: warningGeometryStep(state),
+    pulseNowMs: quantizedPulseNowMs(state, nowMs, reducedMotion),
     platformProgress: state.platformProgress,
     durationMs: state.settings.durationMs
   };
@@ -168,7 +179,8 @@ function visualSignature(state: ArenaVisualState): VisualSignature {
 
 function sameVisualSignature(left: VisualSignature | null, right: VisualSignature): boolean {
   return left !== null && left.phase === right.phase && left.warningStep === right.warningStep &&
-    left.platformProgress === right.platformProgress && left.durationMs === right.durationMs;
+    left.pulseNowMs === right.pulseNowMs && left.platformProgress === right.platformProgress &&
+    left.durationMs === right.durationMs;
 }
 
 function warningPulseAlpha(state: ArenaVisualState, nowMs: number, reducedMotion: boolean): number {
@@ -219,11 +231,12 @@ export function createArenaView(
   return {
     apply(state, nowMs = 0) {
       if (destroyed) return;
-      const signature = visualSignature(state);
+      const signature = visualSignature(state, nowMs, reducedMotion);
       if (!sameVisualSignature(lastVisualSignature, signature)) {
         lastVisualSignature = signature;
         const model = buildArenaVisualModel(state, {
-          reducedMotion: true
+          nowMs: signature.pulseNowMs,
+          reducedMotion: reducedMotion || !warningIsVisible(state)
         });
         drawDynamicTelegraph(overlay, state, model);
       }
