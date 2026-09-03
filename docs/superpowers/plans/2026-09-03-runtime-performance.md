@@ -66,7 +66,7 @@ The player should see smoother motion and a lower, more stable application Ping 
 
 ## Outcomes & Retrospective
 
-Tasks 1-6 and the automated portion of Task 7 are complete. The fallback queue is bounded, Ping is server-timed on each active gameplay transport, the reliable WebRTC heartbeat owns only liveness, authoritative scheduling is deadline-anchored, remote presentation buffering is capped at 24 ms, and measured Phaser hot paths stay inside one-frame budgets. Final review, production restart, remote publication, and physical-device observation remain distinct gates.
+Tasks 1-6 and the automated portion of Task 7 are complete. The fallback queue is bounded, Ping is server-timed on each active gameplay transport, the reliable WebRTC heartbeat owns only liveness, authoritative scheduling is deadline-anchored, remote presentation buffering is capped at 24 ms, and measured Phaser hot paths stay inside one-frame budgets. Independent whole-branch review and production restart are complete; remote publication and physical-device observation remain distinct gates.
 
 Commands and results:
 
@@ -76,11 +76,14 @@ Commands and results:
 - Same command (serial run 2) — failed at `tests/e2e/performance.spec.ts:496`: expected transport `webrtc`, received `websocket` after 10,000 ms. One immediate controller rerun at unchanged `a6f509c` then passed 1/1 in 14.0 s: 59.88 median FPS, 17.60 ms p95 frame, WebRTC 14.00/18.80 ms median/p95, and fallback 12.70/13.90 ms. This controller-supplied console evidence has no retained raw-log artifact.
 - Same command (serial run 3, resumed evidence) — passed. n=180, 16.70 ms median frame / 59.88 median FPS / 17.60 ms p95 frame. WebRTC input-to-authoritative n=12: 15.30 ms median / 18.30 ms p95. Forced Socket.IO fallback n=12: 14.30 ms median / 19.40 ms p95.
 - `node --import tsx --input-type=module` active-match harness — started in-process `createGameServer({ host: '127.0.0.1', port: 0, enableTestHarness: true })`, monkeypatched server `Socket.prototype.emit` only for `network:probe` acknowledgement timing, restored the prototype in `finally`, and used two active 1280x720 Chromium fallback contexts. Its 20 same-host application RTT samples were min 20.06 / median 75.96 / p95 188.74 / max 353.88 ms. This does not materially improve the roughly 68.5 ms pre-change active-render baseline; focused Chromium WebRTC/fallback/mobile acceptance and mobile WebKit smoke were stopped and remain unrun.
-- Final `npm run verify` — lint and both TypeScript projects passed; 65 files / 614 Vitest tests passed; the eight-client fallback load gate passed; the production client/server build passed with only the retained Vite chunk-size warning.
+- Final `npm run verify` after review repair — lint and both TypeScript projects passed; 65 files / 615 Vitest tests passed; the eight-client fallback load gate passed; the production client/server build passed with only the retained Vite chunk-size warning.
 - Final eight-player performance runs (60 exact samples per transport) — three of three corrected runs passed. All reported 59.88 median FPS; p95 frame time was 18.3, 18.1, and 18.2 ms. WebRTC median/p95 was 13.8/30.0, 3.9/21.5, and 18.5/34.1 ms; fallback was 12.5/27.6, 3.3/20.9, and 17.2/32.9 ms.
 - Final focused Chromium acceptance — `mobile.spec.ts`, `networkFallback.spec.ts`, and `webrtcGameplay.spec.ts` passed 5/5, including WebRTC, forced polling/WebSocket fallback, rematch generation, and one-value Ping HUD behavior. Same-host WebRTC Ping was 1-2 ms initially and 1 ms settled; fallback was 3 ms initially and 0/1 ms current/median settled.
 - Final mobile WebKit acceptance — `safariMobile.spec.ts` passed 1/1 with a trusted touch producing one authoritative WebRTC quick attack.
 - Final simultaneous ring-out performance — passed with four hits, four same-tick ring-outs, 18.6 ms correlated maximum frame time, 18.7 ms global maximum, and 59.88 median FPS.
+- Independent whole-branch review found one important fallback risk: a throwing snapshot subscriber could skip its acknowledgement and leave `SocketSnapshotPacer` permanently in flight. A red regression test reproduced zero acknowledgements, the client now acknowledges in `finally`, 85/85 focused tests passed, and follow-up review reported no findings.
+- Publication-candidate Chromium WebRTC/fallback acceptance passed 2/2 after the review repair. Same-host WebRTC Ping was 3-4 ms initially and 4-6 ms settled; forced WebSocket fallback was 14 ms initially and 3 ms settled.
+- Production restart replaced PID 15884 with PID 81786 on `*:4174`; both `http://127.0.0.1:4174/health` and `http://192.168.68.52:4174/health` returned `status: ok` from the new process.
 
 Across the final three corrected runs, median-of-run-medians was 13.8 ms for WebRTC and 12.5 ms for fallback; median-of-run-p95 values was 30.0 ms WebRTC and 27.6 ms fallback. Every run passed the <=20 ms median / <40 ms p95 input gate and the >=58 FPS / <25 ms p95 frame gate. Physical phone/AP comparison remains pending and is not inferred from same-host data.
 
@@ -228,7 +231,7 @@ Finally, run focused suites, the full verification gate, and repeated real-brows
 - [x] Run the real-browser FPS/input-latency benchmark three serial times and retain every result, including failures.
 - [x] Run WebRTC, forced fallback, desktop/mobile Chromium, and mobile WebKit acceptance plus the simultaneous ring-out performance case.
 - [x] Measure the displayed/gameplay-path Ping in both WebRTC and fallback modes; report same-host automation separately from physical Wi-Fi observations.
-- [ ] Obtain task and whole-branch review, fix load-bearing findings, and rerun affected gates.
+- [x] Obtain task and whole-branch review, fix load-bearing findings, and rerun affected gates.
 - [ ] Build production, restart `com.reitenji.neon-relay.lan`, prove the listener and localhost/LAN health, then push the feature branch and authorized public `main` and verify remote refs.
 
 ## Validation and Acceptance
