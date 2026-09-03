@@ -220,6 +220,7 @@ function expectEvent<E extends keyof ServerToClientEvents>(
 async function connectClient(origin: string): Promise<GameClient> {
   const client: GameClient = io(origin, { transports: ['websocket'], forceNew: true, reconnection: false });
   client.on('match:snapshot', (_publication, acknowledge) => acknowledge());
+  client.on('network:probe', (probe, acknowledge) => acknowledge({ nonce: probe.nonce }));
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timed out connecting Socket.IO client')), ACK_TIMEOUT_MS);
     client.once('connect', () => {
@@ -492,7 +493,7 @@ describe('Socket.IO FFA game server flow', () => {
     await waitFor(
       () => snapshot(match.roomCode).network[match.host.playerId]?.medianMs !== null,
       'first server-issued RTT sample after match start',
-      750
+      1_250
     );
     const measured = snapshot(match.roomCode);
     expect(measured.network[match.host.playerId]).toMatchObject({
@@ -619,7 +620,7 @@ describe('Socket.IO FFA game server flow', () => {
       server.rooms.advance(STEP_MS);
       const network = snapshot(match.roomCode).network[match.host.playerId];
       return network?.transport === 'websocket' && network.medianMs !== null;
-    }, 'fresh immediate Socket.IO fallback Ping', 750);
+    }, 'fresh immediate Socket.IO fallback probe', 750);
     expect(snapshot(match.roomCode).network[match.host.playerId]).toMatchObject({
       transport: 'websocket',
       medianMs: expect.any(Number)
@@ -628,7 +629,7 @@ describe('Socket.IO FFA game server flow', () => {
     expect(peer.closeCalls).toBe(1);
   });
 
-  it('publishes the fast-channel latest-five WebRTC median once, then resumes snapshot-ack Socket.IO RTT aggregation', async () => {
+  it('publishes the fast-channel latest-five WebRTC median once, then resumes lightweight Socket.IO RTT aggregation', async () => {
     const match = await startMatch();
     const peer = await negotiateAndActivate(match.hostClient);
     peer.autoAcknowledgeHeartbeats = true;

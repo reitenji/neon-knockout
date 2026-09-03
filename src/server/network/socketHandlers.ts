@@ -25,6 +25,7 @@ import {
 import { DomainError } from '../rooms/domainError.js';
 import type { RoomManager } from '../rooms/roomManager.js';
 import { createMatchInputIngress, type MatchInputIngress } from './matchInputIngress.js';
+import { SocketRttSampler } from './SocketRttSampler.js';
 import { SocketSnapshotPacer } from './SocketSnapshotPacer.js';
 import {
   GameplayTransportExpectedLifecycleError,
@@ -139,7 +140,13 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       }
     });
     let activePlayerId: string | null = null;
+    let rttSampler: SocketRttSampler | null = null;
     let snapshotPacer: SocketSnapshotPacer | null = null;
+
+    const disposeRttSampler = (): void => {
+      rttSampler?.stop();
+      rttSampler = null;
+    };
 
     const disposeSnapshotPacer = (): void => {
       snapshotPacer?.dispose();
@@ -232,23 +239,32 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     };
 
     const establishSession = (welcome: SessionWelcome): void => {
+      disposeRttSampler();
       disposeSnapshotPacer();
       const sessionSnapshotPacer = new SocketSnapshotPacer(
         (publication, acknowledgeSnapshot) => {
           socket.emit('match:snapshot', structuredClone(publication), acknowledgeSnapshot);
-        },
-        {
-          now,
-          shouldSampleRtt: () => {
-            if (activePlayerId === null) return false;
-            const mode = transportHub.modeForPlayer(activePlayerId);
-            return mode === 'websocket' || mode === 'polling';
-          },
-          onRttSample: ({ rttMs, sampledAtMs }) => {
-            rooms.setPing(socket.id, rttMs, currentTransport(socket), sampledAtMs);
-          }
         }
       );
+      const sessionRttSampler = new SocketRttSampler({
+        now,
+        send: (probe, acknowledgeProbe) => {
+          socket.emit('network:probe', structuredClone(probe), acknowledgeProbe);
+        },
+        onSample: ({ rttMs, sampledAtMs }) => {
+          if (rttSampler !== sessionRttSampler || activePlayerId !== welcome.playerId) return;
+          const mode = transportHub.modeForPlayer(welcome.playerId);
+          if (mode !== 'websocket' && mode !== 'polling') return;
+          rooms.setPing(socket.id, rttMs, currentTransport(socket), sampledAtMs);
+        },
+        onUnavailable: () => {
+          if (rttSampler !== sessionRttSampler || activePlayerId !== welcome.playerId) return;
+          const mode = transportHub.modeForPlayer(welcome.playerId);
+          if (mode !== 'websocket' && mode !== 'polling') return;
+          rooms.clearPing(socket.id);
+        }
+      });
+      rttSampler = sessionRttSampler;
       snapshotPacer = sessionSnapshotPacer;
       void socket.join(welcome.roomCode);
       inputIngress.reset();
@@ -266,13 +282,15 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         emitError: (error) => socket.emit('server:error', structuredClone(error)),
         setNetworkMode: (mode) => {
           rooms.setTransport(socket.id, mode);
-          if (mode !== 'webrtc') sessionSnapshotPacer.resetRttSampleWindow();
+          if (mode === 'webrtc') sessionRttSampler.stop();
+          else sessionRttSampler.start();
         },
         setNetworkSample: (medianMs, sampledAt) => rooms.setWebRtcMedian(socket.id, medianMs, sampledAt),
         clearNetworkSample: () => rooms.clearPing(socket.id)
       });
       onSession(socket, welcome, inputIngress);
       rooms.setTransport(socket.id, currentTransport(socket));
+      sessionRttSampler.start();
       queueMicrotask(() => {
         socket.emit('session:welcome', welcome);
         const publication = rooms.currentMatchPublication(socket.id);
@@ -284,6 +302,8 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       try {
         if (activePlayerId && transportHub.modeForPlayer(activePlayerId) === 'webrtc') return;
         rooms.setTransport(socket.id, currentTransport(socket));
+        rttSampler?.stop();
+        rttSampler?.start();
       } catch {
         // Ignore upgrades before a room session exists or after it was torn down.
       }
@@ -359,6 +379,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     socket.on('room:leave', (payload, callback) => {
       acknowledgeAsync(roomLeaveSchema, payload, callback, async () => {
         const roomCode = rooms.leaveRoom(socket.id);
+        disposeRttSampler();
         disposeSnapshotPacer();
         activePlayerId = null;
         const cleanupResults = await Promise.allSettled([
@@ -401,6 +422,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       if (result.status === 'error') socket.emit('server:error', result.error);
     });
     socket.on('disconnect', () => {
+      disposeRttSampler();
       disposeSnapshotPacer();
       rooms.disconnect(socket.id);
       activePlayerId = null;

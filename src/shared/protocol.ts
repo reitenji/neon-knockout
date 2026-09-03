@@ -67,6 +67,8 @@ export type LobbyReadyPayload = z.infer<typeof lobbyReadySchema>;
 export type LobbySettingsPayload = z.infer<typeof lobbySettingsSchema>;
 export type MatchInputPayload = InputFrame;
 export type ResultReadyPayload = z.infer<typeof resultReadySchema>;
+export type NetworkProbe = Readonly<{ nonce: number }>;
+export type NetworkProbeAcknowledgement = Readonly<{ nonce: number }>;
 
 export interface ClientToServerEvents {
   'room:create': (payload: RoomCreatePayload, acknowledge: (ack: Ack<SessionWelcome>) => void) => void;
@@ -98,5 +100,9 @@ export interface ServerToClientEvents {
   'match:started': (publication: MatchStartedPublication) => void;
   'match:snapshot': (publication: MatchSnapshotPublication, acknowledge: () => void) => void;
   'match:event': (publication: MatchEventPublication) => void;
+  'network:probe': (
+    probe: NetworkProbe,
+    acknowledge: (acknowledgement: NetworkProbeAcknowledgement) => void
+  ) => void;
   'server:error': (error: ServerError) => void;
 }

@@ -201,6 +201,7 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
     acknowledge();
   });
   socket.on('match:event', (publication) => activeBundle?.transport.acceptSocketEvent(publication));
+  socket.on('network:probe', (probe, acknowledge) => acknowledge({ nonce: probe.nonce }));
   socket.on('server:error', (error) => publish('server:error', error));
 
   return {

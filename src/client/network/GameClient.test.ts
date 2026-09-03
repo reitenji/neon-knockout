@@ -618,4 +618,15 @@ describe('createSocketGameClient', () => {
     expect(socketHarness.socket.emit).not.toHaveBeenCalledWith('transport:fallback', {});
   });
 
+  it('echoes only the server nonce when acknowledging a Socket.IO RTT probe', () => {
+    createSocketGameClient();
+    const acknowledge = vi.fn();
+
+    socketHarness.trigger('network:probe', { nonce: 17 }, acknowledge);
+
+    expect(acknowledge).toHaveBeenCalledOnce();
+    expect(acknowledge).toHaveBeenCalledWith({ nonce: 17 });
+    expect(socketHarness.socket.emit).not.toHaveBeenCalled();
+  });
+
 });
