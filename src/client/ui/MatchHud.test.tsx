@@ -292,6 +292,7 @@ describe('MatchHud', () => {
       remainingMs: 58_500,
       settings: { durationMs: 90_000, knockoutTarget: 3 }
     })));
+    act(() => vi.advanceTimersByTime(50));
     expect(screen.getByRole('status', { name: 'Arena daralma uyarısı' })).toBeVisible();
 
     act(() => bridge.publish(snapshot({
@@ -299,6 +300,7 @@ describe('MatchHud', () => {
       remainingMs: 117_001,
       settings: { durationMs: 180_000, knockoutTarget: 10 }
     })));
+    act(() => vi.advanceTimersByTime(50));
     expect(screen.getByLabelText('Kazanma hedefi')).toHaveTextContent('İlk 10 knockout');
     expect(screen.queryByRole('status', { name: 'Arena daralma uyarısı' })).not.toBeInTheDocument();
 
@@ -307,6 +309,7 @@ describe('MatchHud', () => {
       remainingMs: 117_000,
       settings: { durationMs: 180_000, knockoutTarget: 10 }
     })));
+    act(() => vi.advanceTimersByTime(50));
     expect(screen.getByRole('status', { name: 'Arena daralma uyarısı' })).toBeVisible();
   });
 
@@ -338,6 +341,33 @@ describe('MatchHud', () => {
     view.unmount();
     expect(bridge.snapshotListeners).toHaveLength(0);
     expect(bridge.connectionListeners).toHaveLength(0);
+  });
+
+  it('paces combat-only HUD snapshots while applying connection changes immediately', () => {
+    const bridge = new PresentationBridge();
+    bridge.current = snapshot({
+      phase: 'REGULATION',
+      remainingMs: 90_000,
+      players: [player({ overload: 20 })],
+      scores: { 'p-local': 0 }
+    });
+    render(<MatchHud bridge={bridge} localPlayerId="p-local" />);
+
+    expect(screen.getByRole('meter', { name: 'Overload' })).toHaveAttribute('aria-valuenow', '20');
+    act(() => bridge.publish(snapshot({
+      tick: 13,
+      phase: 'REGULATION',
+      remainingMs: 89_983,
+      players: [player({ overload: 80 })],
+      scores: { 'p-local': 0 }
+    })));
+    expect(screen.getByRole('meter', { name: 'Overload' })).toHaveAttribute('aria-valuenow', '20');
+
+    act(() => bridge.setConnected(false));
+    expect(screen.getByRole('status', { name: 'Bağlantı durumu' })).toHaveTextContent('Bağlantı kesildi');
+
+    act(() => vi.advanceTimersByTime(50));
+    expect(screen.getByRole('meter', { name: 'Overload' })).toHaveAttribute('aria-valuenow', '80');
   });
 
   it('shows the short authoritative respawn wait without making the knockout feel longer', () => {

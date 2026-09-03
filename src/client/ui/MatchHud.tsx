@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { ACCENTS, GAME } from '../../shared/constants.js';
 import type { MatchPhase, MatchPlayer, MatchSnapshot, PlayerNetworkStatus } from '../../shared/model.js';
 import { matchTimingFor } from '../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../game/GamePresentationBridge.js';
+import { createHudSnapshotStore } from './HudSnapshotStore.js';
 
 type MatchHudProps = Readonly<{
   bridge: GamePresentationBridge;
@@ -60,12 +61,8 @@ function meterStyle(progress: number): CSSProperties {
 }
 
 function useMatchSnapshot(bridge: GamePresentationBridge): MatchSnapshot | null {
-  const subscribe = useCallback(
-    (notify: () => void) => bridge.subscribeSnapshot(() => notify()),
-    [bridge]
-  );
-  const getSnapshot = useCallback(() => bridge.getSnapshot(), [bridge]);
-  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const store = useMemo(() => createHudSnapshotStore(bridge), [bridge]);
+  return useSyncExternalStore(store.subscribe, store.getSnapshot, store.getSnapshot);
 }
 
 function useConnection(bridge: GamePresentationBridge): boolean {
