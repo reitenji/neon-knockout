@@ -82,6 +82,12 @@ function harness() {
       transportMode = mode;
       if (transportSession === null) throw new Error('Transport session was not attached.');
       transportSession.setNetworkMode(mode);
+    },
+    publishStarted(): void {
+      if (transportSession === null) throw new Error('Transport session was not attached.');
+      const publication = rooms.currentMatchPublication('host-socket');
+      if (publication === null) throw new Error('Match publication was not available.');
+      transportSession.emitStarted(publication);
     }
   };
 }
@@ -109,7 +115,7 @@ describe('Socket fallback RTT at match start', () => {
     vi.restoreAllMocks();
   });
 
-  it('restarts immediately after a discarded lobby sample and publishes the first in-match sample', () => {
+  it('restarts immediately when a fallback session receives the match-start publication', () => {
     vi.useFakeTimers();
     const subject = harness();
     expect(subject.probes.map(({ nonce }) => nonce)).toEqual([1]);
@@ -119,6 +125,8 @@ describe('Socket fallback RTT at match start', () => {
 
     subject.setNow(10);
     expect(startMatch(subject)).toEqual({ ok: true, data: null });
+    expect(subject.probes.map(({ nonce }) => nonce)).toEqual([1]);
+    subject.publishStarted();
     expect(subject.probes.map(({ nonce }) => nonce)).toEqual([1, 2]);
     subject.setNow(17);
     subject.probes[1]!.acknowledge({ nonce: 2 });
@@ -139,6 +147,7 @@ describe('Socket fallback RTT at match start', () => {
 
     subject.setNow(10);
     expect(startMatch(subject)).toEqual({ ok: true, data: null });
+    subject.publishStarted();
     expect(subject.probes.map(({ nonce }) => nonce)).toEqual([1]);
     expect(subject.rooms.currentMatchPublication('host-socket')?.snapshot.network[subject.host.playerId]).toEqual({
       currentMs: null,

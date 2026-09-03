@@ -276,7 +276,14 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         inputIngress,
         socketMode: () => currentTransport(socket),
         emitMode: (notice) => socket.emit('transport:mode', structuredClone(notice)),
-        emitStarted: (publication) => socket.emit('match:started', structuredClone(publication)),
+        emitStarted: (publication) => {
+          socket.emit('match:started', structuredClone(publication));
+          if (rttSampler !== sessionRttSampler) return;
+          const mode = transportHub.modeForPlayer(welcome.playerId);
+          if (mode !== 'websocket' && mode !== 'polling') return;
+          sessionRttSampler.stop();
+          sessionRttSampler.start();
+        },
         emitSnapshot: (publication) => sessionSnapshotPacer.publish(publication),
         emitEvent: (publication) => socket.emit('match:event', structuredClone(publication)),
         emitError: (error) => socket.emit('server:error', structuredClone(error)),
@@ -402,13 +409,6 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     socket.on('match:start', (payload, callback) => {
       acknowledge(matchStartSchema, payload, callback, () => {
         rooms.startMatch(socket.id);
-        if (activePlayerId !== null) {
-          const mode = transportHub.modeForPlayer(activePlayerId);
-          if (mode === 'websocket' || mode === 'polling') {
-            rttSampler?.stop();
-            rttSampler?.start();
-          }
-        }
         return null;
       });
     });

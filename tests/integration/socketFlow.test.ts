@@ -510,6 +510,40 @@ describe('Socket.IO FFA game server flow', () => {
     expect(snapshot(match.roomCode).network[match.host.playerId]?.currentMs).not.toBe(GAME.maxPingMs);
   });
 
+  it('immediately samples every fallback session when the host starts a match', async () => {
+    const hostClient = await client();
+    const guestClient = await client();
+    let hostProbeCount = 0;
+    let guestProbeCount = 0;
+    hostClient.on('network:probe', () => { hostProbeCount += 1; });
+    guestClient.on('network:probe', () => { guestProbeCount += 1; });
+    const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
+    const guest = await emitSuccess<SessionWelcome>(guestClient, 'room:join', {
+      name: 'Linus',
+      roomCode: host.roomCode
+    });
+    await waitFor(() => hostProbeCount === 1 && guestProbeCount === 1, 'acknowledged lobby RTT probes');
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await emitSuccess<null>(hostClient, 'lobby:ready', { ready: true });
+    await emitSuccess<null>(guestClient, 'lobby:ready', { ready: true });
+
+    await emitSuccess<null>(hostClient, 'match:start', {});
+
+    await waitFor(
+      () => hostProbeCount >= 2 && guestProbeCount >= 2,
+      'immediate host and guest in-match RTT probes',
+      400
+    );
+    await waitFor(() => {
+      const network = snapshot(host.roomCode).network;
+      return network[host.playerId]?.medianMs !== null && network[guest.playerId]?.medianMs !== null;
+    }, 'authoritative host and guest in-match RTT samples', 400);
+    expect(snapshot(host.roomCode).network).toMatchObject({
+      [host.playerId]: { medianMs: expect.any(Number), transport: 'websocket' },
+      [guest.playerId]: { medianMs: expect.any(Number), transport: 'websocket' }
+    });
+  });
+
   it('keeps invalid and failed WebRTC negotiation on the authenticated Socket.IO session', async () => {
     const hostClient = await client();
     const host = await emitSuccess<SessionWelcome>(hostClient, 'room:create', { name: 'Ada' });
