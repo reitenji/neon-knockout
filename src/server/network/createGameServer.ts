@@ -100,10 +100,15 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     udpPortRange: testTransport?.udpPortRange ?? readWebRtcUdpPortRange(process.env),
     now
   });
-  const pendingPublications = new Set<NodeJS.Immediate>();
+  const pendingRoomPublications = new Map<
+    NodeJS.Immediate,
+    Extract<RoomPublication, { type: 'ROOM_STATE' }>
+  >();
   let startedAt = now();
   let scheduler: NodeJS.Timeout | null = null;
+  let schedulerActive = false;
   let lastAdvanceAt = startedAt;
+  let nextAdvanceAt = startedAt;
   let activeAddress: { port: number; origin: string } | null = null;
   let starting: Promise<{ port: number; origin: string }> | null = null;
   let restartAfterStop: Promise<{ port: number; origin: string }> | null = null;
@@ -116,6 +121,15 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
       || publication.type === 'MATCH_SNAPSHOT'
       || publication.type === 'MATCH_EVENT'
     ) transportHub.publish(publication);
+  };
+
+  const flushPendingRoomPublications = (roomCode: string): void => {
+    for (const [immediate, publication] of pendingRoomPublications) {
+      if (publication.roomCode !== roomCode) continue;
+      clearImmediate(immediate);
+      pendingRoomPublications.delete(immediate);
+      dispatch(publication);
+    }
   };
 
   const publish = (publication: RoomPublication): void => {
@@ -147,11 +161,16 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
       const snapshot = snapshots.get(publication.roomCode);
       if (snapshot) snapshots.set(publication.roomCode, updateSnapshot(snapshot, publication));
     }
-    const immediate = setImmediate(() => {
-      pendingPublications.delete(immediate);
-      dispatch(publication);
-    });
-    pendingPublications.add(immediate);
+    if (publication.type === 'ROOM_STATE') {
+      const immediate = setImmediate(() => {
+        pendingRoomPublications.delete(immediate);
+        dispatch(publication);
+      });
+      pendingRoomPublications.set(immediate, publication);
+      return;
+    }
+    flushPendingRoomPublications(publication.roomCode);
+    dispatch(publication);
   };
 
   let roomTestHarness: RoomManagerTestHarness | null = null;
@@ -225,6 +244,24 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     }
   });
 
+  const advanceIntervalMs = 1_000 / GAME.tickRate;
+  const advanceRooms = (): void => {
+    scheduler = null;
+    if (!schedulerActive) return;
+    const current = now();
+    rooms.advance(current - lastAdvanceAt);
+    lastAdvanceAt = current;
+    if (!schedulerActive) return;
+
+    const afterAdvance = now();
+    nextAdvanceAt += advanceIntervalMs;
+    if (nextAdvanceAt <= afterAdvance) {
+      const missedDeadlines = Math.floor((afterAdvance - nextAdvanceAt) / advanceIntervalMs) + 1;
+      nextAdvanceAt += missedDeadlines * advanceIntervalMs;
+    }
+    scheduler = setTimeout(advanceRooms, Math.max(0, nextAdvanceAt - afterAdvance));
+  };
+
   const listen = async (): Promise<{ port: number; origin: string }> => {
     transportHub.start();
     await new Promise<void>((resolveStart, rejectStart) => {
@@ -246,11 +283,9 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
     activeAddress = { port: address.port, origin: `http://${originHost}:${address.port}` };
     startedAt = now();
     lastAdvanceAt = startedAt;
-    scheduler = setInterval(() => {
-      const current = now();
-      rooms.advance(current - lastAdvanceAt);
-      lastAdvanceAt = current;
-    }, 1_000 / GAME.tickRate);
+    nextAdvanceAt = startedAt + advanceIntervalMs;
+    schedulerActive = true;
+    scheduler = setTimeout(advanceRooms, advanceIntervalMs);
     return activeAddress;
   };
 
@@ -287,8 +322,9 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
             // A failed start still needs the same resource and state cleanup.
           }
         }
+        schedulerActive = false;
         if (scheduler) {
-          clearInterval(scheduler);
+          clearTimeout(scheduler);
           scheduler = null;
         }
         if (activeAddress || httpServer.listening) {
@@ -300,8 +336,8 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
           }
         }
         await transportHub.stop();
-        for (const immediate of pendingPublications) clearImmediate(immediate);
-        pendingPublications.clear();
+        for (const immediate of pendingRoomPublications.keys()) clearImmediate(immediate);
+        pendingRoomPublications.clear();
         rooms.reset();
         roomCodes.clear();
         snapshots.clear();

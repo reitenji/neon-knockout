@@ -40,12 +40,12 @@ describe('createGameServer scheduler', () => {
   });
 
   it('schedules authoritative room advancement at the shared tick rate', async () => {
-    const setIntervalSpy = vi.spyOn(globalThis, 'setInterval');
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
     const server = createGameServer({ host: '127.0.0.1', port: 0, clientDirectory: false });
 
     try {
       await server.start();
-      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000 / GAME.tickRate);
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 1_000 / GAME.tickRate);
     } finally {
       await server.stop();
     }
