@@ -402,6 +402,13 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     socket.on('match:start', (payload, callback) => {
       acknowledge(matchStartSchema, payload, callback, () => {
         rooms.startMatch(socket.id);
+        if (activePlayerId !== null) {
+          const mode = transportHub.modeForPlayer(activePlayerId);
+          if (mode === 'websocket' || mode === 'polling') {
+            rttSampler?.stop();
+            rttSampler?.start();
+          }
+        }
         return null;
       });
     });
