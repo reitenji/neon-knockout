@@ -51,6 +51,7 @@ export class AdaptiveNetcodePolicy {
         delayFrames: Math.max(this.budget.delayFrames, target.delayFrames),
         rollbackFrames: Math.max(this.budget.rollbackFrames, target.rollbackFrames)
       };
+      if (!sample.bufferUnderrun && hasNewFreshSample) this.stableFreshSamples = 0;
       return this.budget;
     }
 

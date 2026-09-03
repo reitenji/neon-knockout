@@ -45,6 +45,39 @@ describe('AdaptiveNetcodePolicy', () => {
     })).toEqual({ delayFrames: 3, rollbackFrames: 9 });
   });
 
+  it('requires two post-spike fresh samples before lowering a jitter-only increase', () => {
+    const policy = new AdaptiveNetcodePolicy();
+
+    expect(policy.update({
+      medianRttMs: 20,
+      transportJitterMs: 0,
+      arrivalJitterMs: 0,
+      bufferUnderrun: false,
+      sampledAtMs: 0
+    })).toEqual({ delayFrames: 1, rollbackFrames: 4 });
+    expect(policy.update({
+      medianRttMs: 100,
+      transportJitterMs: 20,
+      arrivalJitterMs: 0,
+      bufferUnderrun: false,
+      sampledAtMs: 100
+    })).toEqual({ delayFrames: 3, rollbackFrames: 9 });
+    expect(policy.update({
+      medianRttMs: 100,
+      transportJitterMs: 0,
+      arrivalJitterMs: 0,
+      bufferUnderrun: false,
+      sampledAtMs: 2_100
+    })).toEqual({ delayFrames: 3, rollbackFrames: 9 });
+    expect(policy.update({
+      medianRttMs: 100,
+      transportJitterMs: 0,
+      arrivalJitterMs: 0,
+      bufferUnderrun: false,
+      sampledAtMs: 2_200
+    })).toEqual({ delayFrames: 2, rollbackFrames: 8 });
+  });
+
   it('raises presentation delay immediately when the buffer underruns', () => {
     const policy = new AdaptiveNetcodePolicy();
 
