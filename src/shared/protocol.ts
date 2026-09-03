@@ -98,6 +98,5 @@ export interface ServerToClientEvents {
   'match:started': (publication: MatchStartedPublication) => void;
   'match:snapshot': (publication: MatchSnapshotPublication, acknowledge: () => void) => void;
   'match:event': (publication: MatchEventPublication) => void;
-  'network:probe': (acknowledge: () => void) => void;
   'server:error': (error: ServerError) => void;
 }

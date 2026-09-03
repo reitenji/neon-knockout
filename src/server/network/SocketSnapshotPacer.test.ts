@@ -63,4 +63,97 @@ describe('SocketSnapshotPacer', () => {
 
     expect(send.mock.calls.map(([value]) => value.eventCursor)).toEqual([1, 2]);
   });
+
+  it('samples actual snapshot acknowledgement RTT at most once per second', () => {
+    let now = 1_000;
+    const samples: Array<{ rttMs: number; sampledAtMs: number }> = [];
+    const deliveries: Array<{ publication: MatchSnapshotPublication; acknowledge: () => void }> = [];
+    const pacer = new SocketSnapshotPacer(
+      (value, acknowledge) => deliveries.push({ publication: value, acknowledge }),
+      { now: () => now, onRttSample: (sample) => samples.push(sample) }
+    );
+
+    pacer.publish(publication(1));
+    now = 1_017;
+    deliveries[0]!.acknowledge();
+    pacer.publish(publication(2));
+    now = 1_025;
+    deliveries[1]!.acknowledge();
+    now = 1_999;
+    pacer.publish(publication(3));
+    deliveries[2]!.acknowledge();
+    now = 2_000;
+    pacer.publish(publication(4));
+    now = 2_022;
+    deliveries[3]!.acknowledge();
+
+    expect(samples).toEqual([
+      { rttMs: 17, sampledAtMs: 1_017 },
+      { rttMs: 22, sampledAtMs: 2_022 }
+    ]);
+  });
+
+  it('does not sample an acknowledgement from a disposed session', () => {
+    const acknowledgements: Array<() => void> = [];
+    const onRttSample = vi.fn();
+    const pacer = new SocketSnapshotPacer(
+      (_value, acknowledge) => acknowledgements.push(acknowledge),
+      { now: () => 10, onRttSample }
+    );
+
+    pacer.publish(publication(1));
+    pacer.dispose();
+    acknowledgements[0]!();
+
+    expect(onRttSample).not.toHaveBeenCalled();
+  });
+
+  it('does not consume the fallback sampling slot with an ineligible safety-copy acknowledgement', () => {
+    let now = 100;
+    let fallbackMode = false;
+    const samples: Array<{ rttMs: number; sampledAtMs: number }> = [];
+    const acknowledgements: Array<() => void> = [];
+    const pacer = new SocketSnapshotPacer(
+      (_value, acknowledge) => acknowledgements.push(acknowledge),
+      {
+        now: () => now,
+        shouldSampleRtt: () => fallbackMode,
+        onRttSample: (sample) => samples.push(sample)
+      }
+    );
+
+    pacer.publish(publication(1));
+    now = 110;
+    acknowledgements[0]!();
+    fallbackMode = true;
+    pacer.publish(publication(2));
+    now = 115;
+    acknowledgements[1]!();
+
+    expect(samples).toEqual([{ rttMs: 5, sampledAtMs: 115 }]);
+  });
+
+  it('resets the sampling window idempotently when gameplay falls back from WebRTC', () => {
+    let now = 100;
+    const samples: Array<{ rttMs: number; sampledAtMs: number }> = [];
+    const acknowledgements: Array<() => void> = [];
+    const pacer = new SocketSnapshotPacer(
+      (_value, acknowledge) => acknowledgements.push(acknowledge),
+      { now: () => now, onRttSample: (sample) => samples.push(sample) }
+    );
+
+    pacer.publish(publication(1));
+    now = 110;
+    acknowledgements[0]!();
+    pacer.resetRttSampleWindow();
+    pacer.resetRttSampleWindow();
+    pacer.publish(publication(2));
+    now = 115;
+    acknowledgements[1]!();
+
+    expect(samples).toEqual([
+      { rttMs: 10, sampledAtMs: 110 },
+      { rttMs: 5, sampledAtMs: 115 }
+    ]);
+  });
 });

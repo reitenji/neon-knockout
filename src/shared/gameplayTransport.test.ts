@@ -62,7 +62,7 @@ describe('shared WebRTC gameplay transport contract', () => {
     expect(clientFastMessageSchema.safeParse(oversized).success).toBe(false);
   });
 
-  it('accepts only version 1 match-fast input messages', () => {
+  it('accepts only version 1 match-fast input and probe acknowledgement messages', () => {
     const serialized = JSON.stringify({
       version: GAMEPLAY_PROTOCOL_VERSION,
       generationId,
@@ -79,6 +79,19 @@ describe('shared WebRTC gameplay transport contract', () => {
       matchEpoch: 4,
       kind: 'input',
       payload: input
+    })).success).toBe(false);
+    expect(clientFastMessageSchema.safeParse(JSON.stringify({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'probe-ack',
+      nonce: 8
+    })).success).toBe(true);
+    expect(clientFastMessageSchema.safeParse(JSON.stringify({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      matchEpoch: 4,
+      kind: 'probe-ack',
+      nonce: 8
     })).success).toBe(false);
   });
 

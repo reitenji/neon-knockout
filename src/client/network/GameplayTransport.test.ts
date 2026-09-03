@@ -626,6 +626,61 @@ describe('createGameplayTransport', () => {
     });
   });
 
+  it('acknowledges only current-generation probes on the fast gameplay channel', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+
+    harness.peer.fast.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId: SECOND_GENERATION,
+      kind: 'probe',
+      nonce: 40
+    });
+    expect(harness.peer.fast.send).not.toHaveBeenCalled();
+
+    harness.peer.fast.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'probe',
+      nonce: 41
+    });
+
+    expect(JSON.parse(harness.peer.fast.send.mock.calls[0]![0])).toEqual({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'probe-ack',
+      nonce: 41
+    });
+  });
+
+  it('drops backpressured or failed fast probe acknowledgements without falling back', async () => {
+    const harness = createHarness();
+    const generationId = await activateHarness(harness);
+    harness.peer.fast.bufferedAmount = FAST_CHANNEL_MAX_BUFFERED_BYTES + 1;
+
+    harness.peer.fast.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'probe',
+      nonce: 42
+    });
+
+    expect(harness.peer.fast.send).not.toHaveBeenCalled();
+    expect(harness.notifyFallback).not.toHaveBeenCalled();
+
+    harness.peer.fast.bufferedAmount = 0;
+    harness.peer.fast.send.mockImplementationOnce(() => { throw new Error('probe ack send failed'); });
+    harness.peer.fast.receive({
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'probe',
+      nonce: 43
+    });
+
+    expect(harness.peer.fast.send).toHaveBeenCalledOnce();
+    expect(harness.notifyFallback).not.toHaveBeenCalled();
+  });
+
   it('accepts a complete initial-player snapshot whose processed input sequence is minus one', async () => {
     const harness = createHarness();
     const generationId = await activateHarness(harness);

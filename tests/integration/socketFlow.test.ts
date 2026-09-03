@@ -49,8 +49,11 @@ class IntegrationPeer implements ServerPeer {
   fastResult: PeerSendResult = 'sent';
   reliableResult: PeerSendResult = 'sent';
   autoAcknowledgeHeartbeats = false;
+  autoAcknowledgeFastProbes = false;
   readonly heartbeatAcknowledgementDelaysMs: number[] = [];
+  readonly fastProbeAcknowledgementDelaysMs: number[] = [];
   heartbeatAcknowledgements = 0;
+  fastProbeAcknowledgements = 0;
   closeCalls = 0;
   negotiationDeferred: Deferred<IntegrationAnswer> | null = null;
 
@@ -67,7 +70,22 @@ class IntegrationPeer implements ServerPeer {
   }
 
   sendFast(serialized: string): PeerSendResult {
-    if (this.fastResult === 'sent') this.fastSent.push(serialized);
+    if (this.fastResult === 'sent') {
+      this.fastSent.push(serialized);
+      const message = JSON.parse(serialized) as { kind?: unknown; nonce?: unknown };
+      if (this.autoAcknowledgeFastProbes && message.kind === 'probe' && typeof message.nonce === 'number') {
+        const delayMs = this.fastProbeAcknowledgementDelaysMs.shift() ?? 0;
+        setTimeout(() => {
+          this.fastProbeAcknowledgements += 1;
+          this.receiveFast({
+            version: GAMEPLAY_PROTOCOL_VERSION,
+            generationId: this.generationId,
+            kind: 'probe-ack',
+            nonce: message.nonce
+          });
+        }, delayMs);
+      }
+    }
     return this.fastResult;
   }
 
@@ -201,7 +219,6 @@ function expectEvent<E extends keyof ServerToClientEvents>(
 
 async function connectClient(origin: string): Promise<GameClient> {
   const client: GameClient = io(origin, { transports: ['websocket'], forceNew: true, reconnection: false });
-  client.on('network:probe', (acknowledge) => acknowledge());
   client.on('match:snapshot', (_publication, acknowledge) => acknowledge());
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timed out connecting Socket.IO client')), ACK_TIMEOUT_MS);
@@ -599,6 +616,7 @@ describe('Socket.IO FFA game server flow', () => {
     await waitFor(() => peer.closeCalls === 1, 'failed-send peer closure');
     expect(harness().transportMode(match.host.playerId)).toBe('websocket');
     await waitFor(() => {
+      server.rooms.advance(STEP_MS);
       const network = snapshot(match.roomCode).network[match.host.playerId];
       return network?.transport === 'websocket' && network.medianMs !== null;
     }, 'fresh immediate Socket.IO fallback Ping', 750);
@@ -610,13 +628,14 @@ describe('Socket.IO FFA game server flow', () => {
     expect(peer.closeCalls).toBe(1);
   });
 
-  it('publishes the heartbeat-derived latest-five WebRTC median once, then resumes raw Socket.IO RTT aggregation', async () => {
+  it('publishes the fast-channel latest-five WebRTC median once, then resumes snapshot-ack Socket.IO RTT aggregation', async () => {
     const match = await startMatch();
     const peer = await negotiateAndActivate(match.hostClient);
     peer.autoAcknowledgeHeartbeats = true;
-    peer.heartbeatAcknowledgementDelaysMs.push(50, 10, 30, 100, 20, 0);
+    peer.autoAcknowledgeFastProbes = true;
+    peer.fastProbeAcknowledgementDelaysMs.push(50, 10, 30, 100, 20, 0);
 
-    await waitFor(() => peer.heartbeatAcknowledgements >= 6, 'six varying WebRTC heartbeat acknowledgements', 7_500);
+    await waitFor(() => peer.fastProbeAcknowledgements >= 6, 'six varying WebRTC fast probe acknowledgements', 7_500);
     server.rooms.advance(STEP_MS);
     const webrtcNetwork = snapshot(match.roomCode).network[match.host.playerId];
     expect(webrtcNetwork).toMatchObject({
@@ -625,7 +644,7 @@ describe('Socket.IO FFA game server flow', () => {
       transport: 'webrtc'
     });
     if (!webrtcNetwork || webrtcNetwork.currentMs === null || webrtcNetwork.medianMs === null) {
-      throw new Error('Expected a fresh WebRTC heartbeat RTT sample.');
+      throw new Error('Expected a fresh WebRTC fast-channel RTT sample.');
     }
     expect(webrtcNetwork.currentMs).toBe(webrtcNetwork.medianMs);
     expect(webrtcNetwork.currentMs).toBeGreaterThanOrEqual(0);

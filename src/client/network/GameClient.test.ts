@@ -618,13 +618,4 @@ describe('createSocketGameClient', () => {
     expect(socketHarness.socket.emit).not.toHaveBeenCalledWith('transport:fallback', {});
   });
 
-  it('acknowledges server-issued RTT probes without publishing a client-authored latency value', () => {
-    createSocketGameClient();
-    const acknowledge = vi.fn();
-
-    socketHarness.trigger('network:probe', acknowledge);
-
-    expect(acknowledge).toHaveBeenCalledOnce();
-    expect(socketHarness.socket.emit).not.toHaveBeenCalled();
-  });
 });

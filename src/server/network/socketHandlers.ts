@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import type { Server, Socket } from 'socket.io';
 import type { z } from 'zod';
 import type { Ack, InputFrame, ServerError, SessionWelcome } from '../../shared/model.js';
-import { GAME } from '../../shared/constants.js';
 import {
   rtcActivationRequestSchema,
   rtcNegotiationRequestSchema
@@ -82,9 +81,6 @@ class SafeSocketActionError {
   constructor(readonly error: ServerError) {}
 }
 
-const LATENCY_SAMPLE_INTERVAL_MS = 2_000;
-const LATENCY_IDLE_RECHECK_MS = 200;
-
 function currentTransport(socket: GameSocket): 'websocket' | 'polling' {
   return socket.conn.transport.name === 'websocket' ? 'websocket' : 'polling';
 }
@@ -142,75 +138,12 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         if (activePlayerId !== null) onAcceptedInput?.(activePlayerId, input, source);
       }
     });
-    let latencySampling = false;
-    let latencyTimer: ReturnType<typeof setTimeout> | null = null;
-    let latencyProbeTimeout: ReturnType<typeof setTimeout> | null = null;
-    let activeLatencyProbe: number | null = null;
-    let nextLatencyProbe = 0;
     let activePlayerId: string | null = null;
     let snapshotPacer: SocketSnapshotPacer | null = null;
 
     const disposeSnapshotPacer = (): void => {
       snapshotPacer?.dispose();
       snapshotPacer = null;
-    };
-
-    const stopLatencySampling = (): void => {
-      latencySampling = false;
-      activeLatencyProbe = null;
-      if (latencyTimer) clearTimeout(latencyTimer);
-      if (latencyProbeTimeout) clearTimeout(latencyProbeTimeout);
-      latencyTimer = null;
-      latencyProbeTimeout = null;
-    };
-
-    const scheduleLatencySample = (): void => {
-      if (!latencySampling) return;
-      latencyTimer = setTimeout(sampleLatency, LATENCY_SAMPLE_INTERVAL_MS);
-    };
-
-    const sampleLatency = (): void => {
-      latencyTimer = null;
-      if (!latencySampling || activeLatencyProbe !== null) return;
-      if (!rooms.isInActiveMatch(socket.id)) {
-        latencyTimer = setTimeout(sampleLatency, LATENCY_IDLE_RECHECK_MS);
-        return;
-      }
-      const probeId = ++nextLatencyProbe;
-      const startedAt = now();
-      activeLatencyProbe = probeId;
-      latencyProbeTimeout = setTimeout(() => {
-        if (activeLatencyProbe !== probeId) return;
-        activeLatencyProbe = null;
-        latencyProbeTimeout = null;
-        rooms.setPing(socket.id, GAME.maxPingMs, currentTransport(socket), now());
-        scheduleLatencySample();
-      }, GAME.maxPingMs);
-      socket.emit('network:probe', () => {
-        if (!latencySampling || activeLatencyProbe !== probeId) return;
-        if (latencyProbeTimeout) clearTimeout(latencyProbeTimeout);
-        latencyProbeTimeout = null;
-        activeLatencyProbe = null;
-        const sampledAt = now();
-        rooms.setPing(socket.id, sampledAt - startedAt, currentTransport(socket), sampledAt);
-        scheduleLatencySample();
-      });
-    };
-
-    const sampleLatencyImmediately = (): void => {
-      if (!latencySampling) return;
-      activeLatencyProbe = null;
-      if (latencyTimer) clearTimeout(latencyTimer);
-      if (latencyProbeTimeout) clearTimeout(latencyProbeTimeout);
-      latencyTimer = null;
-      latencyProbeTimeout = null;
-      sampleLatency();
-    };
-
-    const startLatencySampling = (): void => {
-      stopLatencySampling();
-      latencySampling = true;
-      sampleLatency();
     };
 
     const emitRateLimit = (): void => {
@@ -300,9 +233,22 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
 
     const establishSession = (welcome: SessionWelcome): void => {
       disposeSnapshotPacer();
-      const sessionSnapshotPacer = new SocketSnapshotPacer((publication, acknowledgeSnapshot) => {
-        socket.emit('match:snapshot', structuredClone(publication), acknowledgeSnapshot);
-      });
+      const sessionSnapshotPacer = new SocketSnapshotPacer(
+        (publication, acknowledgeSnapshot) => {
+          socket.emit('match:snapshot', structuredClone(publication), acknowledgeSnapshot);
+        },
+        {
+          now,
+          shouldSampleRtt: () => {
+            if (activePlayerId === null) return false;
+            const mode = transportHub.modeForPlayer(activePlayerId);
+            return mode === 'websocket' || mode === 'polling';
+          },
+          onRttSample: ({ rttMs, sampledAtMs }) => {
+            rooms.setPing(socket.id, rttMs, currentTransport(socket), sampledAtMs);
+          }
+        }
+      );
       snapshotPacer = sessionSnapshotPacer;
       void socket.join(welcome.roomCode);
       inputIngress.reset();
@@ -318,14 +264,15 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         emitSnapshot: (publication) => sessionSnapshotPacer.publish(publication),
         emitEvent: (publication) => socket.emit('match:event', structuredClone(publication)),
         emitError: (error) => socket.emit('server:error', structuredClone(error)),
-        probeFallbackPing: sampleLatencyImmediately,
-        setNetworkMode: (mode) => rooms.setTransport(socket.id, mode),
+        setNetworkMode: (mode) => {
+          rooms.setTransport(socket.id, mode);
+          if (mode !== 'webrtc') sessionSnapshotPacer.resetRttSampleWindow();
+        },
         setNetworkSample: (medianMs, sampledAt) => rooms.setWebRtcMedian(socket.id, medianMs, sampledAt),
         clearNetworkSample: () => rooms.clearPing(socket.id)
       });
       onSession(socket, welcome, inputIngress);
       rooms.setTransport(socket.id, currentTransport(socket));
-      startLatencySampling();
       queueMicrotask(() => {
         socket.emit('session:welcome', welcome);
         const publication = rooms.currentMatchPublication(socket.id);
@@ -412,7 +359,6 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     socket.on('room:leave', (payload, callback) => {
       acknowledgeAsync(roomLeaveSchema, payload, callback, async () => {
         const roomCode = rooms.leaveRoom(socket.id);
-        stopLatencySampling();
         disposeSnapshotPacer();
         activePlayerId = null;
         const cleanupResults = await Promise.allSettled([
@@ -455,7 +401,6 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       if (result.status === 'error') socket.emit('server:error', result.error);
     });
     socket.on('disconnect', () => {
-      stopLatencySampling();
       disposeSnapshotPacer();
       rooms.disconnect(socket.id);
       activePlayerId = null;

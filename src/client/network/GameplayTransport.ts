@@ -238,12 +238,20 @@ const matchEventPublicationSchema = z.object({
   matchEpoch: nonNegativeIntegerSchema,
   event: gameEventSchema
 }).strict();
-const serverFastMessageSchema = z.object({
-  version: z.literal(GAMEPLAY_PROTOCOL_VERSION),
-  generationId: z.string().uuid(),
-  kind: z.literal('snapshot'),
-  payload: matchStartedPublicationSchema
-}).strict();
+const serverFastMessageSchema = z.discriminatedUnion('kind', [
+  z.object({
+    version: z.literal(GAMEPLAY_PROTOCOL_VERSION),
+    generationId: z.string().uuid(),
+    kind: z.literal('snapshot'),
+    payload: matchStartedPublicationSchema
+  }).strict(),
+  z.object({
+    version: z.literal(GAMEPLAY_PROTOCOL_VERSION),
+    generationId: z.string().uuid(),
+    kind: z.literal('probe'),
+    nonce: nonNegativeIntegerSchema
+  }).strict()
+]);
 const serverReliableMessageSchema = z.discriminatedUnion('kind', [
   z.object({
     version: z.literal(GAMEPLAY_PROTOCOL_VERSION),
@@ -520,7 +528,27 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     if (!isCurrent(generation) || generation.mode !== 'webrtc') return;
     const parsed = serverFastMessageSchema.safeParse(parseJson(event.data));
     if (!parsed.success || parsed.data.generationId !== generation.generationId) return;
+    if (parsed.data.kind === 'probe') {
+      sendFastProbeAck(generation, parsed.data.nonce);
+      return;
+    }
     options.sequencer.acceptSnapshot(parsed.data.payload);
+  }
+
+  function sendFastProbeAck(generation: Generation, nonce: number): void {
+    if (generation.fast.readyState !== 'open') return;
+    if (generation.fast.bufferedAmount > FAST_CHANNEL_MAX_BUFFERED_BYTES) return;
+    const acknowledgement: ClientFastMessage = {
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId: generation.generationId,
+      kind: 'probe-ack',
+      nonce
+    };
+    try {
+      generation.fast.send(JSON.stringify(acknowledgement));
+    } catch {
+      // Lost probe acks are non-fatal; the reliable heartbeat still owns liveness.
+    }
   }
 
   function sendHeartbeatAck(generation: Generation, nonce: number): void {

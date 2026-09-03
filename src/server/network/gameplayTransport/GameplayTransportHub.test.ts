@@ -190,7 +190,6 @@ type SessionHarness = Readonly<{
   networkModes: Parameters<TransportSession['setNetworkMode']>[0][];
   networkSamples: Array<Readonly<{ medianMs: number; sampledAt: number }>>;
   networkClearTimes: number[];
-  fallbackProbeTimes: number[];
 }>;
 
 function session(overrides: Partial<Pick<TransportSession, 'socketId' | 'playerId' | 'roomCode'>> = {}): SessionHarness {
@@ -203,7 +202,6 @@ function session(overrides: Partial<Pick<TransportSession, 'socketId' | 'playerI
   const networkModes: Parameters<TransportSession['setNetworkMode']>[0][] = [];
   const networkSamples: Array<Readonly<{ medianMs: number; sampledAt: number }>> = [];
   const networkClearTimes: number[] = [];
-  const fallbackProbeTimes: number[] = [];
   const ingress: MatchInputIngress = {
     accept: (payload: unknown): MatchInputIngressResult => {
       acceptedInputs.push(payload as InputFrame);
@@ -222,7 +220,6 @@ function session(overrides: Partial<Pick<TransportSession, 'socketId' | 'playerI
     emitSnapshot: (value) => emittedSnapshots.push(value),
     emitEvent: (value) => emittedEvents.push(value),
     emitError: (value) => emittedErrors.push(value),
-    probeFallbackPing: () => fallbackProbeTimes.push(Date.now()),
     setNetworkMode: (mode) => networkModes.push(mode),
     setNetworkSample: (medianMs, sampledAt) => networkSamples.push({ medianMs, sampledAt }),
     clearNetworkSample: () => networkClearTimes.push(Date.now())
@@ -237,8 +234,7 @@ function session(overrides: Partial<Pick<TransportSession, 'socketId' | 'playerI
     emittedEvents,
     networkModes,
     networkSamples,
-    networkClearTimes,
-    fallbackProbeTimes
+    networkClearTimes
   };
 }
 
@@ -411,15 +407,13 @@ describe('GameplayTransportHub', () => {
       mode: hub.modeForPlayer('p1'),
       peerCloseCalls: peer.closeCalls,
       emittedModes: first.emittedModes,
-      networkModes: first.networkModes,
-      fallbackProbeCount: first.fallbackProbeTimes.length
+      networkModes: first.networkModes
     }).toEqual({
       repeatedActivation: true,
       mode: 'webrtc',
       peerCloseCalls: 0,
       emittedModes: [{ generationId: FIRST_GENERATION, mode: 'webrtc' }],
-      networkModes: ['webrtc'],
-      fallbackProbeCount: 0
+      networkModes: ['webrtc']
     });
   });
 
@@ -534,7 +528,6 @@ describe('GameplayTransportHub', () => {
 
     expect(hub.modeForPlayer('p1')).toBe('websocket');
     expect(first.emittedModes).toEqual([{ generationId: FIRST_GENERATION, mode: 'websocket' }]);
-    expect(first.fallbackProbeTimes).toEqual([5_000]);
     expect(first.networkClearTimes).toEqual([5_000]);
     expect(peer.closeCalls).toBe(1);
   });
@@ -573,7 +566,7 @@ describe('GameplayTransportHub', () => {
     await vi.runAllTicks();
 
     expect(first.emittedSnapshots).toEqual([snapshotSafety()]);
-    expect(first.fallbackProbeTimes).toHaveLength(1);
+    expect(first.emittedModes.at(-1)).toEqual({ generationId: FIRST_GENERATION, mode: 'websocket' });
     expect(hub.modeForPlayer('p1')).toBe('websocket');
     expect(peer.closeCalls).toBe(1);
   });
@@ -633,7 +626,6 @@ describe('GameplayTransportHub', () => {
     });
     await vi.advanceTimersByTimeAsync(4_000);
 
-    expect(first.fallbackProbeTimes).toHaveLength(1);
     expect(first.emittedModes).toEqual([
       { generationId: FIRST_GENERATION, mode: 'webrtc' },
       { generationId: FIRST_GENERATION, mode: 'websocket' }
@@ -651,11 +643,11 @@ describe('GameplayTransportHub', () => {
 
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(first.fallbackProbeTimes).toHaveLength(1);
+    expect(first.emittedModes.at(-1)).toEqual({ generationId: FIRST_GENERATION, mode: 'websocket' });
     expect(hub.modeForPlayer('p1')).toBe('websocket');
   });
 
-  it('publishes one server-timed RTT per matching heartbeat acknowledgement using the latest-five median', async () => {
+  it('publishes one server-timed RTT per matching fast probe acknowledgement using the latest-five median', async () => {
     let serverNow = 50_000;
     let fakeTimerNow = 0;
     const advanceServerClock = async (timerDurationMs: number, serverDurationMs = timerDurationMs): Promise<void> => {
@@ -670,12 +662,13 @@ describe('GameplayTransportHub', () => {
 
     await advanceServerClock(1_000);
     const firstHeartbeat = JSON.parse(peer.reliableSent.at(-1)!);
+    const firstProbe = JSON.parse(peer.fastSent.at(-1)!);
     await advanceServerClock(50);
-    peer.receiveReliable({
+    peer.receiveFast({
       version: 1,
       generationId: SECOND_GENERATION,
-      kind: 'heartbeat-ack',
-      nonce: firstHeartbeat.nonce
+      kind: 'probe-ack',
+      nonce: firstProbe.nonce
     });
     expect(first.networkSamples).toEqual([]);
     peer.receiveReliable({
@@ -684,19 +677,26 @@ describe('GameplayTransportHub', () => {
       kind: 'heartbeat-ack',
       nonce: firstHeartbeat.nonce
     });
+    expect(first.networkSamples).toEqual([]);
+    peer.receiveFast({
+      version: 1,
+      generationId: FIRST_GENERATION,
+      kind: 'probe-ack',
+      nonce: firstProbe.nonce
+    });
     expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 51_050 }]);
 
-    peer.receiveReliable({
+    peer.receiveFast({
       version: 1,
       generationId: FIRST_GENERATION,
-      kind: 'heartbeat-ack',
-      nonce: firstHeartbeat.nonce
+      kind: 'probe-ack',
+      nonce: firstProbe.nonce
     });
-    peer.receiveReliable({
+    peer.receiveFast({
       version: 1,
       generationId: FIRST_GENERATION,
-      kind: 'heartbeat-ack',
-      nonce: firstHeartbeat.nonce + 1
+      kind: 'probe-ack',
+      nonce: firstProbe.nonce + 1
     });
     expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 51_050 }]);
 
@@ -704,12 +704,19 @@ describe('GameplayTransportHub', () => {
     for (const [delayMs, expectedMedianMs] of [[10, 30], [30, 30], [100, 40], [20, 30], [0, 20]] as const) {
       await advanceServerClock(nextHeartbeatTimerAt - fakeTimerNow);
       const heartbeat = JSON.parse(peer.reliableSent.at(-1)!);
-      await advanceServerClock(delayMs);
+      const probe = JSON.parse(peer.fastSent.at(-1)!);
       peer.receiveReliable({
         version: 1,
         generationId: FIRST_GENERATION,
         kind: 'heartbeat-ack',
         nonce: heartbeat.nonce
+      });
+      await advanceServerClock(delayMs);
+      peer.receiveFast({
+        version: 1,
+        generationId: FIRST_GENERATION,
+        kind: 'probe-ack',
+        nonce: probe.nonce
       });
       expect(first.networkSamples.at(-1)?.medianMs).toBe(expectedMedianMs);
       nextHeartbeatTimerAt += 1_000;
@@ -725,6 +732,29 @@ describe('GameplayTransportHub', () => {
     ]);
   });
 
+  it('does not fall back or publish RTT when fast probes are lost or backpressured', async () => {
+    const { hub, factory } = createSubject();
+    const first = session();
+    hub.attachSession(first.session);
+    const peer = await negotiateAndActivate(hub, factory);
+
+    for (let heartbeatIndex = 0; heartbeatIndex < 4; heartbeatIndex += 1) {
+      if (heartbeatIndex === 2) peer.fastResult = 'backpressured';
+      await vi.advanceTimersByTimeAsync(1_000);
+      const heartbeat = JSON.parse(peer.reliableSent.at(-1)!);
+      peer.receiveReliable({
+        version: 1,
+        generationId: FIRST_GENERATION,
+        kind: 'heartbeat-ack',
+        nonce: heartbeat.nonce
+      });
+    }
+
+    expect(first.networkSamples).toEqual([]);
+    expect(first.emittedModes).toEqual([{ generationId: FIRST_GENERATION, mode: 'webrtc' }]);
+    expect(hub.modeForPlayer('p1')).toBe('webrtc');
+  });
+
   it('resets expired WebRTC RTT history before recording the first post-gap acknowledgement', async () => {
     let serverNow = 0;
     let heartbeat: (() => void) | null = null;
@@ -737,22 +767,29 @@ describe('GameplayTransportHub', () => {
     hub.attachSession(first.session);
     const peer = await negotiateAndActivate(hub, factory);
 
-    const acknowledgeHeartbeat = (elapsedMs: number): void => {
+    const acknowledgeFastProbe = (elapsedMs: number): void => {
       if (!heartbeat) throw new Error('Expected the WebRTC heartbeat to be scheduled.');
       heartbeat();
-      const message = JSON.parse(peer.reliableSent.at(-1)!);
-      serverNow += elapsedMs;
+      const heartbeatMessage = JSON.parse(peer.reliableSent.at(-1)!);
+      const probeMessage = JSON.parse(peer.fastSent.at(-1)!);
       peer.receiveReliable({
         version: 1,
         generationId: FIRST_GENERATION,
         kind: 'heartbeat-ack',
-        nonce: message.nonce
+        nonce: heartbeatMessage.nonce
+      });
+      serverNow += elapsedMs;
+      peer.receiveFast({
+        version: 1,
+        generationId: FIRST_GENERATION,
+        kind: 'probe-ack',
+        nonce: probeMessage.nonce
       });
     };
 
     try {
-      acknowledgeHeartbeat(100);
-      acknowledgeHeartbeat(300);
+      acknowledgeFastProbe(100);
+      acknowledgeFastProbe(300);
       expect(first.networkSamples).toEqual([
         { medianMs: 100, sampledAt: 100 },
         { medianMs: 200, sampledAt: 400 }
@@ -762,7 +799,7 @@ describe('GameplayTransportHub', () => {
       await vi.advanceTimersByTimeAsync(6_000);
       expect(first.networkClearTimes).toHaveLength(1);
 
-      acknowledgeHeartbeat(50);
+      acknowledgeFastProbe(50);
       expect(first.networkSamples.at(-1)).toEqual({ medianMs: 50, sampledAt: 6_450 });
     } finally {
       heartbeatInterval.mockRestore();
@@ -781,22 +818,29 @@ describe('GameplayTransportHub', () => {
     hub.attachSession(first.session);
     const peer = await negotiateAndActivate(hub, factory);
 
-    const acknowledgeHeartbeat = (elapsedMs: number): void => {
+    const acknowledgeFastProbe = (elapsedMs: number): void => {
       if (!heartbeat) throw new Error('Expected the WebRTC heartbeat to be scheduled.');
       heartbeat();
-      const message = JSON.parse(peer.reliableSent.at(-1)!);
-      serverNow += elapsedMs;
+      const heartbeatMessage = JSON.parse(peer.reliableSent.at(-1)!);
+      const probeMessage = JSON.parse(peer.fastSent.at(-1)!);
       peer.receiveReliable({
         version: 1,
         generationId: FIRST_GENERATION,
         kind: 'heartbeat-ack',
-        nonce: message.nonce
+        nonce: heartbeatMessage.nonce
+      });
+      serverNow += elapsedMs;
+      peer.receiveFast({
+        version: 1,
+        generationId: FIRST_GENERATION,
+        kind: 'probe-ack',
+        nonce: probeMessage.nonce
       });
     };
 
     try {
-      acknowledgeHeartbeat(100);
-      acknowledgeHeartbeat(300);
+      acknowledgeFastProbe(100);
+      acknowledgeFastProbe(300);
       expect(first.networkSamples).toEqual([
         { medianMs: 100, sampledAt: 100 },
         { medianMs: 200, sampledAt: 400 }
@@ -805,7 +849,7 @@ describe('GameplayTransportHub', () => {
       serverNow += 6_000;
       expect(first.networkClearTimes).toEqual([]);
 
-      acknowledgeHeartbeat(50);
+      acknowledgeFastProbe(50);
       expect(first.networkSamples.at(-1)).toEqual({ medianMs: 50, sampledAt: 6_450 });
       expect(first.networkClearTimes).toEqual([]);
     } finally {
@@ -838,7 +882,7 @@ describe('GameplayTransportHub', () => {
     expect(second.emittedEvents).toEqual([eventSafety()]);
     expect(hub.modeForPlayer('p1')).toBe('websocket');
     expect(hub.modeForPlayer('p2')).toBe('webrtc');
-    expect(second.fallbackProbeTimes).toEqual([]);
+    expect(second.emittedModes).toEqual([{ generationId: SECOND_GENERATION, mode: 'webrtc' }]);
   });
 
   it('cycles active and pending peers without leaking timers or closing any peer twice', async () => {

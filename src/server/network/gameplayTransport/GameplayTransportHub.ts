@@ -37,7 +37,6 @@ export type TransportSession = Readonly<{
   emitSnapshot(publication: MatchSnapshotPublication): void;
   emitEvent(publication: MatchEventPublication): void;
   emitError(error: ServerError): void;
-  probeFallbackPing(): void;
   setNetworkMode(mode: GameplayTransportMode): void;
   setNetworkSample(medianMs: number, sampledAt: number): void;
   clearNetworkSample(): void;
@@ -69,7 +68,9 @@ type SessionRecord = {
   rttFreshnessTimer: ReturnType<typeof setTimeout> | null;
   heartbeatNonce: number;
   pendingHeartbeatNonce: number | null;
-  pendingHeartbeatSentAtMs: number | null;
+  fastProbeNonce: number;
+  pendingFastProbeNonce: number | null;
+  pendingFastProbeSentAtMs: number | null;
   missedHeartbeats: number;
   rttSamples: RttSample[];
   rttFresh: boolean;
@@ -148,7 +149,9 @@ export class GameplayTransportHub {
       rttFreshnessTimer: null,
       heartbeatNonce: 0,
       pendingHeartbeatNonce: null,
-      pendingHeartbeatSentAtMs: null,
+      fastProbeNonce: 0,
+      pendingFastProbeNonce: null,
+      pendingFastProbeSentAtMs: null,
       missedHeartbeats: 0,
       rttSamples: [],
       rttFresh: false,
@@ -193,7 +196,9 @@ export class GameplayTransportHub {
     record.fallbackTriggered = false;
     record.heartbeatNonce = 0;
     record.pendingHeartbeatNonce = null;
-    record.pendingHeartbeatSentAtMs = null;
+    record.fastProbeNonce = 0;
+    record.pendingFastProbeNonce = null;
+    record.pendingFastProbeSentAtMs = null;
     record.missedHeartbeats = 0;
     record.rttSamples = [];
     try {
@@ -384,12 +389,19 @@ export class GameplayTransportHub {
   ): void {
     if (!this.isCurrentPeer(record, peer, generationId) || record.mode !== 'webrtc') return;
     const parsed = clientFastMessageSchema.safeParse(serialized);
-    if (
-      !parsed.success
-      || parsed.data.generationId !== generationId
-      || record.matchEpoch === null
-      || parsed.data.matchEpoch !== record.matchEpoch
-    ) return;
+    if (!parsed.success || parsed.data.generationId !== generationId) return;
+    if (parsed.data.kind === 'probe-ack') {
+      if (
+        parsed.data.nonce !== record.pendingFastProbeNonce
+        || record.pendingFastProbeSentAtMs === null
+      ) return;
+      const sentAt = record.pendingFastProbeSentAtMs;
+      record.pendingFastProbeNonce = null;
+      record.pendingFastProbeSentAtMs = null;
+      this.recordRttSample(record, this.now() - sentAt);
+      return;
+    }
+    if (record.matchEpoch === null || parsed.data.matchEpoch !== record.matchEpoch) return;
 
     const result = record.session.inputIngress.accept(parsed.data.payload, 'webrtc');
     if (result.status === 'error') safeInvoke(() => record.session.emitError(result.error));
@@ -407,13 +419,9 @@ export class GameplayTransportHub {
       !parsed.success
       || parsed.data.generationId !== generationId
       || parsed.data.nonce !== record.pendingHeartbeatNonce
-      || record.pendingHeartbeatSentAtMs === null
     ) return;
-    const sentAt = record.pendingHeartbeatSentAtMs;
     record.pendingHeartbeatNonce = null;
-    record.pendingHeartbeatSentAtMs = null;
     record.missedHeartbeats = 0;
-    this.recordRttSample(record, this.now() - sentAt);
   }
 
   private publishToSession(record: SessionRecord, publication: TransportPublication): void {
@@ -529,8 +537,32 @@ export class GameplayTransportHub {
         return;
       }
       record.pendingHeartbeatNonce = nonce;
-      record.pendingHeartbeatSentAtMs = this.now();
+      this.sendFastProbe(record, peer, generationId);
     }, HEARTBEAT_INTERVAL_MS);
+  }
+
+  private sendFastProbe(record: SessionRecord, peer: ServerPeer, generationId: string): void {
+    const nonce = ++record.fastProbeNonce;
+    const message: ServerFastMessage = {
+      version: GAMEPLAY_PROTOCOL_VERSION,
+      generationId,
+      kind: 'probe',
+      nonce
+    };
+    record.pendingFastProbeNonce = nonce;
+    record.pendingFastProbeSentAtMs = this.now();
+    let result: ReturnType<ServerPeer['sendFast']>;
+    try {
+      result = peer.sendFast(JSON.stringify(message));
+    } catch {
+      result = 'closed';
+    }
+    if (result === 'sent') return;
+    if (record.pendingFastProbeNonce === nonce) {
+      record.pendingFastProbeNonce = null;
+      record.pendingFastProbeSentAtMs = null;
+    }
+    if (result === 'closed') void this.transitionToFallback(record, generationId, peer);
   }
 
   private recordRttSample(record: SessionRecord, elapsedMs: number): void {
@@ -581,7 +613,6 @@ export class GameplayTransportHub {
     safeInvoke(() => record.session.setNetworkMode(mode));
     safeInvoke(() => record.session.emitMode({ generationId, mode }));
     safeInvoke(() => record.session.clearNetworkSample());
-    safeInvoke(() => record.session.probeFallbackPing());
     await closure;
   }
 
@@ -591,7 +622,8 @@ export class GameplayTransportHub {
     for (const unsubscribe of record.unsubscribers.splice(0)) safeInvoke(unsubscribe);
     record.activationExpiresAt = null;
     record.pendingHeartbeatNonce = null;
-    record.pendingHeartbeatSentAtMs = null;
+    record.pendingFastProbeNonce = null;
+    record.pendingFastProbeSentAtMs = null;
     record.missedHeartbeats = 0;
     record.rttFresh = false;
     record.rttSamples = [];
@@ -650,7 +682,8 @@ export class GameplayTransportHub {
       for (const unsubscribe of record.unsubscribers.splice(0)) safeInvoke(unsubscribe);
       record.peer = null;
       record.pendingHeartbeatNonce = null;
-      record.pendingHeartbeatSentAtMs = null;
+      record.pendingFastProbeNonce = null;
+      record.pendingFastProbeSentAtMs = null;
       record.rttSamples = [];
       if (record.mode === 'webrtc' || record.rttFresh) {
         safeInvoke(() => record.session.clearNetworkSample());

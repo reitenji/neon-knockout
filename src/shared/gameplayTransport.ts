@@ -65,13 +65,21 @@ const rtcOfferSchema = z.object({
   sdp: utf8StringSchema(SDP_LIMIT_BYTES)
 }).strict();
 
-const clientFastMessageObjectSchema = z.object({
-  version: z.literal(GAMEPLAY_PROTOCOL_VERSION),
-  generationId: generationIdSchema,
-  matchEpoch: finiteNonNegativeIntegerSchema,
-  kind: z.literal('input'),
-  payload: matchInputSchema
-}).strict();
+const clientFastMessageObjectSchema = z.discriminatedUnion('kind', [
+  z.object({
+    version: z.literal(GAMEPLAY_PROTOCOL_VERSION),
+    generationId: generationIdSchema,
+    matchEpoch: finiteNonNegativeIntegerSchema,
+    kind: z.literal('input'),
+    payload: matchInputSchema
+  }).strict(),
+  z.object({
+    version: z.literal(GAMEPLAY_PROTOCOL_VERSION),
+    generationId: generationIdSchema,
+    kind: z.literal('probe-ack'),
+    nonce: finiteNonNegativeIntegerSchema
+  }).strict()
+]);
 
 const clientReliableMessageObjectSchema = z.object({
   version: z.literal(GAMEPLAY_PROTOCOL_VERSION),
@@ -112,20 +120,34 @@ export type RtcNegotiationAnswer = Readonly<{ generationId: string; answer: RtcA
 export type RtcActivationRequest = Readonly<{ generationId: string }>;
 export type TransportModeNotice = Readonly<{ generationId: string | null; mode: GameplayTransportMode }>;
 
-export type ClientFastMessage = Readonly<{
-  version: 1;
-  generationId: string;
-  matchEpoch: number;
-  kind: 'input';
-  payload: InputFrame;
-}>;
+export type ClientFastMessage =
+  | Readonly<{
+    version: 1;
+    generationId: string;
+    matchEpoch: number;
+    kind: 'input';
+    payload: InputFrame;
+  }>
+  | Readonly<{
+    version: 1;
+    generationId: string;
+    kind: 'probe-ack';
+    nonce: number;
+  }>;
 
-export type ServerFastMessage = Readonly<{
-  version: 1;
-  generationId: string;
-  kind: 'snapshot';
-  payload: MatchSnapshotPublication;
-}>;
+export type ServerFastMessage =
+  | Readonly<{
+    version: 1;
+    generationId: string;
+    kind: 'snapshot';
+    payload: MatchSnapshotPublication;
+  }>
+  | Readonly<{
+    version: 1;
+    generationId: string;
+    kind: 'probe';
+    nonce: number;
+  }>;
 
 export type ClientReliableMessage = Readonly<{
   version: 1;
