@@ -163,7 +163,7 @@
 - Consumes: live port `4174`, physical phone, host Mac, router IP, and the new HUD Ping
 - Produces: separate current evidence for Wi-Fi path RTT and in-game application RTT
 
-- [ ] **Step 1: Restart the production build on port 4174 and verify health.**
+- [x] **Step 1: Restart the production build on port 4174 and verify health.**
 
   Run: `curl -fsS http://127.0.0.1:4174/health`
 
@@ -173,10 +173,23 @@
 
   While the phone is awake in a match, measure Mac-to-router ICMP, Mac-to-phone ICMP, and HUD DataChannel Ping for at least 30 seconds. Record min/median/p95/max separately; do not infer one metric from another.
 
+  - [x] Completed automated prerequisite: measured the confirmed default gateway from the host with 30 ICMP packets.
+  - [ ] Pending physical comparison: no phone is identified, so phone ICMP and an in-match HUD DataChannel Ping have not been measured.
+
 - [ ] **Step 3: Repeat once with the host connected by Ethernet or both devices forced onto the same access point.**
 
   A large improvement isolates Wi-Fi/mesh backhaul as the network cause. No improvement while ICMP remains low identifies browser/main-thread scheduling as the remaining application component.
 
-- [ ] **Step 4: Publish only after both automated and live probes are recorded.**
+- [ ] **Step 4: Publish only after automated code/tests/browser evidence, live-host health, and final review are clean.**
 
-  Push the verified commit to `feature/webrtc-gameplay-transport-impl` and `main`, then confirm both remote refs resolve to the same commit.
+  Push the verified commit to `feature/webrtc-gameplay-transport-impl` and `main`, then confirm both remote refs resolve to the same commit. Keep phone/HUD/Ethernet/same-access-point comparison explicitly pending and separate; under the binding ruling, it does not block publication once the automated evidence, live-host health, and final review are clean.
+
+#### Outcomes and evidence — 2026-09-03T12:35:36+0300
+
+- Current production artifacts in this worktree were validated before restart: `dist/server/main.js` and `dist/client/index.html` were present (built at `2026-09-03T12:26:46+0300` and `2026-09-03T12:26:45+0300` respectively); `node --check dist/server/main.js` succeeded; the server bundle contains `pendingHeartbeatSentAtMs` and `recordRttSample`, matching the heartbeat RTT source implementation.
+- Restarted the existing `com.reitenji.neon-relay.lan` launchd job. Its PID changed from `94916` to `70126`. `launchctl print` records `cd /Users/serkances/dev/game/.worktrees/webrtc-gameplay-transport-impl && exec /Users/serkances/.nvm/versions/node/v25.9.0/bin/node dist/server/main.js`; `lsof` records that PID `70126` owns `TCP *:4174 (LISTEN)`. TCP `4173` has no listener.
+- HTTP probes returned `200 OK` with expected JSON on both paths: `http://127.0.0.1:4174/health` and `http://192.168.68.52:4174/health` returned `{ "status": "ok", "rooms": 0, "uptimeSeconds": ... }`; both `/api/runtime/network` URLs returned `{ "port": 4174, "localUrl": "http://localhost:4174", "lanAddresses": [{ "interfaceName": "en0", "address": "192.168.68.52", "url": "http://192.168.68.52:4174" }] }`.
+- `route -n get default` confirmed gateway `192.168.68.1` via `en0`. Host-to-gateway ICMP (`ping -c 30 -i 0.2 192.168.68.1`) received 30/30 packets with `0.0%` loss; exact round-trip `min/avg/max/stddev` was `3.647/15.811/45.346/12.213 ms`. This is an ICMP router-path result, not a DataChannel or phone RTT result.
+- Task 3 verification evidence (recorded before this live check): `npm run verify` passed ESLint, both TypeScript projects, 59 Vitest files / 585 tests, the eight-client load gate, and production client/server builds. `npx playwright test tests/e2e/webrtcGameplay.spec.ts --project=chromium` passed three consecutive focused runs, each 2/2: `23.1 s`, `22.1 s`, and `24.0 s`. Those runs verified two Chromium clients, numeric WebRTC Ping after activation, authoritative gameplay, and a fresh Socket.IO Ping after forced fallback.
+- Physical-device acceptance remains pending. No ARP neighbor was identified or probed as a phone. Consequently, phone ICMP, physical Safari/Chrome gameplay, in-match HUD Ping, Ethernet comparison, and same-access-point comparison are unverified. The automated two-Chromium evidence above is publishable under the ledger ruling, but it is not a substitute for those physical checks.
+- No remote push occurred in this task. Task 4's publish step remains unchecked pending the root publication action; phone/HUD/Ethernet/same-access-point comparison remains separately pending and does not block publication under the binding ruling.
