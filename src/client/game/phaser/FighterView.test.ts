@@ -357,6 +357,7 @@ describe('FighterView real graphics presentation', () => {
 
     view.apply(currentPlayer, currentPlayer.position, currentPlayer.facing, null);
     view.apply(player({ overload: 20.49 }), currentPlayer.position, currentPlayer.facing, null);
+    view.apply(player({ overload: 20.49 }), currentPlayer.position, { x: 2, y: 0 }, null);
 
     expect(nameLabel.setTextCalls).toBe(0);
     expect(overloadLabel.setTextCalls).toBe(0);

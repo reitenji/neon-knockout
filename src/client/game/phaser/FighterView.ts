@@ -231,7 +231,7 @@ export function createFighterView(
   let lastRenderAtMs: number | null = null;
   let displayedName = player.name;
   let displayedOverload = initialOverload;
-  let displayedFacing: Vec2 | null = null;
+  let displayedRotation: number | null = null;
   let lastAttackTelegraph: AttackTelegraph | null = null;
   let lastChargeState: ChargeIndicatorState | null = null;
   let trailVisible = false;
@@ -256,9 +256,10 @@ export function createFighterView(
       if (destroyed) return;
       const nowMs = scene.time.now;
       outer.setPosition(position.x, position.y);
-      if (!displayedFacing || displayedFacing.x !== facing.x || displayedFacing.y !== facing.y) {
-        content.setRotation(Math.atan2(facing.y, facing.x));
-        displayedFacing = { x: facing.x, y: facing.y };
+      const rotation = Math.atan2(facing.y, facing.x);
+      if (displayedRotation !== rotation) {
+        content.setRotation(rotation);
+        displayedRotation = rotation;
       }
       if (displayedName !== nextPlayer.name) {
         nameLabel.setText(nextPlayer.name);
