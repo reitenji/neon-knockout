@@ -3,7 +3,7 @@ import { advanceKinematics, normalizeAim, normalizeAxes, type KinematicState } f
 import type { InputFrame, MatchAction, MatchPlayer, MatchSnapshot, Vec2 } from '../../shared/model.js';
 
 export const MIN_INTERPOLATION_DELAY_MS = 16;
-export const MAX_INTERPOLATION_DELAY_MS = 40;
+export const MAX_INTERPOLATION_DELAY_MS = 24;
 export const REMOTE_SNAP_DISTANCE = 180;
 export const LOCAL_CORRECTION_SNAP_DISTANCE = 160;
 const LOCAL_CORRECTION_BLEND = 0.35;

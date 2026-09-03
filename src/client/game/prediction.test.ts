@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { InputFrame, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import {
+  MAX_INTERPOLATION_DELAY_MS,
   REMOTE_SNAP_DISTANCE,
   PredictionBuffer,
   SnapshotTimeline,
@@ -310,7 +311,7 @@ describe('SnapshotTimeline', () => {
     expect(sampled.alpha).toBeCloseTo(0.5, 10);
   });
 
-  it('raises delay within the 16 to 40 ms bounds when arrivals become jittery', () => {
+  it('caps high-jitter LAN arrivals at a 24 ms presentation buffer', () => {
     const timeline = new SnapshotTimeline();
     const first = snapshot(1, [player()]);
     const second = snapshot(2, [player()]);
@@ -319,8 +320,8 @@ describe('SnapshotTimeline', () => {
     timeline.push(second, 1_016 + 2 / 3);
     timeline.push(third, 1_160);
 
-    expect(timeline.delayMs()).toBeGreaterThan(16);
-    expect(timeline.delayMs()).toBeLessThanOrEqual(40);
+    expect(timeline.delayMs()).toBe(MAX_INTERPOLATION_DELAY_MS);
+    expect(timeline.delayMs()).toBe(24);
   });
 
   it('keeps delay bounded for every arrival interval', () => {
@@ -330,7 +331,7 @@ describe('SnapshotTimeline', () => {
     for (const [index, receivedAtMs] of arrivals.entries()) {
       timeline.push(snapshot(index, [player()]), receivedAtMs);
       expect(timeline.delayMs()).toBeGreaterThanOrEqual(16);
-      expect(timeline.delayMs()).toBeLessThanOrEqual(40);
+      expect(timeline.delayMs()).toBeLessThanOrEqual(MAX_INTERPOLATION_DELAY_MS);
     }
   });
 
