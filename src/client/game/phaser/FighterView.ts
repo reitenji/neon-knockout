@@ -202,6 +202,7 @@ export function createFighterView(
     .setTint(accent);
   const body = scene.add.image(0, 0, fighterTextureKey(player.chassis, 'body')).setTint(accent);
   const core = scene.add.image(0, 0, fighterTextureKey(player.chassis, 'core')).setTint(accent);
+  const initialOverload = Math.round(player.overload);
   const nameLabel = scene.add.text(0, -67, player.name, {
     color: '#F4F7FB',
     fontFamily: 'Inter, system-ui, sans-serif',
@@ -210,7 +211,7 @@ export function createFighterView(
     stroke: '#02050A',
     strokeThickness: 4
   }).setOrigin(0.5);
-  const overloadLabel = scene.add.text(0, 65, '0%', {
+  const overloadLabel = scene.add.text(0, 65, `${initialOverload}%`, {
     color: ACCENTS[player.accent],
     fontFamily: 'Inter, system-ui, sans-serif',
     fontSize: '12px',
@@ -228,6 +229,9 @@ export function createFighterView(
   const animationDirector = new AnimationDirector(options.reducedMotion ?? prefersReducedMotion());
   let lastPosition: Vec2 | null = null;
   let lastRenderAtMs: number | null = null;
+  let displayedName = player.name;
+  let displayedOverload = initialOverload;
+  let displayedFacing: Vec2 | null = null;
   let lastAttackTelegraph: AttackTelegraph | null = null;
   let lastChargeState: ChargeIndicatorState | null = null;
   let trailVisible = false;
@@ -252,9 +256,19 @@ export function createFighterView(
       if (destroyed) return;
       const nowMs = scene.time.now;
       outer.setPosition(position.x, position.y);
-      content.setRotation(Math.atan2(facing.y, facing.x));
-      nameLabel.setText(nextPlayer.name);
-      overloadLabel.setText(`${Math.round(nextPlayer.overload)}%`);
+      if (!displayedFacing || displayedFacing.x !== facing.x || displayedFacing.y !== facing.y) {
+        content.setRotation(Math.atan2(facing.y, facing.x));
+        displayedFacing = { x: facing.x, y: facing.y };
+      }
+      if (displayedName !== nextPlayer.name) {
+        nameLabel.setText(nextPlayer.name);
+        displayedName = nextPlayer.name;
+      }
+      const nextOverload = Math.round(nextPlayer.overload);
+      if (displayedOverload !== nextOverload) {
+        overloadLabel.setText(`${nextOverload}%`);
+        displayedOverload = nextOverload;
+      }
       if (!sameAttackTelegraph(lastAttackTelegraph, attackTelegraph)) {
         trailVisible = drawAttackTrail(trail, accent, attackTelegraph);
         lastAttackTelegraph = copyAttackTelegraph(attackTelegraph);
@@ -278,7 +292,7 @@ export function createFighterView(
         velocity: measuredVelocity
       };
       animationDirector.apply(presentationPlayer, view, nowMs, predictedAction);
-      lastPosition = position;
+      lastPosition = { x: position.x, y: position.y };
       lastRenderAtMs = nowMs;
     },
     destroy(): void {

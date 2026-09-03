@@ -8,13 +8,14 @@ class FakeGraphics {
   alpha = 1;
   readonly circles: Array<{ x: number; y: number; radius: number }> = [];
   clears = 0;
+  draws = 0;
 
   clear(): this { this.clears += 1; this.circles.length = 0; return this; }
   fillStyle(): this { return this; }
   lineStyle(): this { return this; }
-  fillCircle(x: number, y: number, radius: number): this { this.circles.push({ x, y, radius }); return this; }
-  strokeCircle(): this { return this; }
-  fillRoundedRect(): this { return this; }
+  fillCircle(x: number, y: number, radius: number): this { this.draws += 1; this.circles.push({ x, y, radius }); return this; }
+  strokeCircle(): this { this.draws += 1; return this; }
+  fillRoundedRect(): this { this.draws += 1; return this; }
   setBlendMode(): this { return this; }
   setDepth(): this { return this; }
   setAlpha(value: number): this { this.alpha = value; return this; }
@@ -49,7 +50,7 @@ function pulse(overrides: Partial<MatchPulse> = {}): MatchPulse {
 }
 
 describe('PulseView', () => {
-  it('renders and updates one authoritative projectile position, heading, radius, and lifetime state', () => {
+  it('updates transform and alpha without redrawing unchanged radius geometry, then redraws when radius changes', () => {
     const containers: FakeContainer[] = [];
     const graphics: FakeGraphics[] = [];
     const scene = {
@@ -71,12 +72,20 @@ describe('PulseView', () => {
     expect(containers[0]).toMatchObject({ x: 320, y: 280, rotation: 0 });
     expect(graphics[0]?.circles).toContainEqual({ x: 0, y: 0, radius: 18 });
 
+    const initialClears = graphics[0]!.clears;
+    const initialDraws = graphics[0]!.draws;
+
     view.apply(pulse({ position: { x: 410, y: 310 }, velocity: { x: 0, y: -900 }, remainingMs: 120 }));
 
     expect(containers).toHaveLength(1);
     expect(containers[0]).toMatchObject({ x: 410, y: 310, rotation: -Math.PI / 2 });
-    expect(graphics[0]?.clears).toBe(2);
+    expect(graphics[0]).toMatchObject({ clears: initialClears, draws: initialDraws });
     expect(graphics[0]?.alpha).toBeLessThan(1);
+
+    view.apply(pulse({ radius: 24 }));
+
+    expect(graphics[0]).toMatchObject({ clears: initialClears + 1, draws: initialDraws + 5 });
+    expect(graphics[0]?.circles).toContainEqual({ x: 0, y: 0, radius: 24 });
   });
 
   it('destroys its owned display tree idempotently and ignores later snapshots', () => {

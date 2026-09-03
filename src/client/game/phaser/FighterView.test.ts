@@ -33,6 +33,7 @@ class FakeDisplayObject {
   scaleY = 1;
   alpha = 1;
   destroyed = 0;
+  rotationCalls = 0;
 
   constructor(x = 0, y = 0) {
     this.x = x;
@@ -44,7 +45,7 @@ class FakeDisplayObject {
   setBlendMode(): this { return this; }
   setDepth(): this { return this; }
   setPosition(x: number, y: number): this { this.x = x; this.y = y; return this; }
-  setRotation(rotation: number): this { this.rotation = rotation; return this; }
+  setRotation(rotation: number): this { this.rotationCalls += 1; this.rotation = rotation; return this; }
   setScale(x: number, y = x): this { this.scaleX = x; this.scaleY = y; return this; }
   setAlpha(alpha: number): this { this.alpha = alpha; return this; }
   destroy(): void { this.destroyed += 1; }
@@ -98,8 +99,10 @@ class FakeGraphics extends FakeDisplayObject {
 class FakeImage extends FakeDisplayObject {}
 
 class FakeText extends FakeDisplayObject {
+  setTextCalls = 0;
+
   constructor(x: number, y: number, public text: string) { super(x, y); }
-  setText(text: string): this { this.text = text; return this; }
+  setText(text: string): this { this.setTextCalls += 1; this.text = text; return this; }
 }
 
 function sceneHarness() {
@@ -342,5 +345,32 @@ describe('FighterView real graphics presentation', () => {
     expect(trail.commands.filter((command) => command.kind === 'clear')).toHaveLength(2);
     expect(indicator.commands.filter((command) => command.kind === 'clear')).toHaveLength(2);
     expect(frameCommands(indicator).some((command) => command.kind === 'circle')).toBe(true);
+  });
+
+  it('skips unchanged label and facing setters, then updates a changed displayed value and facing immediately', () => {
+    const harness = sceneHarness();
+    const currentPlayer = player({ overload: 20.2 });
+    const view = createFighterView(harness.scene as never, currentPlayer, true, { reducedMotion: true });
+    const nameLabel = harness.containers[0]!.children[4] as FakeText;
+    const overloadLabel = harness.containers[0]!.children[5] as FakeText;
+    const content = view.content as unknown as FakeContainer;
+
+    view.apply(currentPlayer, currentPlayer.position, currentPlayer.facing, null);
+    view.apply(player({ overload: 20.49 }), currentPlayer.position, currentPlayer.facing, null);
+
+    expect(nameLabel.setTextCalls).toBe(0);
+    expect(overloadLabel.setTextCalls).toBe(0);
+    expect(content.rotationCalls).toBe(1);
+
+    view.apply(
+      player({ name: 'Bea', overload: 20.5 }),
+      currentPlayer.position,
+      { x: 0, y: -1 },
+      null
+    );
+
+    expect(nameLabel).toMatchObject({ text: 'Bea', setTextCalls: 1 });
+    expect(overloadLabel).toMatchObject({ text: '21%', setTextCalls: 1 });
+    expect(content).toMatchObject({ rotation: -Math.PI / 2, rotationCalls: 2 });
   });
 });
