@@ -5,7 +5,7 @@ import { createGameServer } from './network/createGameServer.js';
 import { discoverLanUrls } from './runtime/lanAddresses.js';
 
 export function parsePort(value: string | undefined): number {
-  if (value === undefined) return 4173;
+  if (value === undefined) return 4174;
   if (!/^\d+$/u.test(value)) throw new Error(`Geçersiz PORT: ${value}`);
   const port = Number(value);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error(`Geçersiz PORT: ${value}`);

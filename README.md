@@ -10,12 +10,12 @@ Use Node.js 20 or newer. The host command builds the production client and start
 ## Host and join
 
 1. On the host computer, run the two commands above.
-2. The host opens the printed `http://localhost:4173` URL, enters a name, and chooses **Oda Kur**.
-3. Copy the appropriate **Davet Linkleri** URL shown in the host lobby and share it with up to seven friends. The link already contains the room code, for example `http://192.168.1.20:4173/room/AB2Z`. Use **Yenile** if the host changes network.
+2. The host opens the printed `http://localhost:4174` URL, enters a name, and chooses **Oda Kur**.
+3. Copy the appropriate **Davet Linkleri** URL shown in the host lobby and share it with up to seven friends. The link already contains the room code, for example `http://192.168.1.20:4174/room/AB2Z`. Use **Yenile** if the host changes network.
 4. Each friend opens that exact link, enters only a player name, chooses **Odaya Katıl**, and selects a chassis. The four-character room code remains available as a manual fallback from the main page.
 5. The host chooses the room rules, every player chooses **Hazırım**, and the host chooses **Maçı Başlat** when every connected player is ready.
 
-The local host may use `http://localhost:4173`; other devices must use the private LAN URL shown in the lobby, commonly in `192.168.x.x`, `10.x.x.x`, or `172.16–31.x.x`. Allow incoming TCP connections on port 4173 and UDP ports 53100–53131 in the operating-system firewall when players cannot join or WebRTC cannot activate. Guests only need a modern browser after the host has installed dependencies.
+The local host may use `http://localhost:4174`; other devices must use the private LAN URL shown in the lobby, commonly in `192.168.x.x`, `10.x.x.x`, or `172.16–31.x.x`. Allow incoming TCP connections on port 4174 and UDP ports 53100–53131 in the operating-system firewall when players cannot join or WebRTC cannot activate. Guests only need a modern browser after the host has installed dependencies.
 
 ## Gameplay transport and Ping
 
@@ -58,21 +58,21 @@ Closing or losing a browser connection does not award a knockout or a fall. Keep
 
 ## Platform notes
 
-- macOS: allow the terminal or Node.js application through the firewall if macOS asks, and ensure any managed or third-party firewall permits inbound TCP 4173 plus UDP 53100–53131.
+- macOS: allow the terminal or Node.js application through the firewall if macOS asks, and ensure any managed or third-party firewall permits inbound TCP 4174 plus UDP 53100–53131.
 - Windows: allow Node.js on private networks in Windows Defender Firewall. A scoped UDP rule can be added from an elevated terminal with `netsh advfirewall firewall add rule name="Neon Knockout WebRTC" dir=in action=allow protocol=UDP localport=53100-53131 profile=private`.
-- Linux: allow TCP 4173 and UDP 53100–53131 on the active private-network firewall profile; with UFW, use `sudo ufw allow 4173/tcp` and `sudo ufw allow 53100:53131/udp`.
+- Linux: allow TCP 4174 and UDP 53100–53131 on the active private-network firewall profile; with UFW, use `sudo ufw allow 4174/tcp` and `sudo ufw allow 53100:53131/udp`.
 
-If the LAN URL is absent, make sure the host has an active private network adapter. VPN, guest Wi-Fi/client isolation, captive portals, and corporate firewalls can block host candidates or all direct LAN connections. A guest network may let devices reach the Internet while deliberately preventing them from reaching each other; WebRTC and Socket.IO cannot bypass that policy. WebRTC falls back to Socket.IO when only UDP is blocked, and Socket.IO prefers WebSocket before polling, but none of these transports can bypass router isolation or a closed host firewall. Stop an older local server already using port 4173 before running `npm run lan`.
+If the LAN URL is absent, make sure the host has an active private network adapter. VPN, guest Wi-Fi/client isolation, captive portals, and corporate firewalls can block host candidates or all direct LAN connections. A guest network may let devices reach the Internet while deliberately preventing them from reaching each other; WebRTC and Socket.IO cannot bypass that policy. WebRTC falls back to Socket.IO when only UDP is blocked, and Socket.IO prefers WebSocket before polling, but none of these transports can bypass router isolation or a closed host firewall. Stop an older local server already using port 4174 before running `npm run lan`.
 
 ## Health probe and troubleshooting
 
 The host can confirm the server is listening with:
 
 ```sh
-curl --fail http://127.0.0.1:4173/health
+curl --fail http://127.0.0.1:4174/health
 ```
 
-It returns JSON with `status: "ok"` and the current room count. Also run the same `/health` request against the exact private address shown in the lobby or printed by `npm run lan`, for example `curl --fail http://192.168.1.20:4173/health`; do not guess or hardcode that address. Both requests must return HTTP 200. If the host probe works but a guest cannot connect, verify both devices are on the same private network, avoid an isolated guest Wi-Fi, use the displayed LAN URL exactly, and check the firewall rule.
+It returns JSON with `status: "ok"` and the current room count. Also run the same `/health` request against the exact private address shown in the lobby or printed by `npm run lan`, for example `curl --fail http://192.168.1.20:4174/health`; do not guess or hardcode that address. Both requests must return HTTP 200. If the host probe works but a guest cannot connect, verify both devices are on the same private network, avoid an isolated guest Wi-Fi, use the displayed LAN URL exactly, and check the firewall rule.
 
 ## Verification
 

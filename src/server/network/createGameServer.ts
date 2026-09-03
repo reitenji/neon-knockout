@@ -82,7 +82,7 @@ function updateSnapshot(snapshot: MatchSnapshot, publication: Extract<RoomPublic
 
 export function createGameServer(options: CreateGameServerOptions = {}): GameServer {
   const host = options.host ?? '0.0.0.0';
-  const requestedPort = options.port ?? 4173;
+  const requestedPort = options.port ?? 4174;
   const logger = options.logger ?? console;
   const networkInterfaces = options.networkInterfaces ?? getNetworkInterfaces;
   const now = (): number => performance.now();
