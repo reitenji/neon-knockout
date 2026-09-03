@@ -121,7 +121,10 @@ describe('eight-client delivery load', () => {
     for (let index = 0; index < CLIENT_COUNT; index += 1) {
       const client = await connect(origin);
       clients.push(client);
-      client.on('match:snapshot', () => { snapshotCounts[index] += 1; });
+      client.on('match:snapshot', (_publication, acknowledge) => {
+        snapshotCounts[index] += 1;
+        acknowledge();
+      });
       client.on('server:error', (error) => errors.push(error));
     }
 

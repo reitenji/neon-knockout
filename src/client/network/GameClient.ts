@@ -196,7 +196,10 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
   });
   socket.on('transport:mode', (notice) => activeBundle?.transport.acceptMode(notice));
   socket.on('match:started', (publication) => activeBundle?.transport.acceptSocketStarted(publication));
-  socket.on('match:snapshot', (publication) => activeBundle?.transport.acceptSocketSnapshot(publication));
+  socket.on('match:snapshot', (publication, acknowledge) => {
+    activeBundle?.transport.acceptSocketSnapshot(publication);
+    acknowledge();
+  });
   socket.on('match:event', (publication) => activeBundle?.transport.acceptSocketEvent(publication));
   socket.on('network:probe', (acknowledge) => acknowledge());
   socket.on('server:error', (error) => publish('server:error', error));

@@ -202,6 +202,7 @@ function expectEvent<E extends keyof ServerToClientEvents>(
 async function connectClient(origin: string): Promise<GameClient> {
   const client: GameClient = io(origin, { transports: ['websocket'], forceNew: true, reconnection: false });
   client.on('network:probe', (acknowledge) => acknowledge());
+  client.on('match:snapshot', (_publication, acknowledge) => acknowledge());
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Timed out connecting Socket.IO client')), ACK_TIMEOUT_MS);
     client.once('connect', () => {

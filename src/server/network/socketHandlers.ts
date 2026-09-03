@@ -26,6 +26,7 @@ import {
 import { DomainError } from '../rooms/domainError.js';
 import type { RoomManager } from '../rooms/roomManager.js';
 import { createMatchInputIngress, type MatchInputIngress } from './matchInputIngress.js';
+import { SocketSnapshotPacer } from './SocketSnapshotPacer.js';
 import {
   GameplayTransportExpectedLifecycleError,
   type GameplayTransportHub
@@ -147,6 +148,12 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     let activeLatencyProbe: number | null = null;
     let nextLatencyProbe = 0;
     let activePlayerId: string | null = null;
+    let snapshotPacer: SocketSnapshotPacer | null = null;
+
+    const disposeSnapshotPacer = (): void => {
+      snapshotPacer?.dispose();
+      snapshotPacer = null;
+    };
 
     const stopLatencySampling = (): void => {
       latencySampling = false;
@@ -292,6 +299,11 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     };
 
     const establishSession = (welcome: SessionWelcome): void => {
+      disposeSnapshotPacer();
+      const sessionSnapshotPacer = new SocketSnapshotPacer((publication, acknowledgeSnapshot) => {
+        socket.emit('match:snapshot', structuredClone(publication), acknowledgeSnapshot);
+      });
+      snapshotPacer = sessionSnapshotPacer;
       void socket.join(welcome.roomCode);
       inputIngress.reset();
       activePlayerId = welcome.playerId;
@@ -303,7 +315,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
         socketMode: () => currentTransport(socket),
         emitMode: (notice) => socket.emit('transport:mode', structuredClone(notice)),
         emitStarted: (publication) => socket.emit('match:started', structuredClone(publication)),
-        emitSnapshot: (publication) => socket.emit('match:snapshot', structuredClone(publication)),
+        emitSnapshot: (publication) => sessionSnapshotPacer.publish(publication),
         emitEvent: (publication) => socket.emit('match:event', structuredClone(publication)),
         emitError: (error) => socket.emit('server:error', structuredClone(error)),
         probeFallbackPing: sampleLatencyImmediately,
@@ -401,6 +413,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
       acknowledgeAsync(roomLeaveSchema, payload, callback, async () => {
         const roomCode = rooms.leaveRoom(socket.id);
         stopLatencySampling();
+        disposeSnapshotPacer();
         activePlayerId = null;
         const cleanupResults = await Promise.allSettled([
           transportHub.detachSession(socket.id),
@@ -443,6 +456,7 @@ export function registerSocketHandlers(options: SocketHandlerOptions): void {
     });
     socket.on('disconnect', () => {
       stopLatencySampling();
+      disposeSnapshotPacer();
       rooms.disconnect(socket.id);
       activePlayerId = null;
       void transportHub.detachSession(socket.id);

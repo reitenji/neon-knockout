@@ -492,7 +492,7 @@ describe('createSocketGameClient', () => {
     expect(gameplayHarness.transport.acceptMode).toHaveBeenCalledWith(notice);
   });
 
-  it('routes epoch-bearing Socket.IO safety publications through the owning gameplay controller', () => {
+  it('routes epoch-bearing Socket.IO safety publications through the owning gameplay controller and acknowledges snapshots', () => {
     const client = createSocketGameClient();
     const startedListener = vi.fn();
     const snapshotListener = vi.fn();
@@ -513,7 +513,8 @@ describe('createSocketGameClient', () => {
     client.subscribe('match:event', eventListener);
 
     socketHarness.trigger('match:started', startValue);
-    socketHarness.trigger('match:snapshot', snapshotValue);
+    const acknowledgeSnapshot = vi.fn();
+    socketHarness.trigger('match:snapshot', snapshotValue, acknowledgeSnapshot);
     socketHarness.trigger('match:event', eventValue);
 
     expect(startedListener).not.toHaveBeenCalled();
@@ -521,7 +522,23 @@ describe('createSocketGameClient', () => {
     expect(eventListener).not.toHaveBeenCalled();
     expect(gameplayHarness.transport.acceptSocketStarted).toHaveBeenCalledWith(startValue);
     expect(gameplayHarness.transport.acceptSocketSnapshot).toHaveBeenCalledWith(snapshotValue);
+    expect(acknowledgeSnapshot).toHaveBeenCalledOnce();
     expect(gameplayHarness.transport.acceptSocketEvent).toHaveBeenCalledWith(eventValue);
+  });
+
+  it('acknowledges a Socket.IO snapshot even after the active gameplay bundle is disposed', () => {
+    const client = createSocketGameClient();
+    const acknowledgeSnapshot = vi.fn();
+
+    client.disconnect();
+    socketHarness.trigger('match:snapshot', {
+      matchEpoch: 1,
+      eventCursor: 1,
+      snapshot: matchSnapshot(2)
+    }, acknowledgeSnapshot);
+
+    expect(acknowledgeSnapshot).toHaveBeenCalledOnce();
+    expect(gameplayHarness.firstTransport.acceptSocketSnapshot).not.toHaveBeenCalled();
   });
 
   it('disposes on explicit and non-resumable disconnects but waits through recoverable reconnects', () => {
