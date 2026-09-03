@@ -12,6 +12,9 @@ const INTERVAL_EWMA_ALPHA = 0.2;
 const JITTER_EWMA_ALPHA = 0.25;
 const SNAPSHOT_CAPACITY = 16;
 const MAX_EXTRAPOLATION_FRAMES = 2;
+const MIN_ROLLBACK_FRAMES = 2;
+const MAX_ROLLBACK_FRAMES = 10;
+const PENDING_INPUT_CAPACITY = 12;
 const TICK_MS = 1_000 / 60;
 
 export type PlayerPresentation = Readonly<KinematicState & { actionStart: MatchAction | null }>;
@@ -38,7 +41,24 @@ export type TimelineSample = Readonly<{
   bufferUnderrun: boolean;
 }>;
 
-type PendingInput = Readonly<{ frame: InputFrame; elapsedMs: number; platformProgress: number }>;
+export type ReconciliationResult = Readonly<{
+  authoritativeTick: number;
+  rollbackFrames: number;
+  correctionDistancePx: number;
+  hardSnap: boolean;
+}>;
+
+export type PredictionReconciliation = Readonly<{
+  presentation: PlayerPresentation;
+  result: ReconciliationResult;
+}>;
+
+type PendingInput = Readonly<{
+  frame: InputFrame;
+  elapsedMs: number;
+  platformProgress: number;
+  actionEdge: boolean;
+}>;
 type TimedSnapshot = Readonly<{ snapshot: MatchSnapshot; receivedAtMs: number }>;
 type PredictionRuntime = KinematicState & {
   dashRemainingMs: number;
@@ -286,6 +306,8 @@ export class PredictionBuffer {
   private actionStart: MatchAction | null = null;
   private lastPresentedAttackId: number | null = null;
   private lastRollbackFrames = 0;
+  private rollbackWindowFrames = 4;
+  private lastHeavyInput = false;
 
   constructor(readonly playerId: string) {}
 
@@ -296,7 +318,16 @@ export class PredictionBuffer {
     platformProgress = 0
   ): PlayerPresentation {
     const last = this.pending[this.pending.length - 1];
-    if (!last || frame.seq > last.frame.seq) this.pending.push({ frame, elapsedMs, platformProgress });
+    if (!last || frame.seq > last.frame.seq) {
+      this.pending.push({
+        frame,
+        elapsedMs,
+        platformProgress,
+        actionEdge: frame.quick || frame.dash || frame.heavy !== this.lastHeavyInput
+      });
+      this.lastHeavyInput = frame.heavy;
+      this.compactPending(PENDING_INPUT_CAPACITY);
+    }
     const advanced = advanceRuntime(this.runtime ?? runtimeOf(player), player, frame, elapsedMs, platformProgress);
     this.runtime = advanced.runtime;
     this.actionStart = advanced.actionStart;
@@ -305,17 +336,19 @@ export class PredictionBuffer {
 
   reconcile(
     authoritativePlayer: MatchPlayer,
+    authoritativeTick: number,
     fallbackElapsedMs: number,
     platformProgress = 0
-  ): PlayerPresentation {
+  ): PredictionReconciliation {
     while (
       this.pending.length > 0 &&
       (this.pending[0]?.frame.seq ?? Number.POSITIVE_INFINITY) <= authoritativePlayer.lastProcessedInputSeq
     ) this.pending.shift();
+    this.compactPending(this.rollbackWindowFrames);
 
     let replay = runtimeOf(authoritativePlayer);
     let replayedAction: MatchAction | null = null;
-    this.lastRollbackFrames = this.pending.length;
+    this.lastRollbackFrames = Math.min(this.pending.length, this.rollbackWindowFrames);
     for (const pending of this.pending) {
       const advanced = advanceRuntime(
         replay,
@@ -327,7 +360,25 @@ export class PredictionBuffer {
       replay = advanced.runtime;
       replayedAction = advanced.actionStart;
     }
-    const position = this.runtime ? blendPosition(this.runtime.position, replay.position) : replay.position;
+    const previousRuntime = this.runtime;
+    const correctionDistancePx = previousRuntime
+      ? Math.hypot(
+          previousRuntime.position.x - replay.position.x,
+          previousRuntime.position.y - replay.position.y
+        )
+      : 0;
+    const respawnTransition = previousRuntime !== null && (
+      previousRuntime.respawnRemainingMs > 0 ||
+      previousRuntime.action.kind === 'RESPAWNING' ||
+      authoritativePlayer.respawnRemainingMs > 0 ||
+      authoritativePlayer.action.kind === 'RESPAWNING'
+    );
+    const hardSnap = previousRuntime !== null && (
+      respawnTransition || correctionDistancePx >= LOCAL_CORRECTION_SNAP_DISTANCE
+    );
+    const position = previousRuntime
+      ? hardSnap ? replay.position : blendPosition(previousRuntime.position, replay.position)
+      : replay.position;
     this.runtime = { ...replay, position };
     const authoritativeAttackId = authoritativePlayer.action.attackId;
     if (authoritativeAttackId !== null && authoritativeAttackId !== this.lastPresentedAttackId) {
@@ -336,7 +387,24 @@ export class PredictionBuffer {
     } else {
       this.actionStart = authoritativePlayer.action.kind === null ? replayedAction : null;
     }
-    return { position, velocity: replay.velocity, facing: replay.facing, actionStart: this.actionStart };
+    return {
+      presentation: {
+        position,
+        velocity: replay.velocity,
+        facing: replay.facing,
+        actionStart: this.actionStart
+      },
+      result: {
+        authoritativeTick,
+        rollbackFrames: this.lastRollbackFrames,
+        correctionDistancePx,
+        hardSnap
+      }
+    };
+  }
+
+  setRollbackWindow(frames: number): void {
+    this.rollbackWindowFrames = clamp(Math.trunc(frames), MIN_ROLLBACK_FRAMES, MAX_ROLLBACK_FRAMES);
   }
 
   pendingSequences(): number[] {
@@ -353,6 +421,25 @@ export class PredictionBuffer {
     this.actionStart = null;
     this.lastPresentedAttackId = null;
     this.lastRollbackFrames = 0;
+    this.lastHeavyInput = player?.action.kind === null && player.action.chargeMs > 0;
+  }
+
+  private compactPending(capacity: number): void {
+    while (this.pending.length > capacity) {
+      // Action edges outrank the numeric limit; only obsolete continuous history may be removed.
+      let newestContinuousIndex = -1;
+      for (let index = this.pending.length - 1; index >= 0; index -= 1) {
+        if (this.pending[index]?.actionEdge === false) {
+          newestContinuousIndex = index;
+          break;
+        }
+      }
+      const removableIndex = this.pending.findIndex(
+        ({ actionEdge }, index) => !actionEdge && index !== newestContinuousIndex
+      );
+      if (removableIndex < 0) return;
+      this.pending.splice(removableIndex, 1);
+    }
   }
 }
 
@@ -362,6 +449,7 @@ export class SnapshotTimeline {
   private averageIntervalMs: number | null = null;
   private jitterMs = 0;
   private delayFrames = 1;
+  private rollbackFrames = 4;
   private lastTargetProgress: number | null = null;
   private lastTargetTick: number | null = null;
   private lastBufferUnderrun = false;
@@ -376,7 +464,9 @@ export class SnapshotTimeline {
   }
 
   updateNetwork(sample: TimelineNetworkSample): void {
-    this.delayFrames = this.policy.update(sample).delayFrames;
+    const budget = this.policy.update(sample);
+    this.delayFrames = budget.delayFrames;
+    this.rollbackFrames = budget.rollbackFrames;
   }
 
   sample(renderNowMs: number): TimelineSample {
@@ -451,7 +541,9 @@ export class SnapshotTimeline {
     this.samples.length = 0;
     this.averageIntervalMs = null;
     this.jitterMs = 0;
-    this.delayFrames = this.policy.reset().delayFrames;
+    const budget = this.policy.reset();
+    this.delayFrames = budget.delayFrames;
+    this.rollbackFrames = budget.rollbackFrames;
     this.lastTargetProgress = null;
     this.lastTargetTick = null;
     this.lastBufferUnderrun = false;
@@ -459,6 +551,10 @@ export class SnapshotTimeline {
 
   delayMs(): number {
     return this.delayFrames * TICK_MS;
+  }
+
+  rollbackWindowFrames(): number {
+    return this.rollbackFrames;
   }
 
   arrivalJitterMs(): number {

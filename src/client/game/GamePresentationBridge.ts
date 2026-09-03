@@ -1,6 +1,7 @@
 import type Phaser from 'phaser';
 import type { GameEvent, InputFrame, MatchSnapshot } from '../../shared/model.js';
 import type { ArenaInputSource } from './phaser/ArenaInput.js';
+import type { ReconciliationResult } from './prediction.js';
 
 export interface GamePresentationBridge {
   readonly inputSource?: ArenaInputSource;
@@ -10,6 +11,7 @@ export interface GamePresentationBridge {
   isConnected(): boolean;
   publishPresentationDelay?(delayMs: number): void;
   publishRollbackFrames?(frames: number | null): void;
+  publishReconciliation?(result: ReconciliationResult): void;
   publishBufferUnderrun?(bufferUnderrun: boolean): void;
   publishExtrapolatedFrames?(frames: number): void;
   subscribeSnapshot(listener: (snapshot: MatchSnapshot) => void): () => void;

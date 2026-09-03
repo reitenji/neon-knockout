@@ -1,6 +1,10 @@
 import type { MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
-import { PredictionBuffer, type PlayerPresentation } from '../prediction.js';
+import {
+  PredictionBuffer,
+  type PlayerPresentation,
+  type ReconciliationResult
+} from '../prediction.js';
 import type { ArenaInput } from './ArenaInput.js';
 
 const acceptsInput = (snapshot: MatchSnapshot): boolean =>
@@ -23,7 +27,14 @@ type E2eInputObserver = {
     lastProcessedInputSeq: number;
     acceptedAtMs: number;
   }>>;
+  reconciliations?: ReconciliationResult[];
 };
+
+export type ArenaSessionPresentationState = Readonly<{
+  rollbackWindowFrames: number;
+}>;
+
+const DEFAULT_PRESENTATION_STATE: ArenaSessionPresentationState = { rollbackWindowFrames: 4 };
 
 function e2eObserver(): E2eInputObserver | null {
   const candidate = (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: unknown })
@@ -61,7 +72,8 @@ export class ArenaSession {
     private readonly localPlayerId: string,
     private readonly input: ArenaInput,
     private readonly now: () => number,
-    private readonly onSnapshot: (snapshot: MatchSnapshot, receivedAtMs: number) => void = () => undefined
+    private readonly onSnapshot: (snapshot: MatchSnapshot, receivedAtMs: number) => void = () => undefined,
+    private readonly presentationState: () => ArenaSessionPresentationState = () => DEFAULT_PRESENTATION_STATE
   ) {
     this.prediction = new PredictionBuffer(localPlayerId);
   }
@@ -152,12 +164,17 @@ export class ArenaSession {
       });
     }
     this.inputSequence = Math.max(this.inputSequence, localPlayer.lastProcessedInputSeq + 1);
-    this.localPresentation = this.prediction.reconcile(
+    this.prediction.setRollbackWindow(this.presentationState().rollbackWindowFrames);
+    const reconciliation = this.prediction.reconcile(
       localPlayer,
+      snapshot.tick,
       1_000 / 60,
       snapshot.platformProgress
     );
-    this.bridge.publishRollbackFrames?.(this.prediction.rollbackFrames());
+    this.localPresentation = reconciliation.presentation;
+    this.bridge.publishRollbackFrames?.(reconciliation.result.rollbackFrames);
+    this.bridge.publishReconciliation?.(reconciliation.result);
+    if (observer?.reconciliations) pushBounded(observer.reconciliations, reconciliation.result);
   }
 
   private releaseHeldInput(requireRelease: boolean): void {

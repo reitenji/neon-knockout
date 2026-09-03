@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { InputFrame, MatchPlayer, MatchSnapshot } from '../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../shared/roomSettings.js';
 import {
+  LOCAL_CORRECTION_SNAP_DISTANCE,
   REMOTE_SNAP_DISTANCE,
   PredictionBuffer,
   SnapshotTimeline,
@@ -54,11 +55,12 @@ describe('PredictionBuffer', () => {
     expect(second.velocity.x).toBeGreaterThan(first.velocity.x);
     expect(second.facing).toEqual({ x: 0, y: -1 });
 
-    const reconciled = prediction.reconcile(player({ lastProcessedInputSeq: 0 }), 16);
+    const reconciled = prediction.reconcile(player({ lastProcessedInputSeq: 0 }), 7, 16);
     expect(prediction.pendingSequences()).toEqual([1]);
     expect(prediction.rollbackFrames()).toBe(1);
-    expect(reconciled.position.x).toBeGreaterThan(100);
-    expect(reconciled.facing).toEqual({ x: 0, y: -1 });
+    expect(reconciled.presentation.position.x).toBeGreaterThan(100);
+    expect(reconciled.presentation.facing).toEqual({ x: 0, y: -1 });
+    expect(reconciled.result).toMatchObject({ authoritativeTick: 7, rollbackFrames: 1 });
   });
 
   it('predicts only local action starts and never invents hit, knockout, overload, or score state', () => {
@@ -213,7 +215,7 @@ describe('PredictionBuffer', () => {
       action: { ...idleAction, chargeMs: 1, charging: true }
     });
 
-    prediction.reconcile(charging, 16);
+    prediction.reconcile(charging, 1, 16);
     const release = prediction.predict(frame(0), charging, 16);
     const quick = prediction.predict(frame(1, { quick: true }), charging, 16);
 
@@ -235,8 +237,8 @@ describe('PredictionBuffer', () => {
       }
     });
 
-    expect(prediction.reconcile(committed, 16).actionStart?.attackId).toBe(41);
-    expect(prediction.reconcile(committed, 16).actionStart).toBeNull();
+    expect(prediction.reconcile(committed, 1, 16).presentation.actionStart?.attackId).toBe(41);
+    expect(prediction.reconcile(committed, 2, 16).presentation.actionStart).toBeNull();
   });
 
   it('does not predict dash or attack starts while canonical state forbids acting', () => {
@@ -293,6 +295,173 @@ describe('PredictionBuffer', () => {
     expect(prediction.predict(frame(0, { moveX: 1 }), respawning, 16).position).toEqual({ x: 640, y: 360 });
     expect(prediction.predict(frame(1, { moveX: 1 }), respawning, 16).position).toEqual({ x: 640, y: 360 });
   });
+
+  it('clamps the active rollback window to two through ten replay frames', () => {
+    const lowBudget = new PredictionBuffer('p-1');
+    const highBudget = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+    for (let seq = 0; seq < 12; seq += 1) {
+      lowBudget.predict(frame(seq), canonical, 16);
+      highBudget.predict(frame(seq), canonical, 16);
+    }
+
+    lowBudget.setRollbackWindow(0);
+    highBudget.setRollbackWindow(99);
+
+    expect(lowBudget.reconcile(canonical, 20, 16).result.rollbackFrames).toBe(2);
+    expect(lowBudget.pendingSequences()).toEqual([10, 11]);
+    expect(highBudget.reconcile(canonical, 20, 16).result.rollbackFrames).toBe(10);
+    expect(highBudget.pendingSequences()).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  });
+
+  it('keeps normal continuous pending history at twelve newest frames', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+
+    for (let seq = 0; seq < 13; seq += 1) prediction.predict(frame(seq, { moveX: 1 }), canonical, 16);
+
+    expect(prediction.pendingSequences()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
+  });
+
+  it('compacts only obsolete continuous inputs while retaining quick, heavy-transition, and dash edges', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+    const overrides: Record<number, Partial<InputFrame>> = {
+      1: { quick: true },
+      3: { heavy: true },
+      4: { heavy: true },
+      7: { dash: true }
+    };
+    for (let seq = 0; seq < 16; seq += 1) {
+      prediction.predict(frame(seq, { moveX: 1, ...overrides[seq] }), canonical, 16);
+    }
+
+    expect(prediction.pendingSequences()).toEqual([1, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+  });
+
+  it('temporarily exceeds twelve records for a realistic unacknowledged edge burst', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+    const overrides: Record<number, Partial<InputFrame>> = {
+      0: { quick: true },
+      2: { dash: true },
+      4: { heavy: true },
+      5: { heavy: true },
+      8: { quick: true },
+      10: { dash: true },
+      12: { heavy: true },
+      13: { heavy: true },
+      16: { quick: true },
+      18: { dash: true },
+      20: { heavy: true },
+      21: { heavy: true },
+      24: { quick: true }
+    };
+    for (let seq = 0; seq < 25; seq += 1) {
+      prediction.predict(frame(seq, { moveX: 1, ...overrides[seq] }), canonical, 16);
+    }
+
+    expect(prediction.pendingSequences()).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 23, 24]);
+  });
+
+  it('drops acknowledgements before replaying retained inputs in monotonic sequence order', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+    prediction.predict(frame(0, { aimX: 1, aimY: 0 }), canonical, 16);
+    prediction.predict(frame(1, { aimX: -1, aimY: 0 }), canonical, 16);
+    prediction.predict(frame(2, { aimX: 0, aimY: -1 }), canonical, 16);
+
+    const reconciled = prediction.reconcile(
+      player({ position: { x: 640, y: 360 }, lastProcessedInputSeq: 0 }),
+      44,
+      16
+    );
+
+    expect(prediction.pendingSequences()).toEqual([1, 2]);
+    expect(reconciled.presentation.facing).toEqual({ x: 0, y: -1 });
+    expect(reconciled.result.rollbackFrames).toBe(2);
+  });
+
+  it('measures an ordinary correction before applying the existing thirty-five-percent blend', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+    prediction.predict(frame(0, { moveX: 1 }), canonical, 16);
+
+    const reconciled = prediction.reconcile(
+      player({ position: { x: 680, y: 360 }, lastProcessedInputSeq: 0 }),
+      9,
+      16
+    );
+
+    expect(reconciled.result).toMatchObject({
+      authoritativeTick: 9,
+      rollbackFrames: 0,
+      hardSnap: false
+    });
+    expect(reconciled.result.correctionDistancePx).toBeCloseTo(39.3856, 8);
+    expect(reconciled.presentation.position.x).toBeCloseTo(654.39936, 8);
+    expect(reconciled.presentation.position.y).toBe(360);
+  });
+
+  it('hard-snaps an inclusive 160-pixel local correction', () => {
+    const prediction = new PredictionBuffer('p-1');
+    prediction.predict(frame(0), player(), 0);
+
+    const reconciled = prediction.reconcile(
+      player({
+        position: { x: 100 + LOCAL_CORRECTION_SNAP_DISTANCE, y: 100 },
+        lastProcessedInputSeq: 0
+      }),
+      10,
+      16
+    );
+
+    expect(reconciled.result).toEqual({
+      authoritativeTick: 10,
+      rollbackFrames: 0,
+      correctionDistancePx: 160,
+      hardSnap: true
+    });
+    expect(reconciled.presentation.position).toEqual({ x: 260, y: 100 });
+  });
+
+  it('hard-snaps both entry into respawn and ring-out recovery below the distance threshold', () => {
+    const respawning = player({
+      position: { x: 120, y: 100 },
+      lastProcessedInputSeq: 0,
+      respawnRemainingMs: 500,
+      action: { ...idleAction, kind: 'RESPAWNING' }
+    });
+    const enteringRespawn = new PredictionBuffer('p-1');
+    enteringRespawn.predict(frame(0), player(), 0);
+    const entered = enteringRespawn.reconcile(respawning, 11, 16);
+
+    const recovering = new PredictionBuffer('p-1');
+    recovering.predict(frame(0), player({
+      respawnRemainingMs: 500,
+      action: { ...idleAction, kind: 'RESPAWNING' }
+    }), 0);
+    const recovered = recovering.reconcile(
+      player({ position: { x: 120, y: 100 }, lastProcessedInputSeq: 0 }),
+      12,
+      16
+    );
+
+    expect(entered.result).toEqual({
+      authoritativeTick: 11,
+      rollbackFrames: 0,
+      correctionDistancePx: 20,
+      hardSnap: true
+    });
+    expect(entered.presentation.position).toEqual({ x: 120, y: 100 });
+    expect(recovered.result).toEqual({
+      authoritativeTick: 12,
+      rollbackFrames: 0,
+      correctionDistancePx: 20,
+      hardSnap: true
+    });
+    expect(recovered.presentation.position).toEqual({ x: 120, y: 100 });
+  });
 });
 
 describe('SnapshotTimeline', () => {
@@ -324,6 +493,7 @@ describe('SnapshotTimeline', () => {
     const sampled = timeline.sample(1_000);
     expect(sampled.delayFrames).toBe(5);
     expect(timeline.delayMs()).toBeCloseTo(83.3333333333, 8);
+    expect(timeline.rollbackWindowFrames()).toBe(7);
   });
 
   it('interpolates continuously around newestTick minus delayFrames', () => {

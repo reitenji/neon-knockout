@@ -138,7 +138,8 @@ export class ArenaScene extends Phaser.Scene {
       this.localPlayerId ?? '',
       inputController,
       () => performance.now(),
-      (snapshot, receivedAtMs) => this.acceptTimelineSnapshot(snapshot, receivedAtMs)
+      (snapshot, receivedAtMs) => this.acceptTimelineSnapshot(snapshot, receivedAtMs),
+      () => ({ rollbackWindowFrames: this.timeline.rollbackWindowFrames() })
     );
     this.session.start();
     this.unsubscribers.push(

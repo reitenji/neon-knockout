@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { GameEvent, InputFrame, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
+import type { ReconciliationResult } from '../prediction.js';
 import { ArenaInput, type ArenaInputSource } from './ArenaInput.js';
 import { ArenaSession } from './ArenaSession.js';
 
@@ -36,6 +37,7 @@ class Bridge implements GamePresentationBridge {
   private nextInputSequence = 0;
   readonly sent: InputFrame[] = [];
   readonly rollbackFrames: Array<number | null> = [];
+  readonly reconciliations: ReconciliationResult[] = [];
   readonly snapshotListeners = new Set<(value: MatchSnapshot) => void>();
   readonly connectionListeners = new Set<(value: boolean) => void>();
   readonly eventListeners = new Set<(value: GameEvent) => void>();
@@ -47,6 +49,7 @@ class Bridge implements GamePresentationBridge {
   subscribeEvent = (listener: (value: GameEvent) => void): (() => void) => { this.eventListeners.add(listener); return () => this.eventListeners.delete(listener); };
   subscribeMuted = (listener: (value: boolean) => void): (() => void) => { this.mutedListeners.add(listener); return () => this.mutedListeners.delete(listener); };
   publishRollbackFrames = (frames: number | null): void => { this.rollbackFrames.push(frames); };
+  publishReconciliation = (result: ReconciliationResult): void => { this.reconciliations.push(result); };
   reserveInputSequence = (minimum: number): number => {
     const sequence = Math.max(this.nextInputSequence, minimum);
     this.nextInputSequence = sequence + 1;
@@ -73,10 +76,11 @@ describe('ArenaSession', () => {
   });
 
   it('records exact sampled sequences and accepted local snapshot acknowledgements in a bounded opt-in observer', () => {
-    const observer = { inputs: [] as unknown[], acceptedSnapshots: [] as unknown[] };
+    const observer = { inputs: [] as unknown[], acceptedSnapshots: [] as unknown[], reconciliations: [] as unknown[] };
     (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: typeof observer })
       .__NEON_E2E_INPUT_OBSERVER__ = observer;
     const bridge = new Bridge();
+    bridge.current = snapshot(player({ position: { x: 640, y: 360 } }));
     const source = controls();
     let now = 10;
     const session = new ArenaSession(bridge, 'p-local', new ArenaInput(source), () => now);
@@ -85,7 +89,10 @@ describe('ArenaSession', () => {
     source.movementHeld.right = true;
     now = 20;
     session.step(16);
-    bridge.current = { ...snapshot(player({ lastProcessedInputSeq: 0 })), tick: 2 };
+    bridge.current = {
+      ...snapshot(player({ position: { x: 640, y: 360 }, lastProcessedInputSeq: 0 })),
+      tick: 2
+    };
     now = 35;
     for (const listener of bridge.snapshotListeners) listener(bridge.current);
 
@@ -95,6 +102,13 @@ describe('ArenaSession', () => {
     expect(observer.acceptedSnapshots).toContainEqual({
       tick: 2, lastProcessedInputSeq: 0, acceptedAtMs: 35
     });
+    expect(observer.reconciliations).toContainEqual(expect.objectContaining({
+      authoritativeTick: 2,
+      rollbackFrames: 0,
+      hardSnap: false
+    }));
+    expect((observer.reconciliations as ReconciliationResult[]).at(1)?.correctionDistancePx)
+      .toBeCloseTo(0.6144, 10);
 
     for (let index = 0; index < 300; index += 1) {
       now += 1;
@@ -191,6 +205,52 @@ describe('ArenaSession', () => {
     bridge.current = snapshot(player({ lastProcessedInputSeq: 0 }));
     for (const listener of bridge.snapshotListeners) listener(bridge.current);
     expect(bridge.rollbackFrames.at(-1)).toBe(0);
+  });
+
+  it('uses the current presentation rollback budget and returns idle rollback to zero within two accepted snapshots', () => {
+    const bridge = new Bridge();
+    bridge.current = snapshot(player({ position: { x: 640, y: 360 } }));
+    const source = controls();
+    let now = 0;
+    const session = new ArenaSession(
+      bridge,
+      'p-local',
+      new ArenaInput(source),
+      () => now,
+      () => undefined,
+      () => ({ rollbackWindowFrames: 2 })
+    );
+    session.start();
+
+    for (let index = 0; index < 5; index += 1) {
+      now += 17;
+      session.step(16);
+    }
+    bridge.current = {
+      ...snapshot(player({ position: { x: 640, y: 360 }, lastProcessedInputSeq: -1 })),
+      tick: 2
+    };
+    for (const listener of bridge.snapshotListeners) listener(bridge.current);
+    expect(bridge.rollbackFrames.at(-1)).toBe(2);
+    expect(bridge.reconciliations.at(-1)).toEqual({
+      authoritativeTick: 2,
+      rollbackFrames: 2,
+      correctionDistancePx: 0,
+      hardSnap: false
+    });
+
+    bridge.current = {
+      ...snapshot(player({ position: { x: 640, y: 360 }, lastProcessedInputSeq: 4 })),
+      tick: 3
+    };
+    for (const listener of bridge.snapshotListeners) listener(bridge.current);
+    expect(bridge.rollbackFrames.at(-1)).toBe(0);
+    expect(bridge.reconciliations.at(-1)).toEqual({
+      authoritativeTick: 3,
+      rollbackFrames: 0,
+      correctionDistancePx: 0,
+      hardSnap: false
+    });
   });
 
   it('subscribes once, disposes connection and snapshot listeners, and never sends after disposal', () => {

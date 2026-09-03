@@ -22,6 +22,7 @@ const probes = vi.hoisted(() => ({
   createPulseView: vi.fn(),
   sessionDispose: vi.fn(),
   sessionPresentation: vi.fn<() => PlayerPresentation | null>(() => null),
+  sessionPresentationState: null as null | (() => Readonly<{ rollbackWindowFrames: number }>),
   arenaInputSource: null as ArenaInputSource | null,
   snapshotReceivedAtMs: 0
 }));
@@ -78,8 +79,9 @@ vi.mock('./ArenaSession.js', () => ({
       _playerId: string,
       _input: unknown,
       _now: () => number,
-      private readonly onSnapshot: (snapshot: MatchSnapshot, receivedAtMs: number) => void
-    ) {}
+      private readonly onSnapshot: (snapshot: MatchSnapshot, receivedAtMs: number) => void,
+      presentationState?: () => Readonly<{ rollbackWindowFrames: number }>
+    ) { probes.sessionPresentationState = presentationState ?? null; }
     start(): void {
       const snapshot = this.bridge.getSnapshot();
       if (snapshot) this.onSnapshot(snapshot, probes.snapshotReceivedAtMs);
@@ -221,6 +223,7 @@ describe('ArenaScene live presentation integration', () => {
     vi.restoreAllMocks();
     vi.clearAllMocks();
     probes.sessionPresentation.mockReturnValue(null);
+    probes.sessionPresentationState = null;
     probes.arenaInputSource = null;
     probes.snapshotReceivedAtMs = 0;
   });
@@ -319,6 +322,7 @@ describe('ArenaScene live presentation integration', () => {
     scene.update();
 
     expect(scopedBridge.getPresentationDelayMs?.()).toBeCloseTo(66.6666666667, 8);
+    expect(probes.sessionPresentationState?.()).toEqual({ rollbackWindowFrames: 10 });
     expect(scene.getPresentationTargetTick()).toBe(10);
     expect(bridge.publishBufferUnderrun).toHaveBeenLastCalledWith(false);
     expect(bridge.publishExtrapolatedFrames).toHaveBeenLastCalledWith(0);

@@ -34,8 +34,8 @@ The result is visible in two ways. First, unit and integration tests prove the f
 - [x] (2026-09-03 11:05 +03:00) Approved the hybrid design and committed the design specification as `bf663e2`.
 - [x] (2026-09-03 11:32 +03:00) Rewrote the outline into a task-by-task ExecPlan with explicit interfaces, verification commands, publication gates, and recovery notes.
 - [x] (2026-09-03) Implemented Task 1: shared adaptive policy plus honest WebRTC latest-five RTT jitter publication; focused policy, transport, and room tests pass.
-- [ ] Implement Task 2 and commit the monotonic sixteen-snapshot remote presentation timeline.
-- [ ] Implement Task 3 and commit bounded local reconciliation with correction telemetry.
+- [x] (2026-09-03) Implemented Task 2 and committed the monotonic sixteen-snapshot remote presentation timeline.
+- [x] (2026-09-03 21:12 +03:00) Implemented Task 3 bounded local reconciliation, semantic correction telemetry, and timeline-owned rollback-budget delivery.
 - [ ] Implement Task 4 and commit gameplay protocol v2 with required `viewTick`.
 - [ ] Implement Task 5 and commit twelve-frame combat history with conservative melee-only rewind.
 - [ ] Implement Task 6 and commit the deterministic impairment harness and RTT-tier browser acceptance.
@@ -54,6 +54,9 @@ The result is visible in two ways. First, unit and integration tests prove the f
 
 - Observation: The repository already has good acceptance seams for this feature.
   Evidence: `GamePresentationBridge` already publishes presentation delay and rollback, `ArenaSession` already reports accepted snapshots to the E2E observer, and `ServerPeer` is already the narrow boundary where deterministic transport impairment can be injected for tests.
+
+- Observation: Preserving every unacknowledged action edge can temporarily require more than twelve stored records during a realistic input burst.
+  Evidence: The Task 3 overflow test retains thirteen quick, heavy-transition, and dash edges plus the newest continuous frame while discarding every obsolete movement-only record.
 
 ## Decision Log
 
@@ -77,9 +80,17 @@ The result is visible in two ways. First, unit and integration tests prove the f
   Rationale: The in-game player list is space-constrained and the user only wants Ping shown.
   Date/Author: 2026-09-03 / user and implementation team.
 
+- Decision: Treat twelve as the normal continuous reconciliation-history limit, allowing unacknowledged action-edge records to exceed it until authoritative acknowledgement.
+  Rationale: Dropping a real quick, heavy transition, or dash solely to satisfy twelve would replay a false local action history; obsolete edge-free movement is the only compactable input.
+  Date/Author: 2026-09-03 / user and Task 3 implementation.
+
+- Decision: Extend the Task 3 file list with minimal `ArenaScene.ts` provider wiring and its integration assertion.
+  Rationale: `SnapshotTimeline` owns the adaptive budget, so a structured constructor closure is the narrow truthful dependency and can add presentation target tick in Task 4 without overloading replay telemetry `getRollbackFrames`.
+  Date/Author: 2026-09-03 / Task 3 implementation, approved by task owner.
+
 ## Outcomes & Retrospective
 
-No implementation outcome exists yet. The current success criterion is that each task lands as a green, independently verifiable slice with the plan updated after every commit. The main lesson from design is that the risky part is not CPU cost but semantic correctness: any approach that rewinds already published events would make the game harder to trust than the current latency issues.
+Tasks 1 through 3 now provide the adaptive policy, monotonic remote timeline, and bounded local reconciliation slice. Task 3 preserves all unacknowledged action edges, caps normal continuous history at twelve and active replay telemetry at two through ten, blends corrections below 160 px, snaps semantic recovery and corrections at or above 160 px, and exposes correction records only through internal bridge/test observer paths. Protocol, server combat rewind, impairment E2E, and live acceptance remain for Tasks 4 through 7.
 
 ## Context and Orientation
 
@@ -684,6 +695,10 @@ As work progresses, append short evidence bullets here. Keep each bullet to one 
 - Example entry format: `curl --fail --silent http://127.0.0.1:4174/health` -> `{"status":"ok",...}`.
 - `npm test -- --run src/shared/netcodePolicy.test.ts` -> `6 tests passed` after the policy red-green loop.
 - `npm test -- --run src/server/network/gameplayTransport/GameplayTransportHub.test.ts src/server/rooms/roomManager.test.ts` -> `53 tests passed` after the transport/room red-green loop.
+- `npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts` -> RED: `13 failed, 29 passed` for missing active window, bounded storage, rich reconciliation result, semantic snap, observer telemetry, and timeline rollback getter.
+- `npm test -- --run src/client/game/phaser/ArenaScene.integration.test.ts` -> RED: `1 failed, 17 passed` because the timeline-owned rollback provider was not passed to `ArenaSession`.
+- `npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts src/client/game/phaser/ArenaScene.integration.test.ts` -> `60 tests passed` after Task 3 implementation.
+- `npm run typecheck` and focused ESLint over the seven Task 3 files -> passed; `git diff --check` -> passed.
 
 ## Interfaces and Dependencies
 
@@ -696,3 +711,5 @@ The shared adaptive policy is the single source of truth for frame-budget math. 
 ## Plan Revision Note
 
 2026-09-03: Replaced the initial outline with a full ExecPlan that names exact files, interfaces, red-green commands, review gates, restart steps, and publication checks so execution can proceed task by task without prior conversation context.
+
+2026-09-03: Recorded Task 3 completion evidence, the action-edge capacity ruling, and the approved minimal ArenaScene provider extension so the living plan matches the implementation.
