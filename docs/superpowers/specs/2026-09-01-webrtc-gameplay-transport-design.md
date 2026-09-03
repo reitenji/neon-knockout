@@ -68,7 +68,7 @@ The initial LAN release uses host candidates only and configures no STUN or TURN
 
 Each peer has two bidirectional channels.
 
-`match-fast` is unordered with `maxRetransmits: 0`. The browser sends `InputFrame` messages on this channel. The server sends `MatchSnapshot` messages on it. An old input is already rejected by its monotonic `seq`; an old snapshot is rejected by its `tick`. Losing either packet is preferable to delaying newer state behind it.
+`match-fast` is unordered with `maxRetransmits: 0`. The browser sends `InputFrame` messages and generation-bound Ping acknowledgements on this channel. The server sends `MatchSnapshot` messages and lightweight Ping nonces on it. An old input is already rejected by its monotonic `seq`; an old snapshot is rejected by its `tick`; a Ping acknowledgement is accepted only when its generation and nonce match the current pending sample. Losing any of these packets is preferable to delaying newer state behind it, and a lost or backpressured Ping sample never triggers fallback by itself.
 
 `match-reliable` is ordered and reliable. The server sends `match:started` and every `GameEvent` on this channel. These low-frequency critical publications are also sent through Socket.IO as an eventual-delivery safety copy. The first copy received is buffered, but publication to game consumers remains strictly ordered as described below. This preserves the faster WebRTC arrival without creating an event-replay subsystem for an abrupt channel loss. Rare transport-control messages such as WebRTC activation may also use this channel.
 
@@ -78,7 +78,7 @@ The envelope contains:
 
 - protocol version;
 - `generationId`;
-- a server-assigned `matchEpoch` that increments for every match in a room;
+- for gameplay publications and input, a server-assigned `matchEpoch` that increments for every match in a room;
 - message kind;
 - the existing typed payload.
 
@@ -123,9 +123,9 @@ Result, rematch, and return-to-lobby transitions do not reuse stale channel stat
 
 The match list displays one field named `Ping` for every player, including the local player.
 
-For an active WebRTC player, Ping is the server-clock application RTT of the existing reliable DataChannel heartbeat: the authoritative Node server timestamps a heartbeat when it sends it and measures the elapsed time when the browser returns the matching acknowledgement. Unlike ICMP, this application measurement includes browser and Node scheduling as well as transport time. Only a distinct acknowledgement matching the currently pending heartbeat enters the latest-five median published in the existing network status included with authoritative snapshots. A sample is valid for six seconds. When no fresh sample exists, Ping is an em dash. The client never supplies the authoritative displayed value.
+For an active WebRTC player, Ping is the server-clock application RTT of `match-fast`, the channel that actually carries input and authoritative snapshots. Once per second the authoritative Node server timestamps a generation-bound nonce sent over that channel and measures elapsed time only when the browser returns the exact matching acknowledgement over the same channel. Unlike ICMP, this application measurement includes browser and Node scheduling as well as transport time. A missing or backpressured sample is discarded without changing transport mode. Only distinct matching acknowledgements enter the latest-five median published in the existing network status included with authoritative snapshots. A sample is valid for six seconds. When no fresh sample exists, Ping is an em dash. The client never supplies elapsed time or the authoritative displayed value.
 
-For a player entering Socket.IO fallback, the old WebRTC sample is cleared and an application RTT probe is requested immediately, then every two seconds. Ping remains an em dash until the first fresh fallback sample arrives. The UI still shows only one Ping field; transport mode is retained in the network model for diagnostics and tests rather than adding another wide HUD column.
+For a player entering Socket.IO fallback, the old WebRTC sample is cleared. Once per second the server sends one lightweight nonce over the same active Socket.IO WebSocket or polling connection and times only the exact matching browser acknowledgement. This deliberately excludes full snapshot decoding and application dispatch from the network RTT while still measuring the connection that carries gameplay. Only one probe may be outstanding; a two-second timeout clears the sample and retries without ending the session. Authoritative snapshots remain independently acknowledgement-paced and latest-wins so stale frames cannot form a reliable queue. Ping remains an em dash until the first fresh fallback sample arrives. The UI still shows only one Ping field; transport mode is retained in the network model for diagnostics and tests rather than adding another wide HUD column.
 
 An unavailable sample renders as an em dash. Values are clamped to a sane display range, but the UI never rescales or disguises a high value.
 
@@ -173,7 +173,7 @@ End-to-end tests cover:
 - mobile browser or emulation smoke behavior;
 - four-to-eight clients without snapshot starvation or resource leaks.
 
-Performance acceptance compares the old Socket.IO path and the WebRTC path on the same representative LAN. The WebRTC path must improve median input-to-authoritative-snapshot latency or materially reduce its high-percentile spikes. A smaller displayed RTT alone is not sufficient evidence.
+Automated performance acceptance compares Socket.IO fallback and WebRTC in the same active browser workload using 60 exact input samples per transport. The same-host gate requires median input-to-authoritative-snapshot acceptance at or below 20 ms and p95 below 40 ms while retaining the frame budget. Physical-phone Wi-Fi is reported separately. A smaller displayed RTT alone is not sufficient evidence.
 
 ## Acceptance Criteria
 

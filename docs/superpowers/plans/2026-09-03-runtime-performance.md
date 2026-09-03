@@ -4,7 +4,7 @@
 
 **Goal:** Preserve 60 FPS gameplay while materially reducing application Ping and browser-main-thread work during active LAN matches.
 
-**Architecture:** Keep the existing authoritative Node.js simulation and Phaser renderer. Socket.IO remains the reliable fallback, but authoritative snapshots become a bounded, latest-wins stream so old frames cannot queue. React HUD rendering is decoupled from the 60 Hz game feed, while Phaser keeps receiving every accepted authoritative snapshot. Ping is sampled on the transport that actually carries gameplay: WebRTC's fast DataChannel uses nonce echoes and Socket.IO fallback reuses acknowledged snapshots. Phaser display objects remain pre-created and their hot path updates transforms or genuinely changed geometry/text only.
+**Architecture:** Keep the existing authoritative Node.js simulation and Phaser renderer. Socket.IO remains the reliable fallback, but authoritative snapshots become a bounded, latest-wins stream so old frames cannot queue. React HUD rendering is decoupled from the 60 Hz game feed, while Phaser keeps receiving every accepted authoritative snapshot. Ping is sampled on the transport that actually carries gameplay: WebRTC's fast DataChannel uses nonce echoes and Socket.IO fallback uses a lightweight nonce acknowledgement on the same active connection, kept separate from full snapshot acceptance. Phaser display objects remain pre-created and their hot path updates transforms or genuinely changed geometry/text only.
 
 **Tech Stack:** TypeScript, Node.js, Socket.IO, Werift/WebRTC DataChannels, Phaser 4, React 19, Vitest, Playwright
 
@@ -31,8 +31,8 @@ The player should see smoother motion and a lower, more stable application Ping 
 - [x] Task 2: Decouple the React HUD from the 60 Hz snapshot stream.
 - [x] Task 3: Remove unchanged Phaser graphics and text work from the frame path.
 - [x] Task 4: Re-profile Tasks 1-3 and isolate the remaining RTT discrepancy.
-- [ ] Task 5: Measure Ping on the exact active gameplay transport.
-- [ ] Task 6: Remove the remaining measured arena/frame allocation hot paths.
+- [x] Task 5: Measure Ping on the exact active gameplay transport.
+- [x] Task 6: Remove the remaining measured arena/frame allocation hot paths.
 - [ ] Task 7: Run complete acceptance, review, restart, and publish.
 
 ## Surprises & Discoveries
@@ -46,6 +46,14 @@ The player should see smoother motion and a lower, more stable application Ping 
 - 2026-09-03 browser performance run 2 failed before latency/frame metrics: after the active eight-player match started, the measured client remained `websocket` instead of negotiating `webrtc` within the test's 10,000 ms allowance. One immediate controller rerun at unchanged `a6f509c` passed (59.88 FPS, 17.60 ms p95 frame; WebRTC 14.00/18.80 ms median/p95; fallback 12.70/13.90 ms); its console evidence was supplied without a retained raw-log artifact. One further serial run passed (59.88 FPS, 17.60 ms p95 frame; WebRTC 15.30/18.30 ms; fallback 14.30/19.40 ms), producing three successful samples total while retaining the failed activation run.
 - 2026-09-03 isolated active-render Socket.IO probe used two active 1280x720 fallback-render Chromium contexts and a process-local server `Socket.prototype.emit` wrapper around `network:probe` acknowledgements. It collected 20 samples: 20.06 ms min, 75.96 ms median, 188.74 ms p95, 353.88 ms max. This does not materially improve the retained 68.5 ms same-host active-render baseline, so the performance gate failed. Focused Chromium transport/mobile acceptance and mobile WebKit smoke were not run after this load-bearing failure.
 - 2026-09-03 strict post-`REGULATION` queue audit corrected that mixed diagnostic: after resetting counters only once two active fallback canvases and active input were confirmed, 12/12 probe windows had at most one snapshot ahead (10 had zero, 2 had one) and RTT ranged from 0.34-2.05 ms. The pacer therefore solved the reliable snapshot queue; the remaining high displayed WebRTC value comes from its separate reliable heartbeat rather than the fast channel carrying inputs/snapshots.
+- Full fallback snapshot acknowledgements later reported 95-101 ms despite exact input-to-authoritative acceptance remaining 2-18 ms. The value was measuring full browser snapshot decode/application scheduling rather than connection RTT, so fallback Ping moved to a one-outstanding lightweight nonce on the same Socket.IO connection. A focused integration test deliberately delays snapshot acknowledgement by 250 ms and proves that the lightweight Ping sample remains independent.
+- The original fallback sampler could consume its first probe in the lobby and wait almost one second before producing an in-match sample. Restarting it at each session's `MATCH_STARTED` publication now samples both the host and every guest immediately while leaving an active WebRTC sampler stopped.
+- The authoritative scheduler used callback-relative `setInterval` plus an extra `setImmediate` for every match publication. A monotonic recursive deadline now skips timer-level runaway catch-up, passes real elapsed time to the simulation, and dispatches match publications in the same tick after flushing any deferred same-room state.
+- A bounded eight-player simulation diagnostic measured authoritative `applyInput -> advance` computation at 0.019 ms p50, 0.053 ms p95, and 0.944 ms maximum. Physics/combat computation therefore does not explain a 50-100 ms stall.
+- Remote interpolation retains its stable 16 ms floor but now caps adaptive presentation delay at 24 ms instead of 40 ms, removing up to 16 ms of intentional remote visual latency without changing local prediction or authority.
+- Final same-host gameplay-path Ping acceptance reported WebRTC 1-2 ms initially and 1 ms settled; forced WebSocket fallback reported 3 ms initially and 0 ms current / 1 ms median settled. Browser background throttling is disabled for this two-page diagnostic, and these values make no physical-LAN claim.
+- The final three 60-sample eight-player runs all passed at 59.88 median FPS and 18.1-18.3 ms p95 frame time. WebRTC median/p95 input acceptance was 13.8/30.0, 3.9/21.5, and 18.5/34.1 ms; fallback was 12.5/27.6, 3.3/20.9, and 17.2/32.9 ms. A preceding run failed only because its test inferred dash success from rightward displacement after the fighter had reached the arena edge; the corrected gate observes the exact Space edge, WebRTC ingress, and authoritative dash cooldown.
+- Four simultaneous hit-driven ring-outs produced four same-tick knockouts with 18.6 ms maximum correlated frame time, 18.7 ms global maximum, 18.4 ms global p95, and 59.88 median FPS.
 
 ## Decision Log
 
@@ -53,12 +61,12 @@ The player should see smoother motion and a lower, more stable application Ping 
 - Decision: use acknowledgement-paced, latest-wins Socket.IO snapshots instead of merely `volatile.emit`. Rationale: transport writability does not prove that the browser application callback queue is empty; one acknowledged publication in flight gives a deterministic bound.
 - Decision: keep WebRTC fast-channel gameplay traffic unchanged unless post-change evidence identifies its own application queue. Rationale: its unreliable, unordered fast channel already drops under backpressure and does not share Socket.IO's reliable head-of-line queue.
 - Decision: throttle only the DOM HUD, never the Phaser/prediction subscription. Rationale: combat motion and local response need frame-rate data; text/meters do not need 60 React commits per second.
-- Decision: preserve Ping as server-owned RTT but sample it on the gameplay path. Rationale: the existing WebRTC heartbeat honestly measures the reliable control channel, yet inputs and snapshots use the unordered fast channel; fallback snapshots already have an application acknowledgement. Reusing those exact paths improves fidelity without client clocks, extra fallback packets, or a misleading dedicated probe connection.
+- Decision: preserve Ping as server-owned RTT but sample it on the gameplay transport. Rationale: the existing WebRTC heartbeat measures the reliable control channel rather than the unordered fast channel used by inputs and snapshots, while full fallback snapshot acknowledgements include browser decoding/application work that inflated a same-host network number to 95-101 ms. WebRTC therefore uses a generation-bound fast-channel nonce and fallback uses one tiny nonce/ack on the same Socket.IO connection; neither uses client clocks or a second connection.
 - Decision: retain the reliable WebRTC heartbeat only for liveness/fallback. Fast-channel probe loss or backpressure produces no sample and cannot by itself eject a player; the reliable heartbeat remains the transport health authority.
 
 ## Outcomes & Retrospective
 
-Focused and full non-browser automated verification completed. Three serial successful performance samples were obtained despite one retained transient WebRTC activation failure. The strict post-regulation audit subsequently proved the fallback queue is bounded and exposed a metric-path mismatch: authoritative input latency is 12-18 ms while displayed WebRTC Ping is sourced from the reliable control heartbeat. Final acceptance/publication therefore continues after Tasks 5-6 rather than treating a control-channel proxy as the gameplay gate.
+Tasks 1-6 and the automated portion of Task 7 are complete. The fallback queue is bounded, Ping is server-timed on each active gameplay transport, the reliable WebRTC heartbeat owns only liveness, authoritative scheduling is deadline-anchored, remote presentation buffering is capped at 24 ms, and measured Phaser hot paths stay inside one-frame budgets. Final review, production restart, remote publication, and physical-device observation remain distinct gates.
 
 Commands and results:
 
@@ -68,14 +76,19 @@ Commands and results:
 - Same command (serial run 2) — failed at `tests/e2e/performance.spec.ts:496`: expected transport `webrtc`, received `websocket` after 10,000 ms. One immediate controller rerun at unchanged `a6f509c` then passed 1/1 in 14.0 s: 59.88 median FPS, 17.60 ms p95 frame, WebRTC 14.00/18.80 ms median/p95, and fallback 12.70/13.90 ms. This controller-supplied console evidence has no retained raw-log artifact.
 - Same command (serial run 3, resumed evidence) — passed. n=180, 16.70 ms median frame / 59.88 median FPS / 17.60 ms p95 frame. WebRTC input-to-authoritative n=12: 15.30 ms median / 18.30 ms p95. Forced Socket.IO fallback n=12: 14.30 ms median / 19.40 ms p95.
 - `node --import tsx --input-type=module` active-match harness — started in-process `createGameServer({ host: '127.0.0.1', port: 0, enableTestHarness: true })`, monkeypatched server `Socket.prototype.emit` only for `network:probe` acknowledgement timing, restored the prototype in `finally`, and used two active 1280x720 Chromium fallback contexts. Its 20 same-host application RTT samples were min 20.06 / median 75.96 / p95 188.74 / max 353.88 ms. This does not materially improve the roughly 68.5 ms pre-change active-render baseline; focused Chromium WebRTC/fallback/mobile acceptance and mobile WebKit smoke were stopped and remain unrun.
+- Final `npm run verify` — lint and both TypeScript projects passed; 65 files / 614 Vitest tests passed; the eight-client fallback load gate passed; the production client/server build passed with only the retained Vite chunk-size warning.
+- Final eight-player performance runs (60 exact samples per transport) — three of three corrected runs passed. All reported 59.88 median FPS; p95 frame time was 18.3, 18.1, and 18.2 ms. WebRTC median/p95 was 13.8/30.0, 3.9/21.5, and 18.5/34.1 ms; fallback was 12.5/27.6, 3.3/20.9, and 17.2/32.9 ms.
+- Final focused Chromium acceptance — `mobile.spec.ts`, `networkFallback.spec.ts`, and `webrtcGameplay.spec.ts` passed 5/5, including WebRTC, forced polling/WebSocket fallback, rematch generation, and one-value Ping HUD behavior. Same-host WebRTC Ping was 1-2 ms initially and 1 ms settled; fallback was 3 ms initially and 0/1 ms current/median settled.
+- Final mobile WebKit acceptance — `safariMobile.spec.ts` passed 1/1 with a trusted touch producing one authoritative WebRTC quick attack.
+- Final simultaneous ring-out performance — passed with four hits, four same-tick ring-outs, 18.6 ms correlated maximum frame time, 18.7 ms global maximum, and 59.88 median FPS.
 
-The three-successful-run aggregate uses per-run reported metrics because the controller rerun's individual observations were not retained: all runs were 59.88 median FPS; median p95 frame was 17.60 ms (range 17.50-17.60); median WebRTC input latency was 15.30 ms (14.00-17.00); median fallback input latency was 14.30 ms (12.70-16.00). The corresponding medians of the per-run p95 values were 18.80 ms WebRTC and 17.60 ms fallback. All successful browser frame samples pass the 58 FPS / <25 ms gate and match the retained pre-change approximate 59.9 FPS / 16.7 ms frame baseline. No pre-change real-input latency values are retained for a material-regression conclusion. Physical phone/AP comparison remains pending and is not inferred from same-host data.
+Across the final three corrected runs, median-of-run-medians was 13.8 ms for WebRTC and 12.5 ms for fallback; median-of-run-p95 values was 30.0 ms WebRTC and 27.6 ms fallback. Every run passed the <=20 ms median / <40 ms p95 input gate and the >=58 FPS / <25 ms p95 frame gate. Physical phone/AP comparison remains pending and is not inferred from same-host data.
 
 Raw logs are outside the tracked repository at `/tmp/neon-task4-XsgoYO/`: `focused-vitest.log`, `npm-verify.log`, `performance-run-1.log`, `performance-run-2.log`, `performance-run-4.log`, and `active-render-socketio-rtt.log`. The controller's immediate retry has no retained raw-log artifact.
 
 ## Context and Orientation
 
-`src/server/network/socketHandlers.ts` attaches each Socket.IO session and supplies the fallback `emitSnapshot` callback to `GameplayTransportHub`. `src/shared/protocol.ts` is the typed Socket.IO contract. `src/client/network/GameClient.ts` receives fallback publications and hands them to `MatchPublicationSequencer`; this is the earliest safe place to acknowledge that a complete snapshot reached application code.
+`src/server/network/socketHandlers.ts` attaches each Socket.IO session, owns its lightweight fallback RTT sampler, and supplies the fallback `emitSnapshot` callback to `GameplayTransportHub`. `src/shared/protocol.ts` is the typed Socket.IO contract. `src/client/network/GameClient.ts` immediately echoes fallback probe nonces and hands complete snapshot publications to `MatchPublicationSequencer` before acknowledging their delivery.
 
 `src/client/state/gameStore.ts` publishes every accepted match snapshot to two consumers. `src/client/game/phaser/ArenaSession.ts` needs that full-rate stream. `src/client/ui/MatchHud.tsx` currently uses `useSyncExternalStore` directly on the same stream, causing a React render opportunity for every 60 Hz snapshot.
 
@@ -177,18 +190,19 @@ Finally, run focused suites, the full verification gate, and repeated real-brows
 - Modify: `src/server/network/gameplayTransport/GameplayTransportHub.ts`, `src/server/network/gameplayTransport/GameplayTransportHub.test.ts`
 - Modify: `src/client/network/GameplayTransport.ts`, `src/client/network/GameplayTransport.test.ts`
 - Modify: `src/server/network/socketHandlers.ts`, `src/server/network/SocketSnapshotPacer.ts` and focused tests as required
-- Remove obsolete `network:probe` wiring from `src/shared/protocol.ts`, `src/client/network/GameClient.ts`, and affected tests
+- Create: `src/server/network/SocketRttSampler.ts` and focused tests
+- Modify: `src/shared/protocol.ts`, `src/client/network/GameClient.ts`, and affected tests for the lightweight fallback probe
 
 **Interfaces:**
 - WebRTC fast messages gain server `ping` and client `ping-ack` variants with a generation-bound nonce.
 - The existing reliable heartbeat continues to decide liveness but no longer supplies displayed RTT.
-- Socket.IO fallback records a bounded RTT sample from an acknowledged real snapshot at no more than one sample per second.
+- Socket.IO fallback records a bounded RTT sample from a lightweight matching nonce acknowledgement on the active connection at no more than one sample per second; snapshot pacing remains independent.
 
-- [ ] Write protocol, hub, and client tests first for valid fast-channel nonce echo, stale/malformed nonce rejection, latest-five server-timed median, loss without fallback, and reliable-heartbeat liveness without RTT publication.
-- [ ] Write a fallback test proving a real snapshot acknowledgement records RTT while ordinary acknowledged snapshots do not publish more than one sample per second.
-- [ ] Preserve RED, then implement the smallest discriminated message unions and server-owned timers needed to pass.
-- [ ] Remove the separate Socket.IO application probe and its timers/listeners after the snapshot-ack measurement is proven.
-- [ ] Run focused protocol/client/hub/socket integration tests and commit the task.
+- [x] Write protocol, hub, and client tests first for valid fast-channel nonce echo, stale/malformed nonce rejection, latest-five server-timed median, loss without fallback, and reliable-heartbeat liveness without RTT publication.
+- [x] Write a fallback test proving a lightweight same-connection nonce remains low even when full snapshot acknowledgement is deliberately delayed, runs no more than once per second, and continues while the match is paused.
+- [x] Preserve RED, then implement the smallest discriminated message unions and server-owned timers needed to pass.
+- [x] Keep exactly one fallback probe outstanding, clear it on timeout/session disposal, and restart it safely after transport fallback or a Socket.IO upgrade.
+- [x] Run focused protocol/client/hub/socket integration tests and commit the task.
 
 ### Task 6: Remove remaining measured arena/frame hot paths
 
@@ -204,16 +218,16 @@ Finally, run focused suites, the full verification gate, and repeated real-brows
 - Per-frame player/projectile membership sets are reused rather than allocated.
 - Phaser remains RAF-driven and capped at 60 FPS; delta smoothing is disabled to remove unnecessary high-refresh averaging work.
 
-- [ ] Add focused tests first for stable static vertex references, bounded warning redraw with per-frame alpha updates, immediate contraction redraw, and reused frame membership scratch state where observable.
-- [ ] Preserve RED, implement only the measured allocation/redraw reductions, and keep the visible warning animation semantics.
-- [ ] Run the complete Phaser unit set and the simultaneous ring-out browser performance scenario; commit the task.
+- [x] Add focused tests first for stable static vertex references, bounded warning redraw with per-frame alpha updates, immediate contraction redraw, and reused frame membership scratch state where observable.
+- [x] Preserve RED, implement only the measured allocation/redraw reductions, and keep the visible warning animation semantics.
+- [x] Run the complete Phaser unit set and the simultaneous ring-out browser performance scenario; commit the task.
 
 ### Task 7: Complete acceptance, review, restart, and publish
 
-- [ ] Run the focused Task 5-6 suites and `npm run verify`.
-- [ ] Run the real-browser FPS/input-latency benchmark three serial times and retain every result, including failures.
-- [ ] Run WebRTC, forced fallback, desktop/mobile Chromium, and mobile WebKit acceptance plus the simultaneous ring-out performance case.
-- [ ] Measure the displayed/gameplay-path Ping in both WebRTC and fallback modes; report same-host automation separately from physical Wi-Fi observations.
+- [x] Run the focused Task 5-6 suites and `npm run verify`.
+- [x] Run the real-browser FPS/input-latency benchmark three serial times and retain every result, including failures.
+- [x] Run WebRTC, forced fallback, desktop/mobile Chromium, and mobile WebKit acceptance plus the simultaneous ring-out performance case.
+- [x] Measure the displayed/gameplay-path Ping in both WebRTC and fallback modes; report same-host automation separately from physical Wi-Fi observations.
 - [ ] Obtain task and whole-branch review, fix load-bearing findings, and rerun affected gates.
 - [ ] Build production, restart `com.reitenji.neon-relay.lan`, prove the listener and localhost/LAN health, then push the feature branch and authorized public `main` and verify remote refs.
 
@@ -226,7 +240,7 @@ Automated correctness gates:
 3. Phaser view tests prove unchanged projectile geometry and text/facing values do not redraw/rewrite, while changed values still render.
 4. `npm run verify` passes without weakened tests.
 5. WebRTC, forced Socket.IO fallback, reconnect/rematch behavior, and mobile WebKit smoke tests pass.
-6. WebRTC Ping is derived from matching fast-channel nonce RTT; fallback Ping is derived from paced snapshot acknowledgement RTT. Reliable-heartbeat or obsolete standalone-probe delay cannot populate the displayed metric.
+6. WebRTC Ping is derived from matching fast-channel nonce RTT; fallback Ping is derived from a matching lightweight nonce RTT on the same Socket.IO gameplay connection. Reliable-heartbeat and full-snapshot application delay cannot populate the displayed metric.
 7. Static arena data is reused, warning-only geometry redraw is bounded, and simultaneous ring-out frame time remains inside the browser budget.
 
 Performance gates:
@@ -234,7 +248,7 @@ Performance gates:
 1. Existing browser gate remains at median FPS >= 58 and p95 frame time < 25 ms.
 2. Compare three post-change runs with the captured pre-change range; report all runs and their aggregate instead of selecting the best run.
 3. Active-render Socket.IO snapshot-ack RTT must no longer track five-to-seven queued snapshot intervals. The strict post-regulation audit must continue to show no more than one snapshot ahead; standalone control-probe RTT is retained only as diagnostic history.
-4. WebRTC and fallback input-to-authoritative latency must not regress materially; use the existing real-input performance spec rather than synthetic method timing.
+4. WebRTC and fallback input-to-authoritative latency uses 60 exact samples per transport and must keep each same-host run at median <= 20 ms and p95 < 40 ms.
 5. Physical LAN Ping remains an honest separate observation because Wi-Fi/AP scheduling is outside the same-host gate.
 
 ## Idempotence and Recovery
@@ -255,4 +269,4 @@ Store large/raw profiling output outside tracked source. Only concise reproducib
 
 ## Interfaces and Dependencies
 
-No new runtime dependency is expected. Phaser remains the game/rendering engine, React remains the DOM/HUD layer, Socket.IO remains signalling and fallback transport, and Werift remains server WebRTC. Protocol extensions are the existing Socket.IO snapshot acknowledgement and generation-bound WebRTC fast-channel ping/ack envelopes. Neither carries client time; all displayed RTT remains timed by the authoritative server.
+No new runtime dependency is expected. Phaser remains the game/rendering engine, React remains the DOM/HUD layer, Socket.IO remains signalling and fallback transport, and Werift remains server WebRTC. Protocol extensions are the lightweight Socket.IO nonce/ack and generation-bound WebRTC fast-channel ping/ack envelopes. Neither carries client time; all displayed RTT remains timed by the authoritative server.

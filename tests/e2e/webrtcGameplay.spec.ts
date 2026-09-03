@@ -10,6 +10,20 @@ import {
   type MatchPages
 } from './fixtures.js';
 
+test.use({
+  launchOptions: {
+    args: [
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-features=CalculateNativeWinOcclusion',
+      '--disable-renderer-backgrounding',
+      ...(process.platform === 'darwin' ? ['--use-angle=metal'] : [])
+    ]
+  }
+});
+
+const MAX_SAME_HOST_GAMEPLAY_PATH_PING_MS = 50;
+
 function player(game: E2eGame, match: MatchPages, playerId: string): MatchPlayer {
   const candidate = game.harness.matchSnapshot(match.code)?.players.find((value) => value.playerId === playerId);
   if (!candidate) throw new Error(`Missing authoritative WebRTC player ${playerId}.`);
@@ -36,6 +50,14 @@ async function expectNumericPing(match: MatchPages): Promise<void> {
 
 function networkStatus(game: E2eGame, match: MatchPages, playerId: string) {
   return game.harness.matchSnapshot(match.code)?.network[playerId] ?? null;
+}
+
+function expectSameHostGameplayPathPingWithinBudget(status: ReturnType<typeof networkStatus>): void {
+  if (!status || typeof status.currentMs !== 'number' || typeof status.medianMs !== 'number') {
+    throw new Error('A fresh same-host gameplay-path Ping sample was not available.');
+  }
+  expect(status.currentMs).toBeLessThan(MAX_SAME_HOST_GAMEPLAY_PATH_PING_MS);
+  expect(status.medianMs).toBeLessThan(MAX_SAME_HOST_GAMEPLAY_PATH_PING_MS);
 }
 
 async function expectFreshWebRtcPingAfterActivation(
@@ -271,7 +293,7 @@ test('a dropped first quick frame remains one authoritative WebRTC action despit
   }
 });
 
-test('WebRTC carries gameplay, falls back without reload, and activates freshly after lobby return', async ({ browser, game }) => {
+test('WebRTC carries gameplay, falls back without reload, and activates freshly after lobby return', async ({ browser, game }, testInfo) => {
   const match = await createTwoPlayerMatchWithDeferredGuestActivation(browser, game);
   try {
     await expect.poll(() => {
@@ -293,6 +315,16 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
     await expectFreshWebRtcPingAfterActivation(game, match, match.hostPlayerId);
     await expectFreshWebRtcPingAfterActivation(game, match, match.guestPlayerId);
     await expectNumericPing(match);
+    const webRtcPing = {
+      transport: 'webrtc',
+      host: networkStatus(game, match, match.hostPlayerId),
+      guest: networkStatus(game, match, match.guestPlayerId),
+      physicalLanClaim: false
+    };
+    expectSameHostGameplayPathPingWithinBudget(webRtcPing.host);
+    expectSameHostGameplayPathPingWithinBudget(webRtcPing.guest);
+    testInfo.annotations.push({ type: 'gameplay-path-ping', description: JSON.stringify(webRtcPing) });
+    console.info(`GAMEPLAY_PATH_PING ${JSON.stringify(webRtcPing)}`);
     await expect.poll(() => game.harness.matchSnapshot(match.code)?.phase, { timeout: 12_000 }).toBe('REGULATION');
 
     const movementStart = player(game, match, match.hostPlayerId);
@@ -312,9 +344,10 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
     const quickInput = await waitForObservedInput(match.host.page, quickObserverMarker, { quick: true });
     await expectAcceptedSource(game, match.hostPlayerId, quickInput.sequence, 'webrtc');
     await match.host.page.keyboard.up('j');
+    await expect.poll(() => player(game, match, match.hostPlayerId).stats.completedAttacks)
+      .toBe(completedBeforeQuick + 1);
     await waitForNeutral(game, match, match.hostPlayerId);
     expect(player(game, match, match.hostPlayerId).lastProcessedInputSeq).toBeGreaterThan(quickStartSequence);
-    expect(player(game, match, match.hostPlayerId).stats.completedAttacks).toBe(completedBeforeQuick + 1);
 
     const heavyStartSequence = player(game, match, match.hostPlayerId).lastProcessedInputSeq;
     await match.host.page.keyboard.down('k');
@@ -331,6 +364,16 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
       currentMs: expect.any(Number),
       medianMs: expect.any(Number)
     });
+    const settledWebRtcPing = {
+      transport: 'webrtc-settled',
+      host: networkStatus(game, match, match.hostPlayerId),
+      guest: networkStatus(game, match, match.guestPlayerId),
+      physicalLanClaim: false
+    };
+    expectSameHostGameplayPathPingWithinBudget(settledWebRtcPing.host);
+    expectSameHostGameplayPathPingWithinBudget(settledWebRtcPing.guest);
+    testInfo.annotations.push({ type: 'gameplay-path-ping', description: JSON.stringify(settledWebRtcPing) });
+    console.info(`GAMEPLAY_PATH_PING ${JSON.stringify(settledWebRtcPing)}`);
     const navigationCount = await match.guest.page.evaluate(() => performance.getEntriesByType('navigation').length);
     await game.harness.dropWebRtc(match.guestPlayerId);
     // The fallback clears synchronously; publish that state before Socket.IO can acknowledge its new probe.
@@ -344,6 +387,14 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
       transport: guestFallbackSource, currentMs: null, medianMs: null, jitterMs: null
     });
     await expectFallbackPingSource(game, match, match.guestPlayerId, guestFallbackSource);
+    const fallbackPing = {
+      transport: guestFallbackSource,
+      guest: networkStatus(game, match, match.guestPlayerId),
+      physicalLanClaim: false
+    };
+    expectSameHostGameplayPathPingWithinBudget(fallbackPing.guest);
+    testInfo.annotations.push({ type: 'gameplay-path-ping', description: JSON.stringify(fallbackPing) });
+    console.info(`GAMEPLAY_PATH_PING ${JSON.stringify(fallbackPing)}`);
     const guestRoster = match.guest.page.getByRole('region', { name: 'Oyuncu listesi' });
     await expect(guestRoster.getByLabel(/^Linus ağ telemetrisi: Ping \d+ ms$/)).toHaveCount(1);
     await expect(guestRoster).not.toContainText(/RTT|Delay|Rollback|\bRB\b/);
@@ -357,8 +408,9 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
     await expect.poll(() => player(game, match, match.guestPlayerId).lastProcessedInputSeq)
       .toBeGreaterThan(fallbackSequence);
     await match.guest.page.keyboard.up('j');
+    await expect.poll(() => player(game, match, match.guestPlayerId).stats.completedAttacks)
+      .toBe(completedBeforeFallbackQuick + 1);
     await waitForNeutral(game, match, match.guestPlayerId);
-    expect(player(game, match, match.guestPlayerId).stats.completedAttacks).toBe(completedBeforeFallbackQuick + 1);
     expect(await match.guest.page.evaluate(() => performance.getEntriesByType('navigation').length)).toBe(navigationCount);
 
     for (let score = 1; score <= 5; score += 1) {
@@ -370,6 +422,14 @@ test('WebRTC carries gameplay, falls back without reload, and activates freshly 
       }
     }
     await expect(match.host.page.getByRole('heading', { name: 'Ada Kazandı' })).toBeVisible();
+    const settledFallbackPing = {
+      transport: `${guestFallbackSource}-settled`,
+      guest: networkStatus(game, match, match.guestPlayerId),
+      physicalLanClaim: false
+    };
+    expectSameHostGameplayPathPingWithinBudget(settledFallbackPing.guest);
+    testInfo.annotations.push({ type: 'gameplay-path-ping', description: JSON.stringify(settledFallbackPing) });
+    console.info(`GAMEPLAY_PATH_PING ${JSON.stringify(settledFallbackPing)}`);
     await game.harness.dropWebRtc(match.hostPlayerId);
     await expect.poll(() => game.harness.transportMode(match.hostPlayerId)).toMatch(/^(websocket|polling)$/);
 

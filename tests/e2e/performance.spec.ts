@@ -17,7 +17,12 @@ const COMPANION_COUNT = 7;
 const COMPANION_INPUT_MS = 3_800;
 const ACK_TIMEOUT_MS = 2_000;
 const RING_OUT_EFFECT_SAMPLE_FRAMES = 72;
-const INPUT_LATENCY_SAMPLES = 12;
+const INPUT_LATENCY_SAMPLES = 60;
+const MAX_MEDIAN_INPUT_LATENCY_MS = 20;
+// Sampling starts after the browser has produced an input frame, so one 60 Hz
+// authoritative server boundary is inherent. Bound occasional scheduler and
+// event-loop tail separately instead of conflating this metric with Ping.
+const MAX_P95_INPUT_LATENCY_MS = 40;
 
 test.use({
   launchOptions: {
@@ -240,6 +245,7 @@ type BrowserInputRecord = Readonly<{
   sequence: number;
   sampledAtMs: number;
   moveX: number;
+  dash: boolean;
 }>;
 
 type BrowserSnapshotRecord = Readonly<{
@@ -523,7 +529,30 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     await expect.poll(() => game.harness.recentEvents(match.code).some(
       (event) => event.eventId > eventMarker && event.type === 'PULSE_SPAWN' && event.ownerPlayerId === measuredId
     ), { message: 'the measured WebRTC heavy release should spawn its pulse authoritatively' }).toBe(true);
+    await expect.poll(() => authoritativePlayer(game, match.code, measuredId).action.kind, {
+      message: 'the heavy recovery should finish before the dash edge is sampled'
+    }).toBe(null);
+    const dashObserverMarker = await observerSequence(match.measured);
     await match.measured.page.keyboard.down('Space');
+    await match.measured.page.waitForFunction((afterSequence) => {
+      const observer = (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: BrowserInputObserver })
+        .__NEON_E2E_INPUT_OBSERVER__;
+      return observer?.inputs.some((input) => input.sequence > afterSequence && input.dash) ?? false;
+    }, dashObserverMarker, { timeout: ACK_TIMEOUT_MS });
+    const dashSequence = await match.measured.page.evaluate((afterSequence) => {
+      const observer = (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: BrowserInputObserver })
+        .__NEON_E2E_INPUT_OBSERVER__;
+      const input = observer?.inputs.find((candidate) => candidate.sequence > afterSequence && candidate.dash);
+      if (!input) throw new Error('The browser did not sample the dash edge.');
+      return input.sequence;
+    }, dashObserverMarker);
+    await expect.poll(() => game.harness.acceptedInputs(measuredId).find(
+      (record) => record.sequence === dashSequence
+    )?.source).toBe('webrtc');
+    await expect.poll(() => authoritativePlayer(game, match.code, measuredId).dashCooldownRemainingMs, {
+      intervals: [10, 20, 40],
+      timeout: ACK_TIMEOUT_MS
+    }).toBeGreaterThan(0);
     await match.measured.page.waitForTimeout(120);
     await match.measured.page.keyboard.up('Space');
     const durations = await frameSampler.result;
@@ -532,7 +561,6 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     const after = authoritativePlayer(game, match.code, measuredId);
     const events = game.harness.recentEvents(match.code).filter((event) => event.eventId > eventMarker);
     expect(after.stats.completedAttacks).toBeGreaterThanOrEqual(before.stats.completedAttacks + 2);
-    expect(after.position.x).toBeGreaterThan(before.position.x + 30);
     expect(events.some((event) => event.type === 'PULSE_SPAWN' && event.ownerPlayerId === measuredId)).toBe(true);
     expect(companionIds.every((playerId) => authoritativePlayer(game, match.code, playerId).stats.completedAttacks >= 2)).toBe(true);
     expect(new Set(events.filter((event) => event.type === 'PULSE_SPAWN').map((event) => event.ownerPlayerId)))
@@ -596,6 +624,10 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     console.info(`PERFORMANCE_METRICS ${JSON.stringify(metrics)}`);
     expect(medianFps).toBeGreaterThanOrEqual(58);
     expect(p95FrameMs).toBeLessThan(25);
+    expect(transportLatency.webRtc.medianMs).toBeLessThanOrEqual(MAX_MEDIAN_INPUT_LATENCY_MS);
+    expect(transportLatency.webRtc.p95Ms).toBeLessThan(MAX_P95_INPUT_LATENCY_MS);
+    expect(transportLatency.socketIo.medianMs).toBeLessThanOrEqual(MAX_MEDIAN_INPUT_LATENCY_MS);
+    expect(transportLatency.socketIo.p95Ms).toBeLessThan(MAX_P95_INPUT_LATENCY_MS);
     expect(companionErrors).toEqual([]);
     await assertNoUnexpectedErrors(game, match.measured);
   } finally {
