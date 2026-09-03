@@ -725,6 +725,94 @@ describe('GameplayTransportHub', () => {
     ]);
   });
 
+  it('resets expired WebRTC RTT history before recording the first post-gap acknowledgement', async () => {
+    let serverNow = 0;
+    let heartbeat: (() => void) | null = null;
+    const heartbeatInterval = vi.spyOn(globalThis, 'setInterval').mockImplementation((callback) => {
+      heartbeat = callback;
+      return 0 as unknown as ReturnType<typeof setInterval>;
+    });
+    const { hub, factory } = createSubject(() => serverNow);
+    const first = session();
+    hub.attachSession(first.session);
+    const peer = await negotiateAndActivate(hub, factory);
+
+    const acknowledgeHeartbeat = (elapsedMs: number): void => {
+      if (!heartbeat) throw new Error('Expected the WebRTC heartbeat to be scheduled.');
+      heartbeat();
+      const message = JSON.parse(peer.reliableSent.at(-1)!);
+      serverNow += elapsedMs;
+      peer.receiveReliable({
+        version: 1,
+        generationId: FIRST_GENERATION,
+        kind: 'heartbeat-ack',
+        nonce: message.nonce
+      });
+    };
+
+    try {
+      acknowledgeHeartbeat(100);
+      acknowledgeHeartbeat(300);
+      expect(first.networkSamples).toEqual([
+        { medianMs: 100, sampledAt: 100 },
+        { medianMs: 200, sampledAt: 400 }
+      ]);
+
+      serverNow += 6_000;
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(first.networkClearTimes).toHaveLength(1);
+
+      acknowledgeHeartbeat(50);
+      expect(first.networkSamples.at(-1)).toEqual({ medianMs: 50, sampledAt: 6_450 });
+    } finally {
+      heartbeatInterval.mockRestore();
+    }
+  });
+
+  it('discards overdue WebRTC RTT history before its freshness timer callback runs', async () => {
+    let serverNow = 0;
+    let heartbeat: (() => void) | null = null;
+    const heartbeatInterval = vi.spyOn(globalThis, 'setInterval').mockImplementation((callback) => {
+      heartbeat = callback;
+      return 0 as unknown as ReturnType<typeof setInterval>;
+    });
+    const { hub, factory } = createSubject(() => serverNow);
+    const first = session();
+    hub.attachSession(first.session);
+    const peer = await negotiateAndActivate(hub, factory);
+
+    const acknowledgeHeartbeat = (elapsedMs: number): void => {
+      if (!heartbeat) throw new Error('Expected the WebRTC heartbeat to be scheduled.');
+      heartbeat();
+      const message = JSON.parse(peer.reliableSent.at(-1)!);
+      serverNow += elapsedMs;
+      peer.receiveReliable({
+        version: 1,
+        generationId: FIRST_GENERATION,
+        kind: 'heartbeat-ack',
+        nonce: message.nonce
+      });
+    };
+
+    try {
+      acknowledgeHeartbeat(100);
+      acknowledgeHeartbeat(300);
+      expect(first.networkSamples).toEqual([
+        { medianMs: 100, sampledAt: 100 },
+        { medianMs: 200, sampledAt: 400 }
+      ]);
+
+      serverNow += 6_000;
+      expect(first.networkClearTimes).toEqual([]);
+
+      acknowledgeHeartbeat(50);
+      expect(first.networkSamples.at(-1)).toEqual({ medianMs: 50, sampledAt: 6_450 });
+      expect(first.networkClearTimes).toEqual([]);
+    } finally {
+      heartbeatInterval.mockRestore();
+    }
+  });
+
   it('isolates room publications and peer failure to their server-owned sessions', async () => {
     const { hub, factory } = createSubject();
     const first = session();

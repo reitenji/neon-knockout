@@ -535,6 +535,10 @@ export class GameplayTransportHub {
 
   private recordRttSample(record: SessionRecord, elapsedMs: number): void {
     const sampledAt = this.now();
+    const latest = record.rttSamples.at(-1);
+    if (latest && sampledAt - latest.sampledAt >= RTT_FRESHNESS_MS) {
+      record.rttSamples = [];
+    }
     record.rttSamples.push({ value: Math.round(Math.max(0, elapsedMs)), sampledAt });
     if (record.rttSamples.length > RTT_SAMPLE_LIMIT) {
       record.rttSamples.splice(0, record.rttSamples.length - RTT_SAMPLE_LIMIT);
@@ -553,6 +557,7 @@ export class GameplayTransportHub {
       const latest = record.rttSamples.at(-1);
       if (!latest || this.now() - latest.sampledAt < RTT_FRESHNESS_MS) return;
       record.rttFresh = false;
+      record.rttSamples = [];
       safeInvoke(() => record.session.clearNetworkSample());
     }, RTT_FRESHNESS_MS);
   }
