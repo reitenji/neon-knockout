@@ -660,10 +660,12 @@ describe('GameplayTransportHub', () => {
   });
 
   it('publishes one server-timed RTT per matching heartbeat acknowledgement using the latest-five median', async () => {
-    let serverNow = 0;
-    const advanceServerClock = async (durationMs: number): Promise<void> => {
-      serverNow += durationMs;
-      await vi.advanceTimersByTimeAsync(durationMs);
+    let serverNow = 50_000;
+    let fakeTimerNow = 0;
+    const advanceServerClock = async (timerDurationMs: number, serverDurationMs = timerDurationMs): Promise<void> => {
+      fakeTimerNow += timerDurationMs;
+      serverNow += serverDurationMs;
+      await vi.advanceTimersByTimeAsync(timerDurationMs);
     };
     const { hub, factory } = createSubject(() => serverNow);
     const first = session();
@@ -675,11 +677,18 @@ describe('GameplayTransportHub', () => {
     await advanceServerClock(50);
     peer.receiveReliable({
       version: 1,
+      generationId: SECOND_GENERATION,
+      kind: 'heartbeat-ack',
+      nonce: firstHeartbeat.nonce
+    });
+    expect(first.networkSamples).toEqual([]);
+    peer.receiveReliable({
+      version: 1,
       generationId: FIRST_GENERATION,
       kind: 'heartbeat-ack',
       nonce: firstHeartbeat.nonce
     });
-    expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 1_050 }]);
+    expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 51_050 }]);
 
     peer.receiveReliable({
       version: 1,
@@ -693,11 +702,11 @@ describe('GameplayTransportHub', () => {
       kind: 'heartbeat-ack',
       nonce: firstHeartbeat.nonce + 1
     });
-    expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 1_050 }]);
+    expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 51_050 }]);
 
-    let nextHeartbeatAt = 2_000;
+    let nextHeartbeatTimerAt = 2_000;
     for (const [delayMs, expectedMedianMs] of [[10, 30], [30, 30], [100, 40], [20, 30], [0, 20]] as const) {
-      await advanceServerClock(nextHeartbeatAt - serverNow);
+      await advanceServerClock(nextHeartbeatTimerAt - fakeTimerNow);
       const heartbeat = JSON.parse(peer.reliableSent.at(-1)!);
       await advanceServerClock(delayMs);
       peer.receiveReliable({
@@ -707,16 +716,16 @@ describe('GameplayTransportHub', () => {
         nonce: heartbeat.nonce
       });
       expect(first.networkSamples.at(-1)?.medianMs).toBe(expectedMedianMs);
-      nextHeartbeatAt += 1_000;
+      nextHeartbeatTimerAt += 1_000;
     }
 
     expect(first.networkSamples).toEqual([
-      { medianMs: 50, sampledAt: 1_050 },
-      { medianMs: 30, sampledAt: 2_010 },
-      { medianMs: 30, sampledAt: 3_030 },
-      { medianMs: 40, sampledAt: 4_100 },
-      { medianMs: 30, sampledAt: 5_020 },
-      { medianMs: 20, sampledAt: 6_000 }
+      { medianMs: 50, sampledAt: 51_050 },
+      { medianMs: 30, sampledAt: 52_010 },
+      { medianMs: 30, sampledAt: 53_030 },
+      { medianMs: 40, sampledAt: 54_100 },
+      { medianMs: 30, sampledAt: 55_020 },
+      { medianMs: 20, sampledAt: 56_000 }
     ]);
   });
 
