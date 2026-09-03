@@ -541,6 +541,25 @@ describe('createSocketGameClient', () => {
     expect(gameplayHarness.firstTransport.acceptSocketSnapshot).not.toHaveBeenCalled();
   });
 
+  it('acknowledges a Socket.IO snapshot even when a snapshot subscriber throws', () => {
+    const client = createSocketGameClient();
+    gameplayHarness.transport.acceptSocketSnapshot.mockImplementation((publication: MatchSnapshotPublication) => {
+      sequencerHarness.sequencer.options.onSnapshot(publication.snapshot);
+    });
+    client.subscribe('match:snapshot', () => {
+      throw new Error('snapshot subscriber failed');
+    });
+    const acknowledgeSnapshot = vi.fn();
+
+    expect(() => socketHarness.trigger('match:snapshot', {
+      matchEpoch: 1,
+      eventCursor: 1,
+      snapshot: matchSnapshot(2)
+    }, acknowledgeSnapshot)).toThrow('snapshot subscriber failed');
+
+    expect(acknowledgeSnapshot).toHaveBeenCalledOnce();
+  });
+
   it('disposes on explicit and non-resumable disconnects but waits through recoverable reconnects', () => {
     const explicitClient = createSocketGameClient();
     const explicitSequencer = sequencerHarness.sequencer;

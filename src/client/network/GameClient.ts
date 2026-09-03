@@ -197,8 +197,11 @@ export function createSocketGameClient(options: SocketGameClientOptions = {}): G
   socket.on('transport:mode', (notice) => activeBundle?.transport.acceptMode(notice));
   socket.on('match:started', (publication) => activeBundle?.transport.acceptSocketStarted(publication));
   socket.on('match:snapshot', (publication, acknowledge) => {
-    activeBundle?.transport.acceptSocketSnapshot(publication);
-    acknowledge();
+    try {
+      activeBundle?.transport.acceptSocketSnapshot(publication);
+    } finally {
+      acknowledge();
+    }
   });
   socket.on('match:event', (publication) => activeBundle?.transport.acceptSocketEvent(publication));
   socket.on('network:probe', (probe, acknowledge) => acknowledge({ nonce: probe.nonce }));
