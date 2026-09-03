@@ -1,283 +1,696 @@
 # Adaptive Rollback Netcode Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` to execute this plan task-by-task. Start implementation tasks with `superpowers:test-driven-development` and finish with `superpowers:verification-before-completion`.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Goal:** Keep every player's local controls immediate while stabilizing remote motion and authoritative melee contact across per-player gameplay-path RTT and jitter up to the supported 150 ms tier.
+**Goal:** Keep every player's local controls immediate while making remote motion and authoritative melee contact stable, fair, and measurable across per-player gameplay-path RTT and jitter up to the supported 150 ms tier.
 
-**Architecture:** One shared adaptive policy drives a client-side tick buffer and bounded local reconciliation window. Gameplay protocol v2 carries the authoritative tick presented when input was sampled. The server retains twelve ticks of collision/eligibility poses and may rewind only target hitbox validation for melee. The current Node simulation remains authoritative; local input is never deliberately delayed; clashes, projectiles, ring-outs, scores, results, and room lifecycle never rewind.
+**Architecture:** Add one shared adaptive policy that turns RTT and jitter into per-client `delayFrames` and `rollbackFrames`, use that budget for a tick-oriented remote snapshot buffer and bounded local reconciliation, carry the client-visible authoritative tick in protocol v2 input, and validate melee target contact against a conservative twelve-tick server hitbox history. The Node.js server remains authoritative, local input is never intentionally delayed, and only melee target position may be inspected historically.
 
 **Tech Stack:** TypeScript, Node.js, Socket.IO, WebRTC data channels, Phaser 3, React, Zod, Vitest, Playwright.
 
 **Spec:** `docs/superpowers/specs/2026-09-03-adaptive-rollback-netcode-design.md`
 
-This is a living ExecPlan conforming to `/Users/serkances/.codex/PLANS.md`. Update `Progress`, `Surprises & Discoveries`, `Decision Log`, and `Outcomes & Retrospective` as evidence changes.
+This ExecPlan is a living document. It must remain conformant with `/Users/serkances/.codex/PLANS.md`. Any worker who changes code must also update `Progress`, `Surprises & Discoveries`, `Decision Log`, `Outcomes & Retrospective`, `Concrete Steps`, and the revision note at the bottom so a novice can restart from this file alone.
 
 ## Global Constraints
 
-- Work only in `/Users/serkances/dev/game/.worktrees/webrtc-gameplay-transport-impl` on `feature/adaptive-rollback-netcode`.
-- Preserve the authoritative 60 Hz Node simulation, WebRTC fast path, Socket.IO fallback, latest-wins snapshot pacing, Phaser renderer, React HUD, and event sequencer.
-- `delayFrames` is remote presentation buffering only. Never delay keyboard/touch sampling, local prediction, or transmission.
-- Do not implement full-world rollback or rewind clashes, pulses, ring-outs, scores, results, reconnects, or room lifecycle.
-- Keep Ping as the only shipping HUD network value. Delay, rollback, underrun, extrapolation, and correction metrics remain internal/test-visible.
-- Protocol v2 intentionally replaces v1; do not add a compatibility adapter.
-- Add deterministic failing tests before production changes and commit only green task slices.
-- Preserve unrelated work. Agents share this worktree and must not revert or overwrite another agent's changes.
+- Work only in `/Users/serkances/dev/game/.worktrees/webrtc-gameplay-transport-impl` on branch `feature/adaptive-rollback-netcode`.
+- Preserve the authoritative 60 Hz Node.js simulation, WebRTC fast path, Socket.IO fallback, Phaser renderer, React HUD, and existing room and result flow.
+- Do not add artificial keyboard, touch, or transmission delay. `delayFrames` means only the remote snapshot presentation buffer.
+- Do not implement full-world rollback. Do not rewind clashes, pulses, projectiles, ring-outs, scores, results, reconnects, or room lifecycle.
+- Keep Ping as the only shipping network number shown in the player list and HUD. Delay and rollback remain internal telemetry only.
+- Protocol version 2 is intentionally incompatible with version 1. Do not add a compatibility shim.
+- Use deterministic tests before implementation changes. A task is not done until its focused tests are green.
+- Preserve unrelated user changes. If another worker touched a file unexpectedly, inspect the diff and integrate surgically instead of reverting.
 
 ## Purpose / Big Picture
 
-A player on 50-150 ms Wi-Fi should still move and begin attacks on the next rendered frame. Remote players should move continuously through short jitter bursts rather than stepping between irregular snapshots. Reconciliation should replay a bounded, measurable input span. A melee strike may test the target pose the attacker plausibly saw, but only inside a server-owned history window and only when both historical and current eligibility allow it.
+After this change, a player on ordinary LAN or healthy Wi-Fi still sees local movement and attack startup within the next rendered frame, even if another player is on a noisier 50-150 ms link. Remote players no longer jerk between uneven snapshots because the client intentionally renders a few authoritative ticks behind the newest accepted snapshot and adapts that offset when jitter rises. When melee timing is late but still plausible, the server may validate the hit against the target pose that the attacker was actually seeing, without reopening or rewinding already published knockouts, pulse outcomes, or match results.
 
-The result is visible through exact policy/timeline/protocol/combat tests and browser telemetry under deterministic impairment. It must preserve existing combat semantics, same-host latency, and rendering performance.
+The result is visible in two ways. First, unit and integration tests prove the formulas, timeline behavior, protocol validation, bounded replay, and conservative combat rewind. Second, browser tests under deterministic impairment show that local controls stay immediate, remote motion stays monotonic, rollback stays bounded at each RTT tier, and the existing frame-time and ring-out performance limits do not regress.
 
 ## Progress
 
-- [x] (2026-09-03) Approved and committed the design specification as `bf663e2`.
-- [ ] Implement shared adaptive policy and honest WebRTC jitter.
-- [ ] Implement monotonic tick-oriented remote buffering and two-frame extrapolation.
-- [ ] Bound local reconciliation, preserve action edges, and expose correction telemetry.
-- [ ] Upgrade inputs to protocol v2 with required `viewTick`.
-- [ ] Add twelve-tick combat history and conservative melee-only rewind.
-- [ ] Add deterministic impairment and RTT-tier browser acceptance.
-- [ ] Complete review, verification, LAN restart, public feature/main push, and remote-ref checks.
+- [x] (2026-09-03 11:05 +03:00) Approved the hybrid design and committed the design specification as `bf663e2`.
+- [x] (2026-09-03 11:32 +03:00) Rewrote the outline into a task-by-task ExecPlan with explicit interfaces, verification commands, publication gates, and recovery notes.
+- [ ] Implement Task 1 and commit the adaptive policy and honest WebRTC jitter publication.
+- [ ] Implement Task 2 and commit the monotonic sixteen-snapshot remote presentation timeline.
+- [ ] Implement Task 3 and commit bounded local reconciliation with correction telemetry.
+- [ ] Implement Task 4 and commit gameplay protocol v2 with required `viewTick`.
+- [ ] Implement Task 5 and commit twelve-frame combat history with conservative melee-only rewind.
+- [ ] Implement Task 6 and commit the deterministic impairment harness and RTT-tier browser acceptance.
+- [ ] Run code review and full verification, restart the LAN service, push the feature branch, fast-forward the public `main`, and verify remote refs.
 
 ## Surprises & Discoveries
 
-- Observation: Current client "rollback" is only pending local input replay; there is no server rewind.
-  Evidence: `src/client/game/prediction.ts` reconciles pending frames while `src/server/game/simulation.ts` processes the latest accepted input map.
-- Observation: WebRTC keeps a real latest-five RTT median but publishes jitter as zero.
-  Evidence: `GameplayTransportHub.recordRttSample` sends only median to `RoomManager.setWebRtcMedian`.
-- Observation: Whole-state rollback is affordable in raw CPU/memory but unsafe for already published hits, projectile IDs, knockouts, scores, and results.
-  Evidence: The approved design limits history to target hitboxes and applies any hit once to current authoritative state.
-- Observation: E2E already observes sampled inputs, accepted snapshots, transport mode, and frame timings, but lacks deterministic impairment and correction distance.
-  Evidence: Extend `ArenaSession`, `createGameServer`, `tests/e2e/fixtures.ts`, and the `ServerPeer` boundary.
+- Observation: The existing client number called rollback is only the count of pending local inputs replayed after a snapshot. No server history is rewound today.
+  Evidence: `src/client/game/prediction.ts` replays pending local inputs, while `src/server/game/simulation.ts` consumes only the latest accepted input map.
+
+- Observation: WebRTC currently reports a fresh median RTT but forces jitter to zero, so the client cannot adapt honestly on that path.
+  Evidence: `GameplayTransportHub.recordRttSample` computes from the latest five samples, then `socketHandlers.ts` currently forwards only the median to `roomManager.setWebRtcMedian`.
+
+- Observation: Full match-state rollback is computationally cheap enough to be tempting, but it would invalidate current event semantics because hits, projectile IDs, ring-outs, scores, and results are published immediately.
+  Evidence: The approved design therefore stores only historical target hitbox state and applies the hit exactly once to the present authoritative state.
+
+- Observation: The repository already has good acceptance seams for this feature.
+  Evidence: `GamePresentationBridge` already publishes presentation delay and rollback, `ArenaSession` already reports accepted snapshots to the E2E observer, and `ServerPeer` is already the narrow boundary where deterministic transport impairment can be injected for tests.
 
 ## Decision Log
 
-- Decision: Budgets are per player, never room-global.
-  Rationale: A weak link must not delay healthy peers.
+- Decision: Use per-player adaptive budgets rather than a room-global budget.
+  Rationale: A weak Wi-Fi path must not add latency to healthy peers.
   Date/Author: 2026-09-03 / user and implementation team.
-- Decision: Delay frames affect only remote presentation; local sampling, prediction, and send remain same-frame.
-  Rationale: Responsive controls are the primary requirement.
+
+- Decision: Interpret `delayFrames` only as remote presentation buffering and not as local input delay.
+  Rationale: The user explicitly prioritized immediate local controls.
   Date/Author: 2026-09-03 / user and implementation team.
-- Decision: Rewind only conservative melee target hitbox validation.
-  Rationale: It improves late-hit fairness without invalidating published world events.
+
+- Decision: Add only bounded combat rewind for melee target position, not GGPO-style world rollback.
+  Rationale: This solves the late-hit fairness problem without revoking already published semantic events.
   Date/Author: 2026-09-03 / implementation team, approved by user.
-- Decision: Add required `viewTick`, bump gameplay protocol to 2, and provide no v1 shim.
-  Rationale: The server needs a bounded authoritative-tick hint and mixed wire formats add needless ambiguity.
+
+- Decision: Add required `viewTick` to gameplay input and bump the wire version to 2 with no backwards compatibility path.
+  Rationale: The authoritative server needs a bounded, declared presentation tick to know what pose the attacker could have seen.
   Date/Author: 2026-09-03 / implementation team, approved by user.
-- Decision: Keep implementation diagnostics out of the compact product HUD.
-  Rationale: The user requested only Ping in the player list.
+
+- Decision: Keep delay, rollback, underrun, extrapolation, and correction telemetry internal and test-visible rather than player-visible.
+  Rationale: The in-game player list is space-constrained and the user only wants Ping shown.
   Date/Author: 2026-09-03 / user and implementation team.
-
-## Context and Orientation
-
-`src/shared/constants.ts` defines the 60 Hz cadence. `src/shared/model.ts` owns `InputFrame`, match snapshots, and player network status. `src/shared/protocol.ts` validates Socket.IO messages; `src/shared/gameplayTransport.ts` defines versioned WebRTC envelopes.
-
-Client input is sampled in `ArenaInput.ts`, sequenced/predicted/sent by `ArenaSession.ts`, and rendered by `ArenaScene.ts`. `prediction.ts` contains `PredictionBuffer` and `SnapshotTimeline`. `GamePresentationBridge.ts` is the scoped diagnostic surface. `GameplayTransport.ts` uses WebRTC when ready, falls back to Socket.IO, and latches action edges until authoritative acknowledgement.
-
-Server input enters through `matchInputIngress.ts`, is retained/advanced by `roomManager.ts`, and is applied in `simulation.ts`. `combatResolution.ts` owns clashes, melee contact, and pulse contact; `state.ts` owns attack/player runtime. `GameplayTransportHub.ts` owns WebRTC probes and gameplay-path RTT samples.
-
-A _presentation target tick_ is the monotonically nondecreasing authoritative tick used to render remotes. A _buffer underrun_ means the desired interpolation interval lacks a following snapshot. A _hard snap_ is a correction at least 160 px or a semantic teleport. _Historical eligibility_ is stored connection, protection, respawn, and dash-invulnerability state at one retained tick.
-
-## Plan of Work
-
-### Task 1: Adaptive policy and gameplay-path jitter truth
-
-**Files:** Create `src/shared/netcodePolicy.ts` and `.test.ts`; modify `GameplayTransportHub.ts` and `.test.ts`, `socketHandlers.ts`, `roomManager.ts`, and `roomManager.test.ts`.
-
-Define deterministic `AdaptiveNetcodePolicy.update(sample)` and `reset()` returning `{ delayFrames, rollbackFrames }`. Inputs are `medianRttMs`, `transportJitterMs`, `arrivalJitterMs`, `bufferUnderrun`, and explicit `sampledAtMs`. Test the exact approved formulas, neutral `{1,4}` when RTT is missing/stale, immediate increases, at-most-one-frame decreases after two fresh samples and two seconds without underrun, and reset.
-
-Publish WebRTC `medianMs` plus jitter derived as the median absolute consecutive difference of the latest five RTT samples. Rename `setWebRtcMedian` to `setWebRtcNetworkSample(connectionId, medianMs, jitterMs, sampledAtMs)`. Test nonzero jitter, path/generation reset, and that probe loss never changes gameplay transport mode.
-
-**Verify:**
-
-```bash
-npm test -- --run src/shared/netcodePolicy.test.ts src/server/network/gameplayTransport/GameplayTransportHub.test.ts src/server/rooms/roomManager.test.ts
-git diff --check
-```
-
-Commit: `feat: add adaptive netcode policy`.
-
-### Task 2: Tick-oriented remote snapshot presentation
-
-**Files:** Modify `src/client/game/prediction.ts` and `.test.ts`, `ArenaScene.ts`, `ArenaScene.integration.test.ts`, and `GamePresentationBridge.ts`.
-
-Write failing tests proving that `SnapshotTimeline` retains sixteen monotonic snapshots, discards duplicate/older ticks, never decreases its selected target tick, uses the local player's network status and local arrival jitter, and renders around `newestTick - delayFrames`. When the next snapshot is missing during regulation/sudden death, extrapolate authoritative velocity for at most two ticks and then hold. Snap on respawn, knockout recovery, disconnect, and position gaps at least 160 px. Underruns raise budget immediately; stable decreases obey policy hysteresis.
-
-Expose a readonly sample result carrying target tick, delay frames, extrapolated frames, and underrun without widening `MatchSnapshot`. Keep `delayMs()` as `delayFrames * 1000 / GAME.snapshotRate`. Wire the scene to publish internal diagnostics while pulses remain server-authoritative.
-
-**Verify:**
-
-```bash
-npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaScene.integration.test.ts
-git diff --check
-```
-
-Commit: `feat: add adaptive snapshot timeline`.
-
-### Task 3: Bounded local reconciliation and telemetry
-
-**Files:** Modify `src/client/game/prediction.ts` and `.test.ts`, `ArenaSession.ts` and `.test.ts`, and `GamePresentationBridge.ts`.
-
-Define a readonly reconciliation record with authoritative tick, actual replayed frames, pre-blend correction distance, and hard-snap flag. Test an active two-to-ten-frame window, absolute twelve-frame capacity, ordered replay, acknowledgement removal, zero rollback within two accepted snapshots after idle, and preservation of every quick/heavy transition/dash edge under overflow. Compact only obsolete edge-free continuous movement and keep the newest continuous frame.
-
-Apply the current adaptive rollback budget to `PredictionBuffer`. Keep existing smoothing below 160 px; snap at or above 160 px and on respawn/ring-out recovery. Add records only to the scoped bridge and opt-in E2E observer.
-
-**Verify:**
-
-```bash
-npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts src/client/game/phaser/ArenaScene.integration.test.ts
-git diff --check
-```
-
-Commit: `feat: bound local netcode reconciliation`.
-
-### Task 4: Protocol v2 and required view tick
-
-**Files:** Modify `src/shared/model.ts`, `protocol.ts` and tests, `gameplayTransport.ts` and tests, `ArenaInput.ts`, `ArenaSession.ts` and tests, plus every explicit `InputFrame` fixture under `src` and `tests`.
-
-Add required `viewTick: number` and validate a finite non-negative integer on both transport paths. Increment `GAMEPLAY_PROTOCOL_VERSION` from 1 to 2 and make version-1 envelopes fail. `ArenaSession` obtains the current presentation target tick from `ArenaScene`; before a target is sampled it uses the newest accepted authoritative tick. Keyboard and touch still predict and send in the sampled frame.
-
-Update all typed fixtures explicitly; do not make the field optional or silently default it in schema parsing. Test negative, fractional, malformed, old-version, future-valid integer, and first-snapshot cases.
-
-**Verify:**
-
-```bash
-npm test -- --run src/shared/protocol.test.ts src/shared/gameplayTransport.test.ts src/client/game/phaser/ArenaSession.test.ts src/server/network/matchInputIngress.test.ts src/client/network/GameplayTransport.test.ts
-npm run typecheck
-git diff --check
-```
-
-Commit: `feat: add view tick to gameplay protocol`.
-
-### Task 5: Twelve-tick history and melee-only rewind
-
-**Files:** Create `src/server/game/CombatFrameHistory.ts` and `.test.ts`, `netcodeCompensation.ts` and `.test.ts`; modify `state.ts`, `combat.ts`, `combatResolution.ts` and tests, `simulation.ts` and tests, `roomManager.ts` and tests.
-
-Implement a fixed-capacity circular history capturing tick plus each connected player's immutable position, collision radius, respawn/protection/dash-invulnerability, and connection eligibility. Reset at match start, lobby return, result completion, deletion, and epoch replacement. Test capacity twelve, exact/oldest/newest lookup, immutable capture, and reset.
-
-Store the beginning input's `viewTick` on quick/heavy `AttackRuntime`. Derive the server-owned rollback budget from fresh RTT/jitter; stale data yields four frames. Clamp the claim to `[currentTick - rollbackFrames, currentTick]` and retained history.
-
-Allow only melee target-circle contact to use historical target position. Apply the resulting hit/impulse once to current authoritative state. Both current and historical connection, respawn, protection, and dash-invulnerability must be eligible. Attacker capsule and clashes remain current-tick; pulses never use history.
-
-Test: in-window historical contact hits exactly once; out-of-window cannot extend history; future claim clamps; current or historical protection/dash/respawn/disconnect blocks; two simultaneous legal hits both apply; current clash, projectile, score, knockout, and result semantics remain unchanged.
-
-**Verify:**
-
-```bash
-npm test -- --run src/server/game/CombatFrameHistory.test.ts src/server/game/netcodeCompensation.test.ts src/server/game/combatResolution.test.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.test.ts
-git diff --check
-```
-
-Commit: `feat: add bounded melee combat rewind`.
-
-### Task 6: Deterministic impairment and RTT-tier acceptance
-
-**Files:** Create `TestImpairedServerPeer.ts` and `.test.ts`; modify `ServerPeer.ts`, `createGameServer.ts` and tests, `tests/e2e/fixtures.ts`; create `rollbackLatencyMatrix.spec.ts`; update performance/mobile/WebKit specs.
-
-Add a deterministic test wrapper at the `ServerPeer` boundary with fixed one-way delay, repeating jitter sequence, deterministic loss pattern, and bounded reorder window. Expose controls only through `enableTestHarness`; normal construction must not expose them. Unit tests use injected scheduling, never sleeps.
-
-Extend opt-in E2E telemetry with budgets, target ticks, underruns, extrapolated frames, reconciliation records, sampled input sequences, accepted snapshots, and transport source. Run two-player WebRTC tiers at 20/50/100/150 ms plus representative forced Socket.IO fallback. Assert sequence/tick evidence rather than DOM timing guesses.
-
-Browser gates: same-frame local prediction; desktop p95 below 25 ms; mobile p95 below 33 ms; four-ring-out burst maximum below 50 ms; ordinary corrections below 160 px; rollback p95 no more than 4/5/8/10 frames at 20/50/100/150 ms; idle rollback zero within two accepted snapshots; monotonic target tick under reorder; extrapolation at most two frames then hold; simultaneous legal hits once each; Ping remains the only shipping network field.
-
-**Verify:**
-
-```bash
-npm test -- --run src/server/network/gameplayTransport/TestImpairedServerPeer.test.ts src/server/network/createGameServer.test.ts
-npx playwright test tests/e2e/rollbackLatencyMatrix.spec.ts --project=chromium --workers=1
-npx playwright test tests/e2e/performance.spec.ts tests/e2e/mobile.spec.ts --project=chromium --workers=1
-npx playwright test tests/e2e/safariMobile.spec.ts --project=mobile-webkit --workers=1
-git diff --check
-```
-
-Commit: `test: add adaptive netcode acceptance matrix`.
-
-### Task 7: Review, full verification, LAN runtime, and publication
-
-Run separate spec-compliance and code-quality reviews. Apply verified findings and rerun affected focused tests. Then run:
-
-```bash
-npm run verify
-npx playwright test --project=chromium --workers=1
-npx playwright test --project=mobile-webkit --workers=1
-for run_index in 1 2 3; do npx playwright test tests/e2e/rollbackLatencyMatrix.spec.ts tests/e2e/performance.spec.ts --project=chromium --workers=1 || exit 1; done
-git status --short
-git diff --check
-```
-
-After all gates pass, rebuild/restart the existing LAN service and verify process ownership plus both reachable health endpoints:
-
-```bash
-npm run build
-launchctl kickstart -k "gui/$(id -u)/com.reitenji.neon-relay.lan"
-lsof -nP -iTCP:4174 -sTCP:LISTEN
-curl --fail --silent http://127.0.0.1:4174/health
-curl --fail --silent http://192.168.68.52:4174/health
-```
-
-Push and verify the feature branch:
-
-```bash
-git push -u origin feature/adaptive-rollback-netcode
-git fetch origin
-git rev-parse HEAD
-git rev-parse origin/feature/adaptive-rollback-netcode
-```
-
-Only after verification, use the clean main checkout. Stop if it has unrelated changes or fast-forward is impossible; never force-push:
-
-```bash
-cd /Users/serkances/dev/game
-git status --short
-git fetch origin
-git switch main
-git merge --ff-only feature/adaptive-rollback-netcode
-git push origin main
-git fetch origin
-git rev-parse main
-git rev-parse origin/main
-gh repo view reitenji/neon-relay --json nameWithOwner,visibility,url
-```
-
-## Concrete Steps
-
-Run commands from `/Users/serkances/dev/game/.worktrees/webrtc-gameplay-transport-impl` unless a step names the main checkout. A new focused assertion must fail for the intended reason before implementation. Required-field compile failures are acceptable only during Task 4's red phase; restore type safety before committing.
-
-Keep commits task-scoped. Before every commit, run `git diff --check`, inspect `git status --short`, and ensure every changed file belongs to the current task. Keep widespread `viewTick` fixture changes in Task 4.
-
-## Validation and Acceptance
-
-Acceptance requires current-branch evidence for all of the following:
-
-1. Unit tests prove exact policy/hysteresis, honest jitter, protocol v2, bounded replay/edge preservation, monotonic timeline/two-tick extrapolation, and conservative history rules.
-2. Combat tests prove no regression to simultaneous hits, clashes, projectiles, protection, ring-out, score, and result finality.
-3. Playwright proves active WebRTC and forced fallback behavior with exact input/snapshot evidence at representative RTT tiers.
-4. Desktop/mobile/ring-out frame budgets, correction limit, rollback p95, idle recovery, monotonic tick, and extrapolation gates pass.
-5. `npm run verify`, full Chromium, and mobile WebKit pass from the final commit.
-6. Port 4174 listener ownership and loopback/LAN health checks pass after restart.
-7. Feature and public `origin/main` object IDs match the intended verified commit; GitHub reports public visibility.
-
-Manual LAN acceptance remains separate: the user joins from the second PC and phone and judges real router-path Ping and feel. Local automation never claims the physical Wi-Fi path is healthy.
-
-## Idempotence and Recovery
-
-Policy/history tests are deterministic; impairment unit tests use injected scheduling; E2E rooms are isolated. If a task fails, do not reset the worktree. Preserve completed/user work and repair only the current slice. Committed green tasks are recovery boundaries.
-
-Build must succeed before restart. If health fails, inspect listener ownership/logs before any rollback. If push result is uncertain, fetch and compare object IDs before retrying. Never force-push `main`.
-
-## Artifacts and Notes
-
-Record focused pass counts, formula/interface deviations, final verify and browser summaries, three-run metrics, final listener/health evidence, and final local/remote commit IDs here. Keep raw large logs outside the repo and summarize relevant results.
-
-## Interfaces and Dependencies
-
-No new production dependency is expected. Reuse Zod, Phaser, Socket.IO, WebRTC peer abstraction, Vitest fake timers, and Playwright. The policy is deterministic and accepts explicit timestamps. The client owns arrival jitter/underrun; the server owns gameplay-path RTT/jitter and legal rewind. Never trust client latency claims.
-
-`InputFrame.viewTick` is the only wire addition. `AttackRuntime.viewTick` is server-internal. `CombatFrameHistory` exposes immutable collision/eligibility poses, not mutable player references. Diagnostics stay in `GamePresentationBridge` and the opt-in observer.
 
 ## Outcomes & Retrospective
 
-At completion, record what shipped, measured RTT/rendering results, adjusted gates and rationale, final service/remote state, and the remaining manual second-device check. If reduced or abandoned, state which user-visible outcome remains unmet and why.
+No implementation outcome exists yet. The current success criterion is that each task lands as a green, independently verifiable slice with the plan updated after every commit. The main lesson from design is that the risky part is not CPU cost but semantic correctness: any approach that rewinds already published events would make the game harder to trust than the current latency issues.
 
-Plan revision note (2026-09-03): Initial plan created from the approved design, source audit, rollback-state cost probe, and existing acceptance seams.
+## Context and Orientation
+
+`src/shared/constants.ts` defines the 60 Hz simulation cadence and the snapshot cadence. In this repository one simulation frame is one 60 Hz tick, which is about 16.67 ms. `src/shared/model.ts` defines `InputFrame`, `MatchPlayer`, `MatchSnapshot`, and `PlayerNetworkStatus`. `src/shared/protocol.ts` validates Socket.IO payloads with Zod, and `src/shared/gameplayTransport.ts` defines the versioned WebRTC envelopes. These are the only shared wire-format files that need protocol changes.
+
+On the client, `src/client/game/phaser/ArenaInput.ts` samples keyboard and touch state. `src/client/game/phaser/ArenaSession.ts` turns the sampled controls into monotonic `InputFrame` values, predicts the local player immediately, and sends the same frame through `GameplayTransport`. `src/client/game/prediction.ts` currently contains both `PredictionBuffer` and `SnapshotTimeline`; it predicts the local player by replaying queued inputs and smooths remote players by interpolation over receipt timestamps. `src/client/game/phaser/ArenaScene.ts` owns the timeline, applies incoming authoritative snapshots, and renders player and pulse presentation. `src/client/game/GamePresentationBridge.ts` is the scoped bridge for internal telemetry and the opt-in E2E observer.
+
+On the server, `src/server/network/matchInputIngress.ts` validates and forwards both Socket.IO and WebRTC input. `src/server/rooms/roomManager.ts` stores the latest accepted input per player, stores per-player network status, advances each room, and emits snapshots. `src/server/game/simulation.ts` is the authoritative match step. It applies current inputs, movement, actions, projectiles, combat, ring-out, respawn, and result progression. `src/server/game/combat.ts` creates attack runtimes. `src/server/game/combatResolution.ts` resolves clashes, melee hits, and pulse hits. `src/server/game/state.ts` defines mutable runtime state including `AttackRuntime`. `src/server/network/gameplayTransport/GameplayTransportHub.ts` owns gameplay-path probes and WebRTC RTT samples. `src/server/network/gameplayTransport/ServerPeer.ts` is the abstraction boundary for the test impairment seam.
+
+A _presentation target tick_ is the authoritative tick the client chooses to render after applying its delay budget. A _buffer underrun_ means the client wants two surrounding authoritative snapshots for interpolation and does not have the newer one yet. A _hard snap_ means either a semantic teleport such as respawn or ring-out recovery, or a position correction of at least 160 pixels that should not be smoothed. A _historical eligibility record_ is the per-player collision and protection state stored in the new combat history for one retained tick.
+
+## Plan of Work
+
+The work proceeds in seven tasks because each task produces a usable, testable slice. The first task adds the adaptive policy and fixes WebRTC jitter truth so every later budget is based on honest data. The second task moves remote presentation from timestamp-only smoothing to a tick-oriented monotonic buffer. The third task makes local reconciliation bounded and observable. The fourth task upgrades the protocol so each input carries the authoritative tick the player was looking at. The fifth task adds server-side combat history and uses it only for melee target validation. The sixth task adds deterministic transport impairment and browser acceptance. The seventh task performs review, full verification, service restart, and GitHub publication.
+
+Every task follows the same red-green loop. Start by adding a failing focused test that names the behavior. Run only that focused test or focused small set and confirm the failure is caused by the missing feature, not by an unrelated error. Implement the smallest production change that makes the test pass. Rerun the focused test, then run any neighboring test file affected by the same interface. Before committing, run `git diff --check` and `git status --short` so the slice stays surgical. Update this plan before each commit.
+
+### Task 1: Shared Adaptive Policy And Gameplay-Path Jitter Truth
+
+**Files**
+
+- Create `src/shared/netcodePolicy.ts`.
+- Create `src/shared/netcodePolicy.test.ts`.
+- Modify `src/server/network/gameplayTransport/GameplayTransportHub.ts`.
+- Modify `src/server/network/gameplayTransport/GameplayTransportHub.test.ts`.
+- Modify `src/server/network/socketHandlers.ts`.
+- Modify `src/server/rooms/roomManager.ts`.
+- Modify `src/server/rooms/roomManager.test.ts`.
+
+**Interfaces**
+
+At the end of this task, `src/shared/netcodePolicy.ts` must export:
+
+    export type AdaptiveNetcodeSample = Readonly<{
+      medianRttMs: number | null;
+      transportJitterMs: number | null;
+      arrivalJitterMs: number;
+      bufferUnderrun: boolean;
+      sampledAtMs: number;
+    }>;
+
+    export type AdaptiveNetcodeBudget = Readonly<{
+      delayFrames: number;
+      rollbackFrames: number;
+    }>;
+
+    export class AdaptiveNetcodePolicy {
+      update(sample: AdaptiveNetcodeSample): AdaptiveNetcodeBudget;
+      reset(): AdaptiveNetcodeBudget;
+    }
+
+At the end of this task, `roomManager.ts` must expose:
+
+    setWebRtcNetworkSample(connectionId: string, medianMs: number, jitterMs: number, sampledAtMs: number): void
+    clearWebRtcNetworkSample(connectionId: string): void
+
+The existing `setWebRtcMedian` entry point must be removed and all callers updated in the same commit.
+
+- [ ] Step 1: Write the failing policy tests in `src/shared/netcodePolicy.test.ts`.
+
+  Add tests for the neutral stale budget `{ delayFrames: 1, rollbackFrames: 4 }`, the exact approved formulas, immediate increases when jitter or underrun spikes, one-frame-at-a-time decreases after two fresh samples and two seconds without underrun, and `reset()` returning the neutral budget.
+
+- [ ] Step 2: Run the focused policy test and confirm red.
+
+  Run from `/Users/serkances/dev/game/.worktrees/webrtc-gameplay-transport-impl`:
+
+      npm test -- --run src/shared/netcodePolicy.test.ts
+
+  Expected red signal: missing module or failing assertions around budget values and hysteresis.
+
+- [ ] Step 3: Implement the smallest deterministic policy in `src/shared/netcodePolicy.ts`.
+
+  Use the exact formulas from the spec. Treat missing or stale RTT as neutral. Store only the minimum internal state needed for hysteresis: last emitted budget, last fresh sample time, and a counter for consecutive stable fresh samples. Do not read browser or Node globals inside the policy. The caller passes time explicitly with `sampledAtMs`.
+
+- [ ] Step 4: Add failing WebRTC jitter-truth tests in `GameplayTransportHub.test.ts` and room-manager tests in `roomManager.test.ts`.
+
+  Cover at least these cases: varying latest-five RTT samples produce nonzero median absolute consecutive-difference jitter, switching generations clears stale samples, and no lost probe causes transport fallback or room crash.
+
+- [ ] Step 5: Run the focused transport and room tests and confirm red.
+
+  Run:
+
+      npm test -- --run src/server/network/gameplayTransport/GameplayTransportHub.test.ts src/server/rooms/roomManager.test.ts
+
+  Expected red signal: old method names or wrong jitter values.
+
+- [ ] Step 6: Implement the transport publication changes.
+
+  In `GameplayTransportHub.ts`, keep the latest-five RTT sample semantics and compute `jitterMs` as the median of absolute differences between consecutive samples in that bounded window. In `socketHandlers.ts`, forward both `medianMs` and `jitterMs` to the room manager. In `roomManager.ts`, store both values for the relevant player and clear them whenever a generation switch or transport reset invalidates the old sample set. Do not let probe loss trigger fallback; fallback logic remains whatever it was before this task.
+
+- [ ] Step 7: Rerun the focused tests and commit the green slice.
+
+  Run:
+
+      npm test -- --run src/shared/netcodePolicy.test.ts src/server/network/gameplayTransport/GameplayTransportHub.test.ts src/server/rooms/roomManager.test.ts
+      git diff --check
+      git status --short
+      git add src/shared/netcodePolicy.ts src/shared/netcodePolicy.test.ts src/server/network/gameplayTransport/GameplayTransportHub.ts src/server/network/gameplayTransport/GameplayTransportHub.test.ts src/server/network/socketHandlers.ts src/server/rooms/roomManager.ts src/server/rooms/roomManager.test.ts
+      git commit -m "feat: add adaptive netcode policy"
+
+### Task 2: Tick-Oriented Remote Snapshot Presentation
+
+**Files**
+
+- Modify `src/client/game/prediction.ts`.
+- Modify `src/client/game/prediction.test.ts`.
+- Modify `src/client/game/phaser/ArenaScene.ts`.
+- Modify `src/client/game/phaser/ArenaScene.integration.test.ts`.
+- Modify `src/client/game/GamePresentationBridge.ts`.
+
+**Interfaces**
+
+At the end of this task, `prediction.ts` must export:
+
+    export type TimelineNetworkSample = Readonly<{
+      medianRttMs: number | null;
+      transportJitterMs: number | null;
+      arrivalJitterMs: number;
+      bufferUnderrun: boolean;
+      sampledAtMs: number;
+    }>;
+
+    export type TimelineSample = Readonly<{
+      frame: InterpolationFrame | null;
+      targetTick: number | null;
+      delayFrames: number;
+      extrapolatedFrames: number;
+      bufferUnderrun: boolean;
+    }>;
+
+`SnapshotTimeline` must grow a method that accepts the local player's network sample before the next render sample:
+
+    updateNetwork(sample: TimelineNetworkSample): void
+
+and a render-sampling method that returns the richer result:
+
+    sample(nowMs: number): TimelineSample
+
+`GamePresentationBridge.ts` must continue to support `publishPresentationDelay(delayMs: number)` and must gain optional internal-only publication helpers for underrun and extrapolation used by tests, not by the shipping HUD.
+
+- [ ] Step 1: Write failing tests in `src/client/game/prediction.test.ts`.
+
+  Add cases proving that the timeline retains sixteen snapshots, ignores duplicate or older ticks, never decreases the selected target tick, derives delay from the local player's network status plus arrival jitter, interpolates around `newestTick - delayFrames`, extrapolates velocity for at most two ticks during `REGULATION` or `SUDDEN_DEATH`, then holds, and snaps for hard-snap situations instead of interpolating.
+
+- [ ] Step 2: Run the focused prediction test and confirm red.
+
+  Run:
+
+      npm test -- --run src/client/game/prediction.test.ts
+
+  Expected red signal: missing `TimelineSample` fields or old timestamp-based behavior.
+
+- [ ] Step 3: Implement the timeline changes in `prediction.ts`.
+
+  Keep the existing local correction logic untouched for now. Replace the current receipt-time-only remote sampling logic with a tick-oriented structure capped at sixteen snapshots. Maintain a monotonic chosen `targetTick`; if a newer out-of-order snapshot arrives after the target moved past it, keep the target monotonic. Compute `delayMs()` from the chosen `delayFrames` so current bridge callers still work. Extrapolate only remote player and pulse presentation, never local authority, and stop after two ticks.
+
+- [ ] Step 4: Add failing scene integration tests in `ArenaScene.integration.test.ts`.
+
+  Cover that `ArenaScene` publishes the derived presentation delay, forwards the local player's latest network sample to the timeline, and preserves existing pulse authority and snap behavior in live rendering integration.
+
+- [ ] Step 5: Run the focused client tests and confirm red.
+
+  Run:
+
+      npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaScene.integration.test.ts
+
+  Expected red signal: old `sample()` shape or missing bridge publications.
+
+- [ ] Step 6: Wire `ArenaScene.ts` and `GamePresentationBridge.ts`.
+
+  In `ArenaScene.ts`, before sampling the timeline for the next render, construct the `TimelineNetworkSample` from the local player's authoritative `snapshot.network` entry plus locally observed arrival jitter and current underrun state. Publish the delay in milliseconds through the existing bridge method and internal-only diagnostics through optional bridge callbacks or observer hooks. Do not widen `MatchSnapshot` for this task.
+
+- [ ] Step 7: Rerun the focused tests and commit the green slice.
+
+  Run:
+
+      npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaScene.integration.test.ts
+      git diff --check
+      git status --short
+      git add src/client/game/prediction.ts src/client/game/prediction.test.ts src/client/game/phaser/ArenaScene.ts src/client/game/phaser/ArenaScene.integration.test.ts src/client/game/GamePresentationBridge.ts
+      git commit -m "feat: add adaptive snapshot timeline"
+
+### Task 3: Bounded Local Reconciliation And Correction Telemetry
+
+**Files**
+
+- Modify `src/client/game/prediction.ts`.
+- Modify `src/client/game/prediction.test.ts`.
+- Modify `src/client/game/phaser/ArenaSession.ts`.
+- Modify `src/client/game/phaser/ArenaSession.test.ts`.
+- Modify `src/client/game/GamePresentationBridge.ts`.
+
+**Interfaces**
+
+At the end of this task, `prediction.ts` must export:
+
+    export type ReconciliationResult = Readonly<{
+      authoritativeTick: number;
+      rollbackFrames: number;
+      correctionDistancePx: number;
+      hardSnap: boolean;
+    }>;
+
+`PredictionBuffer` must support:
+
+    setRollbackWindow(frames: number): void
+    rollbackFrames(): number
+
+and the reconciliation path used by `ArenaSession` must make `ReconciliationResult` observable through an internal callback or return value so tests can assert it.
+
+- [ ] Step 1: Write failing reconciliation tests in `prediction.test.ts` and `ArenaSession.test.ts`.
+
+  Add cases for a configurable active rollback window between two and ten frames, absolute stored pending-input capacity of twelve, sequence-ordered replay after acknowledgement, compaction dropping only obsolete movement-only history, retention of every unacknowledged `quick`, `heavy`, and `dash` edge during overflow, ordinary sub-160-pixel smoothing, hard-snap on 160-plus-pixel correction, hard-snap on respawn, and idle rollback returning to zero within two accepted snapshots.
+
+- [ ] Step 2: Run the focused reconciliation tests and confirm red.
+
+  Run:
+
+      npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts
+
+  Expected red signal: pending input queue too large, missing active window, or missing telemetry.
+
+- [ ] Step 3: Implement bounded replay and telemetry.
+
+  In `PredictionBuffer`, retain an absolute maximum of twelve pending frames. When overflow happens, drop only the oldest continuous movement frames that have no `quick`, `heavy`, or `dash` edge, while preserving the newest continuous frame and every action edge. On authoritative reconciliation, remove acknowledged inputs, restore canonical local runtime, replay the remaining queue in order, and report the number of frames actually replayed plus the correction distance before smoothing. Keep the current smoothing for ordinary corrections and snap immediately for semantic teleports and hard-snap distance.
+
+- [ ] Step 4: Connect `ArenaSession.ts` to the active rollback budget from the timeline policy.
+
+  The session must receive the currently chosen rollback budget from client presentation state, set that on `PredictionBuffer`, publish `publishRollbackFrames` as the current replay count or `null` when no local player exists, and expose `ReconciliationResult` only to the scoped bridge or test observer. Do not add new shipping UI in this task.
+
+- [ ] Step 5: Rerun the focused tests and commit the green slice.
+
+  Run:
+
+      npm test -- --run src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.test.ts src/client/game/phaser/ArenaScene.integration.test.ts
+      git diff --check
+      git status --short
+      git add src/client/game/prediction.ts src/client/game/prediction.test.ts src/client/game/phaser/ArenaSession.ts src/client/game/phaser/ArenaSession.test.ts src/client/game/GamePresentationBridge.ts
+      git commit -m "feat: bound local netcode reconciliation"
+
+### Task 4: Gameplay Protocol V2 And Required View Tick
+
+**Files**
+
+- Modify `src/shared/model.ts`.
+- Modify `src/shared/protocol.ts`.
+- Modify `src/shared/protocol.test.ts`.
+- Modify `src/shared/gameplayTransport.ts`.
+- Modify `src/shared/gameplayTransport.test.ts`.
+- Modify `src/client/game/phaser/ArenaInput.ts`.
+- Modify `src/client/game/phaser/ArenaSession.ts`.
+- Modify `src/client/game/phaser/ArenaSession.test.ts`.
+- Modify every typed test fixture under `src/` and `tests/` that constructs `InputFrame`.
+
+**Interfaces**
+
+At the end of this task, `InputFrame` in `src/shared/model.ts` must be:
+
+    export type InputFrame = Readonly<{
+      seq: number;
+      viewTick: number;
+      moveX: number;
+      moveY: number;
+      aimX: number;
+      aimY: number;
+      quick: boolean;
+      heavy: boolean;
+      dash: boolean;
+    }>;
+
+`GAMEPLAY_PROTOCOL_VERSION` in `src/shared/gameplayTransport.ts` must change from `1` to `2`, and both Socket.IO and WebRTC validation must require `viewTick` to be a finite non-negative integer.
+
+`ArenaSession` must gain a constructor dependency or setter that lets it read the current presentation tick selected by `ArenaScene`. The chosen API must remain explicit in code. A novice should be able to search for the provider in `ArenaScene.ts`.
+
+- [ ] Step 1: Add the failing protocol tests.
+
+  In `src/shared/protocol.test.ts` and `src/shared/gameplayTransport.test.ts`, add cases for missing `viewTick`, negative `viewTick`, fractional `viewTick`, malformed string `viewTick`, old protocol version 1, and a valid future integer that must parse successfully before later server-side clamping. In `ArenaSession.test.ts`, add the first-snapshot case where there is no sampled presentation tick yet and the session must fall back to the newest accepted authoritative tick.
+
+- [ ] Step 2: Run the focused protocol tests and confirm red.
+
+  Run:
+
+      npm test -- --run src/shared/protocol.test.ts src/shared/gameplayTransport.test.ts src/client/game/phaser/ArenaSession.test.ts src/server/network/matchInputIngress.test.ts src/client/network/GameplayTransport.test.ts
+
+  Expected red signal: schema validation or fixtures failing because `viewTick` is missing or the version is still 1.
+
+- [ ] Step 3: Implement the wire-format upgrade.
+
+  Add `viewTick` to `InputFrame`, update `createEmptyInput()` in `state.ts`, update all schema validators, bump the protocol version to 2, and explicitly update every fixture instead of adding optional defaults inside validation. Future integer `viewTick` values remain valid at the schema layer because server clamping belongs to Task 5.
+
+- [ ] Step 4: Connect `ArenaScene` and `ArenaSession`.
+
+  Make `ArenaScene` provide the current presentation target tick to the session. Before the first sampled presentation tick exists, use the newest accepted authoritative tick from snapshots. Keep keyboard and touch paths identical and still send the input in the frame in which it was sampled.
+
+- [ ] Step 5: Rerun the focused tests, then typecheck and commit the green slice.
+
+  Run:
+
+      npm test -- --run src/shared/protocol.test.ts src/shared/gameplayTransport.test.ts src/client/game/phaser/ArenaSession.test.ts src/server/network/matchInputIngress.test.ts src/client/network/GameplayTransport.test.ts
+      npm run typecheck
+      git diff --check
+      git status --short
+      git add src/shared/model.ts src/shared/protocol.ts src/shared/protocol.test.ts src/shared/gameplayTransport.ts src/shared/gameplayTransport.test.ts src/client/game/phaser/ArenaInput.ts src/client/game/phaser/ArenaSession.ts src/client/game/phaser/ArenaSession.test.ts src tests
+      git commit -m "feat: add view tick to gameplay protocol"
+
+### Task 5: Twelve-Frame Combat History And Melee-Only Rewind
+
+**Files**
+
+- Create `src/server/game/CombatFrameHistory.ts`.
+- Create `src/server/game/CombatFrameHistory.test.ts`.
+- Create `src/server/game/netcodeCompensation.ts`.
+- Create `src/server/game/netcodeCompensation.test.ts`.
+- Modify `src/server/game/state.ts`.
+- Modify `src/server/game/combat.ts`.
+- Modify `src/server/game/combatResolution.ts`.
+- Modify `src/server/game/combatResolution.test.ts`.
+- Modify `src/server/game/simulation.ts`.
+- Modify `src/server/game/simulation.test.ts`.
+- Modify `src/server/rooms/roomManager.ts`.
+- Modify `src/server/rooms/roomManager.test.ts`.
+
+**Interfaces**
+
+At the end of this task, `src/server/game/CombatFrameHistory.ts` must export:
+
+    export type HistoricalPlayerFrame = Readonly<{
+      playerId: string;
+      position: Vec2;
+      collisionRadius: number;
+      connected: boolean;
+      respawning: boolean;
+      protected: boolean;
+      dashInvulnerable: boolean;
+    }>;
+
+    export type CombatFrame = Readonly<{
+      tick: number;
+      players: Readonly<Record<string, HistoricalPlayerFrame>>;
+    }>;
+
+    export class CombatFrameHistory {
+      capture(state: MatchState): void;
+      clear(): void;
+      latestTick(): number | null;
+      oldestTick(): number | null;
+      get(tick: number): CombatFrame | null;
+    }
+
+At the end of this task, `AttackRuntime` in `src/server/game/state.ts` must gain:
+
+    viewTick: number
+
+At the end of this task, `src/server/game/netcodeCompensation.ts` must export:
+
+    export function clampClaimedViewTick(options: Readonly<{
+      currentTick: number;
+      claimedViewTick: number;
+      medianRttMs: number | null;
+      jitterMs: number | null;
+      historyOldestTick: number | null;
+    }>): number
+
+- [ ] Step 1: Write failing unit tests for `CombatFrameHistory` and `clampClaimedViewTick`.
+
+  Cover capacity twelve, immutable stored frames, exact lookup, oldest and newest lookup after wraparound, stale-neutral four-frame clamp, and future-claim clamp to current tick.
+
+- [ ] Step 2: Run the focused new tests and confirm red.
+
+  Run:
+
+      npm test -- --run src/server/game/CombatFrameHistory.test.ts src/server/game/netcodeCompensation.test.ts
+
+  Expected red signal: missing modules or failing clamp behavior.
+
+- [ ] Step 3: Implement history capture and tick clamping.
+
+  `CombatFrameHistory.capture(state)` should snapshot only the data needed for melee target eligibility and collision. Use a fixed twelve-entry circular buffer. `clampClaimedViewTick` must derive the legal rollback span from fresh `medianRttMs` and `jitterMs` using the same spec formula as the shared policy, fall back to four frames when stale, then clamp into `[currentTick - rollbackFrames, currentTick]` and finally into the retained-history window.
+
+- [ ] Step 4: Add failing combat-resolution and simulation tests.
+
+  Add cases for in-window historical contact hitting exactly once, out-of-window claim failing to extend history, current or historical protection blocking, current or historical dash invulnerability blocking, respawn or disconnect blocking, future claim clamping, simultaneous legal hits both landing once, and unchanged clash, pulse, knockout, score, and result semantics.
+
+- [ ] Step 5: Run the focused combat tests and confirm red.
+
+  Run:
+
+      npm test -- --run src/server/game/combatResolution.test.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.test.ts
+
+  Expected red signal: missing history, missing `viewTick`, or current-only contact logic.
+
+- [ ] Step 6: Implement conservative melee-only rewind.
+
+  In `combat.ts`, bind the `viewTick` from the input that starts the attack. In `roomManager.ts`, own a `CombatFrameHistory` per active room, clear it on match start, lobby return, result completion, room deletion, and any match-epoch replacement, and capture one frame per authoritative tick. In `combatResolution.ts`, keep attacker geometry and clashes on the current authoritative tick, but allow the melee target-circle contact check to use the target's historical position if the attack's bounded tick points to a retained frame. Even if the historical position overlaps, reject the hit if either current or historical state says the target is disconnected, respawning, protected, or dash-invulnerable. Apply the resulting hit exactly once to the current authoritative state. Do not route pulses through history.
+
+- [ ] Step 7: Rerun the focused tests and commit the green slice.
+
+  Run:
+
+      npm test -- --run src/server/game/CombatFrameHistory.test.ts src/server/game/netcodeCompensation.test.ts src/server/game/combatResolution.test.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.test.ts
+      git diff --check
+      git status --short
+      git add src/server/game/CombatFrameHistory.ts src/server/game/CombatFrameHistory.test.ts src/server/game/netcodeCompensation.ts src/server/game/netcodeCompensation.test.ts src/server/game/state.ts src/server/game/combat.ts src/server/game/combatResolution.ts src/server/game/combatResolution.test.ts src/server/game/simulation.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.ts src/server/rooms/roomManager.test.ts
+      git commit -m "feat: add bounded melee combat rewind"
+
+### Task 6: Deterministic Impairment Harness And RTT-Tier Acceptance
+
+**Files**
+
+- Create `src/server/network/gameplayTransport/TestImpairedServerPeer.ts`.
+- Create `src/server/network/gameplayTransport/TestImpairedServerPeer.test.ts`.
+- Modify `src/server/network/gameplayTransport/ServerPeer.ts`.
+- Modify `src/server/network/createGameServer.ts`.
+- Modify `src/server/network/createGameServer.test.ts`.
+- Modify `tests/e2e/fixtures.ts`.
+- Create `tests/e2e/rollbackLatencyMatrix.spec.ts`.
+- Modify `tests/e2e/performance.spec.ts`.
+- Modify `tests/e2e/mobile.spec.ts`.
+- Modify `tests/e2e/safariMobile.spec.ts`.
+
+**Interfaces**
+
+At the end of this task, `ServerPeer.ts` must expose a test-only impairment wrapper interface that production code never calls directly. The concrete wrapper lives in `TestImpairedServerPeer.ts` and accepts a delegate `ServerPeer` plus deterministic impairment options:
+
+    export type TransportImpairment = Readonly<{
+      oneWayDelayMs: number;
+      jitterSequenceMs: readonly number[];
+      dropEveryNthPacket: number | null;
+      reorderWindow: number;
+    }>
+
+`createGameServer.ts` must accept this only through the existing test harness options path. Normal production construction must not gain a public UI or network API for changing impairment.
+
+The E2E observer payload assembled in `tests/e2e/fixtures.ts` must include enough data to assert: chosen Ping, chosen delay frames, rollback frames, correction distances, target ticks, extrapolated frames, authoritative snapshot acceptance, and transport source. Delay and rollback do not return to the shipping HUD.
+
+- [ ] Step 1: Write failing unit tests for the impairment wrapper.
+
+  Add deterministic fake-timer tests for fixed one-way delay, repeating jitter sequence, deterministic packet drop, and bounded reorder. Avoid any real sleep. The wrapper should preserve closed and backpressured semantics from the delegate peer.
+
+- [ ] Step 2: Run the focused impairment tests and confirm red.
+
+  Run:
+
+      npm test -- --run src/server/network/gameplayTransport/TestImpairedServerPeer.test.ts src/server/network/createGameServer.test.ts
+
+  Expected red signal: missing wrapper or missing test-harness hooks.
+
+- [ ] Step 3: Implement the impairment seam.
+
+  Wrap `sendFast`, `sendReliable`, and inbound listener delivery so tests can delay, jitter, drop, or reorder messages deterministically. Expose the wrapper only when `createGameServer` is launched with the existing test harness path used by Playwright fixtures. Do not alter the default LAN runtime path.
+
+- [ ] Step 4: Add or extend failing browser acceptance tests.
+
+  In `tests/e2e/rollbackLatencyMatrix.spec.ts`, cover two-player WebRTC tiers at 20, 50, 100, and 150 ms RTT plus one representative forced Socket.IO fallback case. Extend `performance.spec.ts`, `mobile.spec.ts`, and `safariMobile.spec.ts` to assert the unchanged desktop and mobile frame-time gates, ring-out burst maximum below 50 ms, rollback p95 thresholds 4, 5, 8, and 10 for the four RTT tiers, idle rollback recovery within two accepted snapshots, target tick monotonicity through reorder, two-frame extrapolation max, simultaneous-hit correctness, and Ping remaining the only shipping network field.
+
+- [ ] Step 5: Run the focused browser and transport tests and confirm red.
+
+  Run:
+
+      npm test -- --run src/server/network/gameplayTransport/TestImpairedServerPeer.test.ts src/server/network/createGameServer.test.ts
+      npx playwright test tests/e2e/rollbackLatencyMatrix.spec.ts --project=chromium --workers=1
+
+  Expected red signal: missing fixture telemetry or unmet acceptance assertions.
+
+- [ ] Step 6: Implement fixture telemetry and acceptance behavior.
+
+  Extend only the test observer and fixture collection path with policy budgets, target ticks, buffer underruns, extrapolated frames, reconciliation data, sampled input sequences, authoritative snapshot acceptance, and transport source. Keep the player-facing list and HUD limited to Ping. When asserting Ping in tests, treat Ping as the round-trip gameplay-path number already shown in the product and compare against the observed authoritative transport samples instead of browser wall-clock time.
+
+- [ ] Step 7: Rerun the focused tests and commit the green slice.
+
+  Run:
+
+      npm test -- --run src/server/network/gameplayTransport/TestImpairedServerPeer.test.ts src/server/network/createGameServer.test.ts
+      npx playwright test tests/e2e/rollbackLatencyMatrix.spec.ts --project=chromium --workers=1
+      npx playwright test tests/e2e/performance.spec.ts tests/e2e/mobile.spec.ts --project=chromium --workers=1
+      npx playwright test tests/e2e/safariMobile.spec.ts --project=mobile-webkit --workers=1
+      git diff --check
+      git status --short
+      git add src/server/network/gameplayTransport/ServerPeer.ts src/server/network/gameplayTransport/TestImpairedServerPeer.ts src/server/network/gameplayTransport/TestImpairedServerPeer.test.ts src/server/network/createGameServer.ts src/server/network/createGameServer.test.ts tests/e2e
+      git commit -m "test: add adaptive netcode acceptance matrix"
+
+### Task 7: Review, Full Verification, LAN Runtime, And Publication
+
+**Files**
+
+- Modify this ExecPlan with final progress, decisions, outcomes, and evidence.
+- Modify only any production or test file required by verified review findings.
+
+- [ ] Step 1: Run a requirement-by-requirement review against the approved spec.
+
+  For each major spec section, point to the implementing code and tests. If a requirement is missing, fix it before moving on. Record any deviation in `Decision Log` and `Artifacts and Notes`.
+
+- [ ] Step 2: Run a separate code-quality review pass.
+
+  Focus on correctness regressions, stale interfaces, accidental compatibility paths, and missing tests. Apply only verified findings and rerun the affected focused tests.
+
+- [ ] Step 3: Run the full repository verification gates from the feature worktree.
+
+  Run:
+
+      npm run verify
+      npx playwright test --project=chromium --workers=1
+      npx playwright test --project=mobile-webkit --workers=1
+      git diff --check
+      git status --short
+
+- [ ] Step 4: Run the latency and performance acceptance three times to catch flakiness.
+
+  Run:
+
+      python3 - <<'PY'
+      import subprocess
+      commands = [
+          ["npx", "playwright", "test", "tests/e2e/rollbackLatencyMatrix.spec.ts", "tests/e2e/performance.spec.ts", "--project=chromium", "--workers=1"]
+      ]
+      for index in range(3):
+          print(f"run {index + 1}/3")
+          for command in commands:
+              subprocess.run(command, check=True)
+      PY
+
+- [ ] Step 5: Build and restart the LAN service on port 4174 and verify health.
+
+  Run:
+
+      npm run build
+      launchctl kickstart -k "gui/$(id -u)/com.reitenji.neon-relay.lan"
+      lsof -nP -iTCP:4174 -sTCP:LISTEN
+      curl --fail --silent http://127.0.0.1:4174/health
+      curl --fail --silent http://192.168.68.52:4174/health
+
+  Expected green signal: one listener owned by the intended service process and both health endpoints returning JSON with `"status":"ok"`.
+
+- [ ] Step 6: Push and verify the feature branch remote ref.
+
+  Run:
+
+      git push -u origin feature/adaptive-rollback-netcode
+      git fetch origin
+      git rev-parse HEAD
+      git rev-parse origin/feature/adaptive-rollback-netcode
+
+  Expected green signal: local `HEAD` equals `origin/feature/adaptive-rollback-netcode`.
+
+- [ ] Step 7: Fast-forward the public `main` checkout and verify GitHub visibility.
+
+  Run from `/Users/serkances/dev/game`:
+
+      git status --short
+      git fetch origin
+      git switch main
+      git merge --ff-only feature/adaptive-rollback-netcode
+      git push origin main
+      git fetch origin
+      git rev-parse main
+      git rev-parse origin/main
+      gh repo view reitenji/neon-relay --json nameWithOwner,visibility,url
+
+  Stop instead of forcing anything if the main checkout is dirty or `--ff-only` fails.
+
+## Concrete Steps
+
+All commands in Tasks 1 through 6 run from `/Users/serkances/dev/game/.worktrees/webrtc-gameplay-transport-impl`. Only Task 7 step 7 runs from `/Users/serkances/dev/game`, which is the clean public main checkout authorized for publication. The red phase for any task must be a focused test failure that names the missing behavior. A red phase caused only by broad fixture fallout is acceptable in Task 4 after adding required `viewTick`, but that fallout must be resolved before the commit.
+
+At every stopping point, append the exact command you ran and a one-line outcome to `Artifacts and Notes`. When a command produces large output, do not paste the entire log into this plan. Save it outside the repository, keep only the path plus the short pass or fail summary here, and leave the repository clean except for intended source changes.
+
+If a task requires touching a wide fixture surface, do it in the same task as the interface change that forced it. Do not spread one breaking interface across multiple commits because that leaves the branch in a partially migrated state that a novice cannot safely resume.
+
+## Validation and Acceptance
+
+The implementation is accepted only when all of the following are true in the final branch state:
+
+1. The shared policy tests prove the exact delay and rollback formulas, the neutral fallback, immediate increases, gradual decreases, and reset behavior.
+2. WebRTC transport tests prove that server-owned jitter is nonzero when RTT samples vary and that generation resets clear stale samples.
+3. Client prediction tests prove sixteen-snapshot retention, monotonic target tick, two-frame maximum extrapolation, hold-after-extrapolation, bounded rollback storage, action-edge preservation, idle rollback recovery, and hard-snap behavior.
+4. Protocol tests prove that version 2 requires `viewTick` and that version 1 payloads are rejected.
+5. Combat tests prove in-window historical melee contact can land exactly once and that out-of-window, protected, respawning, disconnected, or dash-invulnerable targets still cannot be hit. Clash, pulse, knockout, score, and result semantics must remain unchanged.
+6. Browser tests prove local predicted movement and attack start within one rendered frame at 20, 50, 100, and 150 ms impaired RTT, and that rollback p95 stays within 4, 5, 8, and 10 frames respectively.
+7. Browser tests prove desktop render p95 stays below 25 ms, mobile render p95 stays below 33 ms, and four simultaneous ring-out effects stay below the existing 50 ms maximum-frame gate.
+8. Browser tests prove the player-facing network UI still shows Ping only, while internal observer telemetry exposes the extra metrics needed for assertions.
+9. `npm run verify`, full Chromium Playwright, and mobile WebKit Playwright all pass from the final feature commit.
+10. The restarted LAN service on port 4174 returns healthy JSON from loopback and `192.168.68.52`, and the feature branch plus `origin/main` both resolve to the intended published commit.
+
+Manual LAN acceptance remains a separate human gate after automation. The user should test from the second PC and phone after the service restart and judge real perceived smoothness. Automated acceptance does not claim a physical router path is healthy.
+
+## Idempotence and Recovery
+
+Tasks 1 through 6 are safe to rerun because their unit and browser tests are deterministic by design. The impairment harness must use fake timers for unit tests so reruns do not depend on ambient wall-clock timing. Browser fixtures should create isolated rooms and tear them down automatically so a failed run does not poison the next one.
+
+If a task fails midway, do not reset the worktree. Inspect `git status --short`, keep any green work, and repair only the active task. The recovery boundary is the last green task commit plus the updated plan state in this file. If the worktree contains unrelated changes that overlap the same file, pause and merge them intentionally rather than reverting.
+
+The service restart is recoverable because `npm run build` updates the built files before `launchctl kickstart -k` reloads the service. If health checks fail, inspect listener ownership and service logs before deciding whether to restart again. Never use destructive Git commands as a recovery shortcut.
+
+Publication is idempotent if remote refs are verified after each push. If a push result is uncertain, fetch and compare commit IDs before retrying. Never force-push the feature branch or `main`.
+
+## Artifacts and Notes
+
+As work progresses, append short evidence bullets here. Keep each bullet to one command and one result. Large logs belong outside the repository.
+
+- Example entry format: `npm test -- --run src/shared/netcodePolicy.test.ts` -> `5 tests passed in 420 ms`.
+- Example entry format: `git commit -m "feat: add adaptive netcode policy"` -> `created commit <sha>`.
+- Example entry format: `curl --fail --silent http://127.0.0.1:4174/health` -> `{"status":"ok",...}`.
+
+## Interfaces and Dependencies
+
+No new production dependency is expected. Reuse the existing Zod validators, Phaser scene flow, Socket.IO path, WebRTC peer abstraction, Vitest fake timers, and Playwright harness. If an existing helper already computes median or bounded-window samples, reuse it instead of duplicating math.
+
+The shared adaptive policy is the single source of truth for frame-budget math. The client is responsible for local arrival jitter and buffer-underrun observation. The server is responsible for gameplay-path RTT and jitter truth and for clamping `viewTick` to a legal rewind span. The client must never be allowed to claim arbitrary latency or arbitrary rewind depth.
+
+`InputFrame.viewTick` is the only wire-format addition. `AttackRuntime.viewTick`, `CombatFrameHistory`, timeline diagnostics, and reconciliation telemetry are internal implementation details. The shipping player list continues to show only Ping. Test-only observer payloads may contain delay, rollback, correction, and target-tick metrics as long as those values do not leak into the player-facing UI.
+
+## Plan Revision Note
+
+2026-09-03: Replaced the initial outline with a full ExecPlan that names exact files, interfaces, red-green commands, review gates, restart steps, and publication checks so execution can proceed task by task without prior conversation context.
