@@ -27,9 +27,9 @@ The player should see smoother motion and a lower, more stable application Ping 
 
 ## Progress
 
-- [ ] Task 1: Bound Socket.IO fallback snapshots with latest-wins delivery.
-- [ ] Task 2: Decouple the React HUD from the 60 Hz snapshot stream.
-- [ ] Task 3: Remove unchanged Phaser graphics and text work from the frame path.
+- [x] Task 1: Bound Socket.IO fallback snapshots with latest-wins delivery.
+- [x] Task 2: Decouple the React HUD from the 60 Hz snapshot stream.
+- [x] Task 3: Remove unchanged Phaser graphics and text work from the frame path.
 - [ ] Task 4: Re-profile, run complete acceptance, document evidence, and publish.
 
 ## Surprises & Discoveries
@@ -38,6 +38,9 @@ The player should see smoother motion and a lower, more stable application Ping 
 - During active Socket.IO fallback play, five to seven reliable snapshots were observed ahead of a probe acknowledgement, matching roughly 83-117 ms at 60 Hz. With snapshot publication suppressed, the same browser RTT fell substantially.
 - A minimal/lobby browser returned Socket.IO probe acknowledgements around 1 ms, while the active Phaser/React match was tens of milliseconds slower. Stopping animation frames collapsed the active-match probe delay, locating the remaining delay in browser scheduling/render work.
 - Same-host measurements are diagnostic, not promises for a physical Wi-Fi path. Router/AP contention and phone power scheduling remain external variables.
+- 2026-09-03 post-change verification: the focused Task 1-3 suite passed 73/73 tests and `npm run verify` passed lint, both TypeScript projects, 596 unit tests, the 1-test eight-client load suite, and production build. The client bundle emitted Vite's >500 kB chunk warning; it did not fail the build.
+- 2026-09-03 browser performance run 1 passed: 180 frame samples, 16.70 ms median frame time, 59.88 median FPS, and 17.50 ms p95 frame time. Real-input medians were 17.00 ms WebRTC (p95 18.90, n=12) and 16.00 ms forced Socket.IO fallback (p95 17.60, n=12).
+- 2026-09-03 browser performance run 2 failed before latency/frame metrics: after the active eight-player match started, the measured client remained `websocket` instead of negotiating `webrtc` within the test's 10,000 ms allowance. Per the acceptance gate, runs 3, the isolated active-render Socket.IO RTT probe, Chromium focused acceptance, and mobile WebKit smoke were not run; no passing three-run aggregate or active-render RTT claim is available.
 
 ## Decision Log
 
@@ -48,7 +51,18 @@ The player should see smoother motion and a lower, more stable application Ping 
 
 ## Outcomes & Retrospective
 
-Pending implementation and final measurements. Record pre/post browser medians, FPS percentiles, test totals, live service health, publication commit, and any still-pending physical-device checks here.
+Focused and full non-browser automated verification completed, but Task 4 remains open because browser transport acceptance failed and controller-owned review/live-service/publication work remains.
+
+Commands and results:
+
+- `npx vitest run src/server/network/SocketSnapshotPacer.test.ts src/client/network/GameClient.test.ts src/client/ui/HudSnapshotStore.test.ts src/client/ui/MatchHud.test.tsx src/client/game/phaser/PulseView.test.ts src/client/game/phaser/FighterView.test.ts tests/integration/socketFlow.test.ts tests/load/eightClients.test.ts --maxWorkers=1` — 8 files, 73 tests passed.
+- `npm run verify` — lint passed; both TypeScript checks passed; 61 files/596 tests passed; eight-client load 1/1 passed; production build passed.
+- `npx playwright test tests/e2e/performance.spec.ts --grep 'holds one LAN viewport frame budget while eight authoritative players fight' --project=chromium --workers=1` (serial run 1) — passed. n=180, 16.70 ms median frame / 59.88 FPS median / 17.50 ms p95 frame. WebRTC input-to-authoritative n=12: 17.00 ms median / 18.90 ms p95. Forced Socket.IO fallback n=12: 16.00 ms median / 17.60 ms p95.
+- Same command (serial run 2) — failed at `tests/e2e/performance.spec.ts:496`: expected transport `webrtc`, received `websocket` after 10,000 ms. Serial run 3 was intentionally not run after this acceptance failure.
+
+Successful-run-only aggregate is n=1 and therefore is not a valid three-run comparison: 59.88 median FPS, 17.50 ms p95 frame, 17.00 ms WebRTC median input latency, and 16.00 ms fallback median input latency. The one passing FPS sample matches the retained pre-change approximate 59.9 FPS / 16.7 ms frame baseline; no pre-change real-input latency values are recorded here for a material-regression comparison. The required active-render Socket.IO application-RTT probe was not run after the WebRTC gate failed, so there is no valid post-change comparison to the 68.5 ms same-host active-render baseline. Physical phone/AP comparison remains pending and is not inferred from same-host data.
+
+Raw logs are outside the tracked repository at `/tmp/neon-task4-XsgoYO/`: `focused-vitest.log`, `npm-verify.log`, `performance-run-1.log`, and `performance-run-2.log`.
 
 ## Context and Orientation
 
@@ -184,4 +198,3 @@ Store large/raw profiling output outside tracked source. Only concise reproducib
 ## Interfaces and Dependencies
 
 No new runtime dependency is expected. Phaser remains the game/rendering engine, React remains the DOM/HUD layer, Socket.IO remains signalling and fallback transport, and Werift remains server WebRTC. The only protocol extension is the per-snapshot Socket.IO acknowledgement callback. The acknowledgement carries no client time, duration, or gameplay data; it is flow control only.
-
