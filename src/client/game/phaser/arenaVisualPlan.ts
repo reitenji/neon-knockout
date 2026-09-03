@@ -36,16 +36,27 @@ function lerp(start: number, end: number, amount: number): number {
   return start + (end - start) * amount;
 }
 
+function freezeVertices(vertices: readonly Vec2[]): readonly Vec2[] {
+  return Object.freeze(vertices.map((vertex) => Object.freeze(vertex)));
+}
+
 export function interpolateArenaVertices(progress: number): readonly Vec2[] {
   const contraction = clamp(progress, 0, 1);
-  return ARENA.regulationVertices.map((regulation, index) => {
+  if (contraction === 0) return ARENA.regulationVertices;
+  if (contraction === 1) return ARENA.minimumVertices;
+  return freezeVertices(ARENA.regulationVertices.map((regulation, index) => {
     const minimum = ARENA.minimumVertices[index]!;
     return {
       x: lerp(regulation.x, minimum.x, contraction),
       y: lerp(regulation.y, minimum.y, contraction)
     };
-  });
+  }));
 }
+
+const RECESSED_VERTICES = interpolateArenaVertices(0.12);
+const CORE_PLATFORM_VERTICES = interpolateArenaVertices(0.24);
+const PANEL_BANDS = Object.freeze(PANEL_STOPS.map((stop) => interpolateArenaVertices(stop)));
+const VOID_SHADOW_OFFSET = Object.freeze({ x: 16, y: 20 });
 
 function warningLeadProgress(state: ArenaVisualState): number {
   if (state.phase !== 'REGULATION' && state.phase !== 'SUDDEN_DEATH') return 0;
@@ -71,10 +82,10 @@ export function buildArenaVisualModel(
     regulationVertices: ARENA.regulationVertices,
     minimumVertices: ARENA.minimumVertices,
     currentVertices: interpolateArenaVertices(platformProgress),
-    recessedVertices: interpolateArenaVertices(0.12),
-    corePlatformVertices: interpolateArenaVertices(0.24),
-    panelBands: PANEL_STOPS.map((stop) => interpolateArenaVertices(stop)),
-    voidShadowOffset: { x: 16, y: 20 },
+    recessedVertices: RECESSED_VERTICES,
+    corePlatformVertices: CORE_PLATFORM_VERTICES,
+    panelBands: PANEL_BANDS,
+    voidShadowOffset: VOID_SHADOW_OFFSET,
     warningPulse,
     minimumOutlineAlpha: clamp(0.18 + emphasis * 0.38 + warningPulse * 0.06, 0.18, 0.62),
     activeBoundaryAlpha: clamp(0.34 + platformProgress * 0.4 + warningPulse * 0.08, 0.34, 0.82),

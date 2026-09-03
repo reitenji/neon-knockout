@@ -30,6 +30,7 @@ class RecordingGraphics {
   moveTo(...args: readonly unknown[]) { this.calls.push({ method: 'moveTo', args }); return this; }
   lineTo(...args: readonly unknown[]) { this.calls.push({ method: 'lineTo', args }); return this; }
   strokePath(...args: readonly unknown[]) { this.calls.push({ method: 'strokePath', args }); return this; }
+  setAlpha(...args: readonly unknown[]) { this.calls.push({ method: 'setAlpha', args }); return this; }
   clear(...args: readonly unknown[]) { this.calls.push({ method: 'clear', args }); return this; }
   destroy() { this.destroyed += 1; }
 }
@@ -74,7 +75,7 @@ describe('ArenaView', () => {
     expect(overlay.calls.filter((call) => call.method === 'fillCircle').length).toBeGreaterThanOrEqual(8);
   });
 
-  it('skips inert pre-warning redraws while redrawing warning onset and visible pulse changes', () => {
+  it('bounds pre-contraction geometry redraws while updating warning opacity every frame', () => {
     const stub = scene();
     const arena = createArenaView(stub as never, { reducedMotion: false });
     const overlay = stub.graphics[2]!;
@@ -83,11 +84,30 @@ describe('ArenaView', () => {
     arena.apply(visualState(90_000, 59_000), 900);
     expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(1);
 
-    arena.apply(visualState(90_000, 58_500), 900);
+    arena.apply(visualState(90_000, 58_500), 1_000);
+    arena.apply(visualState(90_000, 58_484), 1_016);
+    arena.apply(visualState(90_000, 58_468), 1_032);
     expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(2);
+    expect(overlay.calls.filter((call) => call.method === 'setAlpha')).toHaveLength(5);
+    expect(overlay.calls.filter((call) => call.method === 'setAlpha').at(-1)?.args)
+      .not.toEqual(overlay.calls.filter((call) => call.method === 'setAlpha').at(-2)?.args);
 
-    arena.apply(visualState(90_000, 58_500), 1_180);
+    arena.apply(visualState(90_000, 58_399), 1_101);
     expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(3);
+    expect(overlay.calls.filter((call) => call.method === 'setAlpha')).toHaveLength(6);
+  });
+
+  it('keeps reduced-motion warning opacity stable without pulse-driven redraws', () => {
+    const stub = scene();
+    const arena = createArenaView(stub as never, { reducedMotion: true });
+    const overlay = stub.graphics[2]!;
+
+    arena.apply(visualState(90_000, 58_500), 1_000);
+    arena.apply(visualState(90_000, 58_484), 1_016);
+
+    expect(overlay.calls.filter((call) => call.method === 'clear')).toHaveLength(1);
+    expect(overlay.calls.filter((call) => call.method === 'setAlpha').map((call) => call.args))
+      .toEqual([[1], [1]]);
   });
 
   it('redraws when the configured duration changes the warning threshold', () => {

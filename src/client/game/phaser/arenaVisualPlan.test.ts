@@ -13,6 +13,22 @@ function visualState(durationMs: MatchDurationMs, remainingMs: number, platformP
 }
 
 describe('arenaVisualPlan', () => {
+  it('reuses frozen arena geometry that does not depend on match state', () => {
+    const first = buildArenaVisualModel(visualState(90_000, 60_000));
+    const second = buildArenaVisualModel(visualState(180_000, 100_000, 0.4));
+
+    expect(second.regulationVertices).toBe(first.regulationVertices);
+    expect(second.minimumVertices).toBe(first.minimumVertices);
+    expect(second.recessedVertices).toBe(first.recessedVertices);
+    expect(second.corePlatformVertices).toBe(first.corePlatformVertices);
+    expect(second.panelBands).toBe(first.panelBands);
+    expect(second.voidShadowOffset).toBe(first.voidShadowOffset);
+    expect(Object.isFrozen(first.recessedVertices)).toBe(true);
+    expect(Object.isFrozen(first.recessedVertices[0])).toBe(true);
+    expect(Object.isFrozen(first.panelBands)).toBe(true);
+    expect(first.panelBands.every((band) => Object.isFrozen(band))).toBe(true);
+  });
+
   it('interpolates the arena footprint exactly between regulation and minimum octagons', () => {
     expect(interpolateArenaVertices(0)).toEqual(ARENA.regulationVertices);
     expect(interpolateArenaVertices(1)).toEqual(ARENA.minimumVertices);

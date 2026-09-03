@@ -11,7 +11,7 @@ export interface ArenaView {
 type GraphicsLike = Pick<
   Phaser.GameObjects.Graphics,
   'fillStyle' | 'lineStyle' | 'fillPoints' | 'strokePoints' | 'fillCircle' | 'strokeCircle' | 'beginPath' |
-  'moveTo' | 'lineTo' | 'strokePath' | 'clear' | 'destroy'
+  'moveTo' | 'lineTo' | 'strokePath' | 'setAlpha' | 'clear' | 'destroy'
 >;
 
 type ArenaSceneLike = Pick<Phaser.Scene, 'add'> & {
@@ -34,6 +34,8 @@ const COLORS = Object.freeze({
   activeHighlight: 0xfff0d8,
   dangerFill: 0x441d14
 });
+const WARNING_GEOMETRY_STEP_MS = 100;
+const WARNING_PULSE_MIN_ALPHA = 0.94;
 
 function offsetVertices(vertices: readonly Vec2[], offset: Vec2): readonly Vec2[] {
   return vertices.map((vertex) => ({ x: vertex.x + offset.x, y: vertex.y + offset.y }));
@@ -143,31 +145,36 @@ function warningIsVisible(state: ArenaVisualState): boolean {
 
 type VisualSignature = Readonly<{
   phase: MatchPhase;
-  remainingMs: number;
+  warningStep: number;
   platformProgress: number;
   durationMs: number;
-  nowMs: number;
 }>;
 
-function visualSignature(
-  state: ArenaVisualState,
-  nowMs: number,
-  reducedMotion: boolean
-): VisualSignature {
-  const visibleWarning = warningIsVisible(state);
+function warningGeometryStep(state: ArenaVisualState): number {
+  if (!warningIsVisible(state)) return -1;
+  if (state.phase !== 'REGULATION' || state.platformProgress > 0) return 0;
+  const warningRemainingMs = matchTimingFor(state.settings.durationMs).contractionWarningRemainingMs;
+  return Math.floor(Math.max(0, warningRemainingMs - state.remainingMs) / WARNING_GEOMETRY_STEP_MS);
+}
+
+function visualSignature(state: ArenaVisualState): VisualSignature {
   return {
     phase: state.phase,
-    remainingMs: visibleWarning ? state.remainingMs : 0,
+    warningStep: warningGeometryStep(state),
     platformProgress: state.platformProgress,
-    durationMs: state.settings.durationMs,
-    nowMs: visibleWarning && !reducedMotion ? nowMs : 0
+    durationMs: state.settings.durationMs
   };
 }
 
 function sameVisualSignature(left: VisualSignature | null, right: VisualSignature): boolean {
-  return left !== null && left.phase === right.phase && left.remainingMs === right.remainingMs &&
-    left.platformProgress === right.platformProgress && left.durationMs === right.durationMs &&
-    left.nowMs === right.nowMs;
+  return left !== null && left.phase === right.phase && left.warningStep === right.warningStep &&
+    left.platformProgress === right.platformProgress && left.durationMs === right.durationMs;
+}
+
+function warningPulseAlpha(state: ArenaVisualState, nowMs: number, reducedMotion: boolean): number {
+  if (reducedMotion || !warningIsVisible(state)) return 1;
+  const pulse = (Math.sin(nowMs / 280) + 1) / 2;
+  return WARNING_PULSE_MIN_ALPHA + pulse * (1 - WARNING_PULSE_MIN_ALPHA);
 }
 
 function drawDynamicTelegraph(overlay: GraphicsLike, state: ArenaVisualState, model: ArenaVisualModel): void {
@@ -212,14 +219,15 @@ export function createArenaView(
   return {
     apply(state, nowMs = 0) {
       if (destroyed) return;
-      const signature = visualSignature(state, nowMs, reducedMotion);
-      if (sameVisualSignature(lastVisualSignature, signature)) return;
-      lastVisualSignature = signature;
-      const model = buildArenaVisualModel(state, {
-        nowMs,
-        reducedMotion: reducedMotion || !warningIsVisible(state)
-      });
-      drawDynamicTelegraph(overlay, state, model);
+      const signature = visualSignature(state);
+      if (!sameVisualSignature(lastVisualSignature, signature)) {
+        lastVisualSignature = signature;
+        const model = buildArenaVisualModel(state, {
+          reducedMotion: true
+        });
+        drawDynamicTelegraph(overlay, state, model);
+      }
+      overlay.setAlpha(warningPulseAlpha(state, nowMs, reducedMotion));
     },
     destroy() {
       if (destroyed) return;

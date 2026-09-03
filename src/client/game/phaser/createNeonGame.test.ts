@@ -41,7 +41,7 @@ describe('buildNeonGameConfig', () => {
       height: 720,
       parent,
       zoom: 2,
-      fps: { target: 60, limit: 60 },
+      fps: { target: 60, limit: 60, smoothStep: false },
       scale: {
         mode: Phaser.Scale.FIT,
         autoCenter: Phaser.Scale.CENTER_BOTH,

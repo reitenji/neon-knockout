@@ -526,6 +526,37 @@ describe('ArenaScene live presentation integration', () => {
     expect(probes.createPulseView).toHaveBeenCalledTimes(1);
   });
 
+  it('reuses player and projectile membership scratch sets across presentation frames', () => {
+    const bridge = new Bridge();
+    bridge.current = snapshot({
+      players: [player(), player({ playerId: 'p2' })],
+      pulses: [{
+        projectileId: 9, ownerPlayerId: 'p1', originatingAttackId: 4,
+        position: { x: 350, y: 360 }, velocity: { x: 900, y: 0 }, radius: 18,
+        remainingMs: 400, hitTargetIds: []
+      }]
+    });
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+    const playerScratch = Reflect.get(scene, 'activePlayerIds') as Set<string> | undefined;
+    const projectileScratch = Reflect.get(scene, 'activePulseIds') as Set<number> | undefined;
+
+    expect(playerScratch).toBeInstanceOf(Set);
+    expect(projectileScratch).toBeInstanceOf(Set);
+
+    scene.create();
+    scene.update();
+    expect([...playerScratch!]).toEqual(['p1', 'p2']);
+    expect([...projectileScratch!]).toEqual([9]);
+
+    bridge.publish(snapshot({ tick: 11, players: [player()], pulses: [] }));
+    scene.update();
+
+    expect(Reflect.get(scene, 'activePlayerIds')).toBe(playerScratch);
+    expect(Reflect.get(scene, 'activePulseIds')).toBe(projectileScratch);
+    expect([...playerScratch!]).toEqual(['p1']);
+    expect([...projectileScratch!]).toEqual([]);
+  });
+
   it('does not recreate consumed or result-cleared pulses from a stale snapshot', () => {
     const bridge = new Bridge();
     const authoritativePulse = {

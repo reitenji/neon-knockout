@@ -52,6 +52,8 @@ export class ArenaScene extends Phaser.Scene {
   private readonly timeline = new SnapshotTimeline();
   private readonly views = new Map<string, FighterView>();
   private readonly pulseViews = new Map<number, PulseView>();
+  private readonly activePlayerIds = new Set<string>();
+  private readonly activePulseIds = new Set<number>();
   private readonly retiredPulseIds = new Set<number>();
   private readonly consumedEventIds = new Set<number>();
   private readonly localActionAudio = new LocalActionAudioTracker();
@@ -76,6 +78,8 @@ export class ArenaScene extends Phaser.Scene {
   create(): void {
     this.cleaned = false;
     this.clearPulseViews();
+    this.activePlayerIds.clear();
+    this.activePulseIds.clear();
     this.retiredPulseIds.clear();
     this.resultPresented = false;
     this.consumedEventIds.clear();
@@ -152,7 +156,8 @@ export class ArenaScene extends Phaser.Scene {
     }, nowMs);
     const localPresentation = this.session?.getLocalPresentation() ?? null;
     this.reconcilePulses(frame.current);
-    const activeIds = new Set<string>();
+    const activeIds = this.activePlayerIds;
+    activeIds.clear();
     for (const currentPlayer of frame.current.players) {
       activeIds.add(currentPlayer.playerId);
       const isLocal = currentPlayer.playerId === this.localPlayerId;
@@ -221,11 +226,12 @@ export class ArenaScene extends Phaser.Scene {
   }
 
   private reconcilePulses(snapshot: MatchSnapshot): void {
+    const activeIds = this.activePulseIds;
+    activeIds.clear();
     if (this.resultPresented || snapshot.phase === 'FINISHED' || snapshot.winnerPlayerId !== null) {
       this.clearPulseViews();
       return;
     }
-    const activeIds = new Set<number>();
     for (const pulse of snapshot.pulses) {
       if (this.retiredPulseIds.has(pulse.projectileId)) continue;
       activeIds.add(pulse.projectileId);
@@ -258,6 +264,8 @@ export class ArenaScene extends Phaser.Scene {
     this.session = null;
     this.timeline.clear();
     this.attackTelegraphs.reset();
+    this.activePlayerIds.clear();
+    this.activePulseIds.clear();
     this.consumedEventIds.clear();
     this.retiredPulseIds.clear();
     this.resultPresented = false;

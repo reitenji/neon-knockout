@@ -23,7 +23,7 @@ export function buildNeonGameConfig(
     height: LOGICAL_HEIGHT,
     zoom: Math.max(1, Math.min(maximumPixelRatio, devicePixelRatio)),
     backgroundColor: '#02050a',
-    fps: { target: 60, limit: 60 },
+    fps: { target: 60, limit: 60, smoothStep: false },
     render: { antialias: true, roundPixels: false },
     scale: {
       mode: Phaser.Scale.FIT,
