@@ -110,10 +110,6 @@ class FakePeer implements ServerPeer {
     return this.reliableResult;
   }
 
-  async sampleRttMs(): Promise<number | null> {
-    return null;
-  }
-
   onFastMessage(listener: MessageListener): () => void {
     this.fastListeners.add(listener);
     return () => this.fastListeners.delete(listener);

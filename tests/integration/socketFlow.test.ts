@@ -91,10 +91,6 @@ class IntegrationPeer implements ServerPeer {
     return this.reliableResult;
   }
 
-  async sampleRttMs(): Promise<number | null> {
-    return null;
-  }
-
   onFastMessage(listener: (serialized: string) => void): () => void {
     this.fastListeners.add(listener);
     return () => this.fastListeners.delete(listener);
@@ -621,11 +617,18 @@ describe('Socket.IO FFA game server flow', () => {
 
     await waitFor(() => peer.heartbeatAcknowledgements >= 6, 'six varying WebRTC heartbeat acknowledgements', 7_500);
     server.rooms.advance(STEP_MS);
-    expect(snapshot(match.roomCode).network[match.host.playerId]).toMatchObject({
-      currentMs: 20,
-      medianMs: 20,
+    const webrtcNetwork = snapshot(match.roomCode).network[match.host.playerId];
+    expect(webrtcNetwork).toMatchObject({
+      currentMs: expect.any(Number),
+      medianMs: expect.any(Number),
       transport: 'webrtc'
     });
+    if (!webrtcNetwork || webrtcNetwork.currentMs === null || webrtcNetwork.medianMs === null) {
+      throw new Error('Expected a fresh WebRTC heartbeat RTT sample.');
+    }
+    expect(webrtcNetwork.currentMs).toBe(webrtcNetwork.medianMs);
+    expect(webrtcNetwork.currentMs).toBeGreaterThanOrEqual(0);
+    expect(webrtcNetwork.currentMs).toBeLessThanOrEqual(100);
 
     await harness().dropWebRtc(match.host.playerId);
     await waitFor(() => {

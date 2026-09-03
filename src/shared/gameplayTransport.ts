@@ -11,7 +11,6 @@ export const ICE_GATHER_TIMEOUT_MS = 3_000;
 export const ACTIVATION_TIMEOUT_MS = 5_000;
 export const HEARTBEAT_INTERVAL_MS = 1_000;
 export const MISSED_HEARTBEATS_BEFORE_FALLBACK = 3;
-export const RTT_SAMPLE_INTERVAL_MS = 2_000;
 export const RTT_FRESHNESS_MS = 6_000;
 export const RTT_SAMPLE_LIMIT = 5;
 

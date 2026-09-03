@@ -82,8 +82,6 @@ class FakeDataChannel {
   }
 }
 
-type FakeStatsReport = Readonly<Record<string, unknown>>;
-
 class FakePeerConnection {
   static instances: FakePeerConnection[] = [];
 
@@ -91,7 +89,6 @@ class FakePeerConnection {
   readonly connectionStateChange = new FakeEvent<[string]>();
   readonly calls: string[] = [];
   readonly remoteDescriptions: unknown[] = [];
-  stats = new Map<string, FakeStatsReport>();
   closeCalls = 0;
 
   constructor(readonly configuration: unknown) {
@@ -111,10 +108,6 @@ class FakePeerConnection {
   async setLocalDescription(): Promise<Readonly<{ toJSON: () => Readonly<{ type: 'answer'; sdp: string }> }>> {
     this.calls.push('setLocalDescription');
     return { toJSON: () => ({ type: 'answer', sdp: 'complete-answer' }) };
-  }
-
-  async getStats(): Promise<Map<string, FakeStatsReport>> {
-    return this.stats;
   }
 
   async close(): Promise<void> {
@@ -368,54 +361,6 @@ describe.sequential('createWeriftServerPeer', () => {
     expect(closeListener).not.toHaveBeenCalled();
   });
 
-  it('prefers the transport-selected candidate-pair RTT rounded to milliseconds', async () => {
-    const { serverPeer, peer } = await loadFakeAdapter();
-    peer.stats = new Map([
-      ['transport', { type: 'transport', selectedCandidatePairId: 'selected' }],
-      ['failed', { type: 'candidate-pair', state: 'failed', nominated: true, currentRoundTripTime: 0.001 }],
-      ['not-nominated', { type: 'candidate-pair', state: 'succeeded', nominated: false, currentRoundTripTime: 0.002 }],
-      ['negative', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: -1 }],
-      ['selected', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: 0.0126 }],
-      ['later', { type: 'candidate-pair', state: 'succeeded', currentRoundTripTime: 0.099 }]
-    ]);
-
-    try {
-      await expect(serverPeer.sampleRttMs()).resolves.toBe(13);
-    } finally {
-      await serverPeer.close();
-    }
-  });
-
-  it('prefers the transport-selected candidate pair over an earlier succeeded pair', async () => {
-    const { serverPeer, peer } = await loadFakeAdapter();
-    peer.stats = new Map([
-      ['transport', { type: 'transport', selectedCandidatePairId: 'candidate-pair:selected' }],
-      ['candidate-pair:earlier', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: 0.098 }],
-      ['candidate-pair:selected', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: 0.004 }]
-    ]);
-
-    try {
-      await expect(serverPeer.sampleRttMs()).resolves.toBe(4);
-    } finally {
-      await serverPeer.close();
-    }
-  });
-
-  it.each([
-    ['empty stats', new Map<string, FakeStatsReport>()],
-    ['no candidate pair', new Map([['peer', { type: 'peer-connection' }]])],
-    ['no current RTT', new Map([['pair', { type: 'candidate-pair', state: 'succeeded', nominated: true }]])],
-    ['non-finite RTT', new Map([['pair', { type: 'candidate-pair', state: 'succeeded', nominated: true, currentRoundTripTime: Infinity }]])]
-  ])('returns null for %s', async (_label, stats) => {
-    const { serverPeer, peer } = await loadFakeAdapter();
-    peer.stats = stats;
-
-    try {
-      await expect(serverPeer.sampleRttMs()).resolves.toBeNull();
-    } finally {
-      await serverPeer.close();
-    }
-  });
 });
 
 describe.sequential('Chromium interoperability', () => {

@@ -89,31 +89,6 @@ class WeriftServerPeer implements ServerPeer {
     return this.send(this.reliableChannel, serialized);
   }
 
-  async sampleRttMs(): Promise<number | null> {
-    if (this.disposed) return null;
-    const reports = await this.peer.getStats();
-    const selectedPair = this.selectedCandidatePair(reports);
-    if (selectedPair) {
-      const roundTripTime = selectedPair.currentRoundTripTime;
-      if (typeof roundTripTime === 'number' && Number.isFinite(roundTripTime) && roundTripTime >= 0) {
-        return Math.round(roundTripTime * 1000);
-      }
-    }
-    for (const report of reports.values()) {
-      if (report.type !== 'candidate-pair') continue;
-      const candidatePair = report as typeof report & {
-        state?: unknown;
-        nominated?: unknown;
-        currentRoundTripTime?: unknown;
-      };
-      if (candidatePair.state !== 'succeeded' || candidatePair.nominated === false) continue;
-      const roundTripTime = candidatePair.currentRoundTripTime;
-      if (typeof roundTripTime !== 'number' || !Number.isFinite(roundTripTime) || roundTripTime < 0) continue;
-      return Math.round(roundTripTime * 1000);
-    }
-    return null;
-  }
-
   onFastMessage(listener: MessageListener): () => void {
     return this.addListener(this.fastListeners, listener);
   }
@@ -171,26 +146,6 @@ class WeriftServerPeer implements ServerPeer {
       for (const listener of [...listeners]) listener(message);
     });
     this.subscriptions.push(subscription.unSubscribe);
-  }
-
-  private selectedCandidatePair(
-    reports: Awaited<ReturnType<RTCPeerConnection['getStats']>>
-  ): { currentRoundTripTime?: unknown } | null {
-    for (const report of reports.values()) {
-      if (report.type !== 'transport') continue;
-      const transport = report as typeof report & { selectedCandidatePairId?: unknown };
-      if (typeof transport.selectedCandidatePairId !== 'string') continue;
-      const selected = reports.get(transport.selectedCandidatePairId);
-      if (!selected || selected.type !== 'candidate-pair') continue;
-      const candidatePair = selected as typeof selected & {
-        state?: unknown;
-        nominated?: unknown;
-        currentRoundTripTime?: unknown;
-      };
-      if (candidatePair.state !== 'succeeded' || candidatePair.nominated === false) continue;
-      return candidatePair;
-    }
-    return null;
   }
 
   private send(channel: RTCDataChannel | null, serialized: string): PeerSendResult {

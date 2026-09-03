@@ -4,7 +4,6 @@ import {
   HEARTBEAT_INTERVAL_MS,
   MISSED_HEARTBEATS_BEFORE_FALLBACK,
   RTT_FRESHNESS_MS,
-  RTT_SAMPLE_INTERVAL_MS,
   RTT_SAMPLE_LIMIT,
   clientFastMessageSchema,
   clientReliableMessageSchema,
@@ -56,7 +55,6 @@ export type GameplayTransportHubOptions = Readonly<{
 }>;
 
 type RttSample = Readonly<{ value: number; sampledAt: number }>;
-type RttSamplingOwner = Readonly<{ peer: ServerPeer; generationId: string }>;
 type PeerClosureResult = Readonly<{ ok: true }> | Readonly<{ ok: false; error: unknown }>;
 
 type SessionRecord = {
@@ -68,13 +66,12 @@ type SessionRecord = {
   activationExpiresAt: number | null;
   activationTimer: ReturnType<typeof setTimeout> | null;
   heartbeatTimer: ReturnType<typeof setInterval> | null;
-  rttTimer: ReturnType<typeof setInterval> | null;
   rttFreshnessTimer: ReturnType<typeof setTimeout> | null;
   heartbeatNonce: number;
   pendingHeartbeatNonce: number | null;
+  pendingHeartbeatSentAtMs: number | null;
   missedHeartbeats: number;
   rttSamples: RttSample[];
-  rttSampling: RttSamplingOwner | null;
   rttFresh: boolean;
   fallbackTriggered: boolean;
   negotiationSequence: number;
@@ -148,13 +145,12 @@ export class GameplayTransportHub {
       activationExpiresAt: null,
       activationTimer: null,
       heartbeatTimer: null,
-      rttTimer: null,
       rttFreshnessTimer: null,
       heartbeatNonce: 0,
       pendingHeartbeatNonce: null,
+      pendingHeartbeatSentAtMs: null,
       missedHeartbeats: 0,
       rttSamples: [],
-      rttSampling: null,
       rttFresh: false,
       fallbackTriggered: false,
       negotiationSequence: 0,
@@ -197,6 +193,7 @@ export class GameplayTransportHub {
     record.fallbackTriggered = false;
     record.heartbeatNonce = 0;
     record.pendingHeartbeatNonce = null;
+    record.pendingHeartbeatSentAtMs = null;
     record.missedHeartbeats = 0;
     record.rttSamples = [];
     try {
@@ -267,7 +264,6 @@ export class GameplayTransportHub {
     safeInvoke(() => record.session.setNetworkMode('webrtc'));
     safeInvoke(() => record.session.emitMode({ generationId, mode: 'webrtc' }));
     this.startHeartbeat(record, peer, generationId);
-    this.startRttSampling(record, peer, generationId);
     return true;
   }
 
@@ -411,9 +407,13 @@ export class GameplayTransportHub {
       !parsed.success
       || parsed.data.generationId !== generationId
       || parsed.data.nonce !== record.pendingHeartbeatNonce
+      || record.pendingHeartbeatSentAtMs === null
     ) return;
+    const sentAt = record.pendingHeartbeatSentAtMs;
     record.pendingHeartbeatNonce = null;
+    record.pendingHeartbeatSentAtMs = null;
     record.missedHeartbeats = 0;
+    this.recordRttSample(record, this.now() - sentAt);
   }
 
   private publishToSession(record: SessionRecord, publication: TransportPublication): void {
@@ -529,44 +529,13 @@ export class GameplayTransportHub {
         return;
       }
       record.pendingHeartbeatNonce = nonce;
+      record.pendingHeartbeatSentAtMs = this.now();
     }, HEARTBEAT_INTERVAL_MS);
   }
 
-  private startRttSampling(record: SessionRecord, peer: ServerPeer, generationId: string): void {
-    record.rttTimer = setInterval(() => {
-      void this.sampleRtt(record, peer, generationId);
-    }, RTT_SAMPLE_INTERVAL_MS);
-  }
-
-  private async sampleRtt(record: SessionRecord, peer: ServerPeer, generationId: string): Promise<void> {
-    if (
-      record.rttSampling !== null
-      || !this.isCurrentPeer(record, peer, generationId)
-      || record.mode !== 'webrtc'
-    ) return;
-    const owner: RttSamplingOwner = { peer, generationId };
-    record.rttSampling = owner;
-    let rttMs: number | null;
-    try {
-      rttMs = await peer.sampleRttMs();
-    } catch {
-      if (record.rttSampling === owner) record.rttSampling = null;
-      if (this.isCurrentPeer(record, peer, generationId)) {
-        void this.transitionToFallback(record, generationId, peer);
-      }
-      return;
-    }
-    if (record.rttSampling === owner) record.rttSampling = null;
-    if (
-      !this.isCurrentPeer(record, peer, generationId)
-      || record.mode !== 'webrtc'
-      || rttMs === null
-      || !Number.isFinite(rttMs)
-      || rttMs < 0
-    ) return;
-
+  private recordRttSample(record: SessionRecord, elapsedMs: number): void {
     const sampledAt = this.now();
-    record.rttSamples.push({ value: Math.round(rttMs), sampledAt });
+    record.rttSamples.push({ value: Math.round(Math.max(0, elapsedMs)), sampledAt });
     if (record.rttSamples.length > RTT_SAMPLE_LIMIT) {
       record.rttSamples.splice(0, record.rttSamples.length - RTT_SAMPLE_LIMIT);
     }
@@ -579,7 +548,6 @@ export class GameplayTransportHub {
     record.rttFreshnessTimer = setTimeout(() => {
       if (
         !record.rttFresh
-        || !this.isCurrentPeer(record, peer, generationId)
         || record.mode !== 'webrtc'
       ) return;
       const latest = record.rttSamples.at(-1);
@@ -618,8 +586,8 @@ export class GameplayTransportHub {
     for (const unsubscribe of record.unsubscribers.splice(0)) safeInvoke(unsubscribe);
     record.activationExpiresAt = null;
     record.pendingHeartbeatNonce = null;
+    record.pendingHeartbeatSentAtMs = null;
     record.missedHeartbeats = 0;
-    if (record.rttSampling?.peer === peer) record.rttSampling = null;
     record.rttFresh = false;
     record.rttSamples = [];
     return this.closePeer(record, peer);
@@ -654,11 +622,9 @@ export class GameplayTransportHub {
   private clearPeerTimers(record: SessionRecord): void {
     if (record.activationTimer) clearTimeout(record.activationTimer);
     if (record.heartbeatTimer) clearInterval(record.heartbeatTimer);
-    if (record.rttTimer) clearInterval(record.rttTimer);
     if (record.rttFreshnessTimer) clearTimeout(record.rttFreshnessTimer);
     record.activationTimer = null;
     record.heartbeatTimer = null;
-    record.rttTimer = null;
     record.rttFreshnessTimer = null;
   }
 
@@ -679,8 +645,8 @@ export class GameplayTransportHub {
       for (const unsubscribe of record.unsubscribers.splice(0)) safeInvoke(unsubscribe);
       record.peer = null;
       record.pendingHeartbeatNonce = null;
+      record.pendingHeartbeatSentAtMs = null;
       record.rttSamples = [];
-      record.rttSampling = null;
       if (record.mode === 'webrtc' || record.rttFresh) {
         safeInvoke(() => record.session.clearNetworkSample());
       }

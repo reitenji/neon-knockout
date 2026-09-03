@@ -43,10 +43,6 @@ class LifecyclePeer implements ServerPeer {
     return 'closed';
   }
 
-  async sampleRttMs(): Promise<number | null> {
-    return null;
-  }
-
   onFastMessage(listener: (serialized: string) => void): () => void {
     this.fastListeners.add(listener);
     return () => this.fastListeners.delete(listener);
