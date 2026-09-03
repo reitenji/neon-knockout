@@ -66,7 +66,7 @@ The player should see smoother motion and a lower, more stable application Ping 
 
 ## Outcomes & Retrospective
 
-Tasks 1-6 and the automated portion of Task 7 are complete. The fallback queue is bounded, Ping is server-timed on each active gameplay transport, the reliable WebRTC heartbeat owns only liveness, authoritative scheduling is deadline-anchored, remote presentation buffering is capped at 24 ms, and measured Phaser hot paths stay inside one-frame budgets. Independent whole-branch review and production restart are complete; remote publication and physical-device observation remain distinct gates.
+Tasks 1-7 are complete. The fallback queue is bounded, Ping is server-timed on each active gameplay transport, the reliable WebRTC heartbeat owns only liveness, authoritative scheduling is deadline-anchored, remote presentation buffering is capped at 24 ms, and measured Phaser hot paths stay inside one-frame budgets. Independent whole-branch review, production restart, and remote publication are complete; physical-device observation remains a distinct acceptance step.
 
 Commands and results:
 
@@ -84,6 +84,7 @@ Commands and results:
 - Independent whole-branch review found one important fallback risk: a throwing snapshot subscriber could skip its acknowledgement and leave `SocketSnapshotPacer` permanently in flight. A red regression test reproduced zero acknowledgements, the client now acknowledges in `finally`, 85/85 focused tests passed, and follow-up review reported no findings.
 - Publication-candidate Chromium WebRTC/fallback acceptance passed 2/2 after the review repair. Same-host WebRTC Ping was 3-4 ms initially and 4-6 ms settled; forced WebSocket fallback was 14 ms initially and 3 ms settled.
 - Production restart replaced PID 15884 with PID 81786 on `*:4174`; both `http://127.0.0.1:4174/health` and `http://192.168.68.52:4174/health` returned `status: ok` from the new process.
+- The feature branch and public `main` were pushed together and `git ls-remote` confirmed that both remote references resolve to the same publication history.
 
 Across the final three corrected runs, median-of-run-medians was 13.8 ms for WebRTC and 12.5 ms for fallback; median-of-run-p95 values was 30.0 ms WebRTC and 27.6 ms fallback. Every run passed the <=20 ms median / <40 ms p95 input gate and the >=58 FPS / <25 ms p95 frame gate. Physical phone/AP comparison remains pending and is not inferred from same-host data.
 
@@ -232,7 +233,7 @@ Finally, run focused suites, the full verification gate, and repeated real-brows
 - [x] Run WebRTC, forced fallback, desktop/mobile Chromium, and mobile WebKit acceptance plus the simultaneous ring-out performance case.
 - [x] Measure the displayed/gameplay-path Ping in both WebRTC and fallback modes; report same-host automation separately from physical Wi-Fi observations.
 - [x] Obtain task and whole-branch review, fix load-bearing findings, and rerun affected gates.
-- [ ] Build production, restart `com.reitenji.neon-relay.lan`, prove the listener and localhost/LAN health, then push the feature branch and authorized public `main` and verify remote refs.
+- [x] Build production, restart `com.reitenji.neon-relay.lan`, prove the listener and localhost/LAN health, then push the feature branch and authorized public `main` and verify remote refs.
 
 ## Validation and Acceptance
 
