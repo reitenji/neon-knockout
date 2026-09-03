@@ -309,9 +309,9 @@ describe('PredictionBuffer', () => {
     highBudget.setRollbackWindow(99);
 
     expect(lowBudget.reconcile(canonical, 20, 16).result.rollbackFrames).toBe(2);
-    expect(lowBudget.pendingSequences()).toEqual([10, 11]);
+    expect(lowBudget.pendingSequences()).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     expect(highBudget.reconcile(canonical, 20, 16).result.rollbackFrames).toBe(10);
-    expect(highBudget.pendingSequences()).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    expect(highBudget.pendingSequences()).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
   });
 
   it('keeps normal continuous pending history at twelve newest frames', () => {
@@ -323,20 +323,20 @@ describe('PredictionBuffer', () => {
     expect(prediction.pendingSequences()).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   });
 
-  it('compacts only obsolete continuous inputs while retaining quick, heavy-transition, and dash edges', () => {
+  it('compacts only obsolete movement while retaining action edges and an in-window heavy contribution', () => {
     const prediction = new PredictionBuffer('p-1');
     const canonical = player({ position: { x: 640, y: 360 } });
     const overrides: Record<number, Partial<InputFrame>> = {
       1: { quick: true },
-      3: { heavy: true },
-      4: { heavy: true },
-      7: { dash: true }
+      3: { dash: true },
+      9: { heavy: true },
+      10: { heavy: true }
     };
     for (let seq = 0; seq < 16; seq += 1) {
       prediction.predict(frame(seq, { moveX: 1, ...overrides[seq] }), canonical, 16);
     }
 
-    expect(prediction.pendingSequences()).toEqual([1, 3, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
+    expect(prediction.pendingSequences()).toEqual([1, 3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]);
   });
 
   it('temporarily exceeds twelve records for a realistic unacknowledged edge burst', () => {
@@ -361,7 +361,81 @@ describe('PredictionBuffer', () => {
       prediction.predict(frame(seq, { moveX: 1, ...overrides[seq] }), canonical, 16);
     }
 
-    expect(prediction.pendingSequences()).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 23, 24]);
+    expect(prediction.pendingSequences()).toEqual([0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 21, 22, 23, 24]);
+  });
+
+  it('replays only the active sequence suffix and reports exactly the four processed records', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const committed = player({
+      position: { x: 640, y: 360 },
+      action: { ...idleAction, kind: 'QUICK_1', phase: 'ACTIVE', comboStep: 1 }
+    });
+    const overrides: Record<number, Partial<InputFrame>> = {
+      0: { quick: true },
+      2: { dash: true },
+      4: { heavy: true },
+      5: { heavy: true },
+      8: { quick: true },
+      10: { dash: true },
+      12: { heavy: true },
+      13: { heavy: true },
+      16: { quick: true },
+      18: { dash: true },
+      20: { heavy: true },
+      21: { heavy: true },
+      24: { quick: true }
+    };
+    for (let seq = 0; seq < 25; seq += 1) {
+      prediction.predict(frame(seq, { moveX: 1, ...overrides[seq] }), committed, 10);
+    }
+    prediction.setRollbackWindow(4);
+
+    const reconciled = prediction.reconcile(committed, 45, 10);
+
+    expect(prediction.pendingSequences()).toEqual([
+      0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 21, 22, 23, 24
+    ]);
+    expect(reconciled.result.rollbackFrames).toBe(4);
+    expect(reconciled.presentation.velocity).toEqual({ x: 96, y: 0 });
+  });
+
+  it('preserves the hand-derived heavy charge contributed by the active ten-frame suffix', () => {
+    const prediction = new PredictionBuffer('p-1');
+    const canonical = player({ position: { x: 640, y: 360 } });
+    const edgeBurst: Record<number, Partial<InputFrame>> = {
+      0: { quick: true },
+      2: { dash: true },
+      4: { heavy: true },
+      5: { heavy: true },
+      8: { quick: true },
+      10: { dash: true },
+      12: { heavy: true },
+      13: { heavy: true },
+      16: { quick: true },
+      18: { dash: true },
+      20: { heavy: true },
+      21: { heavy: true },
+      24: { quick: true }
+    };
+    for (let seq = 0; seq < 25; seq += 1) {
+      prediction.predict(frame(seq, edgeBurst[seq]), canonical, 10);
+    }
+    for (let seq = 25; seq < 40; seq += 1) {
+      prediction.predict(frame(seq, { heavy: true }), canonical, 10);
+    }
+    prediction.predict(frame(40), canonical, 10);
+    prediction.setRollbackWindow(10);
+
+    const reconciled = prediction.reconcile(canonical, 46, 10);
+
+    expect(reconciled.result.rollbackFrames).toBe(10);
+    expect(reconciled.presentation.actionStart).toEqual({
+      ...idleAction,
+      kind: 'HEAVY',
+      phase: 'WINDUP',
+      chargeMs: 90,
+      lockedFacing: { x: 1, y: 0 }
+    });
   });
 
   it('drops acknowledgements before replaying retained inputs in monotonic sequence order', () => {

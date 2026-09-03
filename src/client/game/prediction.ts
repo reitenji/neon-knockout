@@ -344,12 +344,16 @@ export class PredictionBuffer {
       this.pending.length > 0 &&
       (this.pending[0]?.frame.seq ?? Number.POSITIVE_INFINITY) <= authoritativePlayer.lastProcessedInputSeq
     ) this.pending.shift();
-    this.compactPending(this.rollbackWindowFrames);
+    const newestPendingSequence = this.pending[this.pending.length - 1]?.frame.seq;
+    const replayStartSequence = newestPendingSequence === undefined
+      ? Number.POSITIVE_INFINITY
+      : newestPendingSequence - this.rollbackWindowFrames + 1;
+    const replayPending = this.pending.filter(({ frame }) => frame.seq >= replayStartSequence);
 
     let replay = runtimeOf(authoritativePlayer);
     let replayedAction: MatchAction | null = null;
-    this.lastRollbackFrames = Math.min(this.pending.length, this.rollbackWindowFrames);
-    for (const pending of this.pending) {
+    this.lastRollbackFrames = replayPending.length;
+    for (const pending of replayPending) {
       const advanced = advanceRuntime(
         replay,
         authoritativePlayer,
@@ -427,15 +431,21 @@ export class PredictionBuffer {
   private compactPending(capacity: number): void {
     while (this.pending.length > capacity) {
       // Action edges outrank the numeric limit; only obsolete continuous history may be removed.
-      let newestContinuousIndex = -1;
+      const newestSequence = this.pending[this.pending.length - 1]?.frame.seq ?? 0;
+      const oldestHeavyReplaySequence = newestSequence - MAX_ROLLBACK_FRAMES + 1;
+      let newestMovementIndex = -1;
       for (let index = this.pending.length - 1; index >= 0; index -= 1) {
-        if (this.pending[index]?.actionEdge === false) {
-          newestContinuousIndex = index;
+        const candidate = this.pending[index];
+        if (candidate?.actionEdge === false && !candidate.frame.heavy) {
+          newestMovementIndex = index;
           break;
         }
       }
       const removableIndex = this.pending.findIndex(
-        ({ actionEdge }, index) => !actionEdge && index !== newestContinuousIndex
+        ({ actionEdge, frame }, index) =>
+          !actionEdge &&
+          index !== newestMovementIndex &&
+          (!frame.heavy || frame.seq < oldestHeavyReplaySequence)
       );
       if (removableIndex < 0) return;
       this.pending.splice(removableIndex, 1);
