@@ -80,12 +80,8 @@ class FakePeer implements ServerPeer {
   readonly reliableListeners = new Set<MessageListener>();
   readonly closedListeners = new Set<() => void>();
   ready = false;
-  autoAcknowledgeHeartbeats = false;
   fastResult: PeerSendResult = 'sent';
   reliableResult: PeerSendResult = 'sent';
-  rttSamples: Array<number | null> = [];
-  rttDeferreds: Array<Deferred<number | null>> = [];
-  rttSampleCalls = 0;
   negotiationDeferred: Deferred<RtcAnswer> | null = null;
   listenerRegistrationFailure: ListenerRegistrationFailure = null;
   closeCalls = 0;
@@ -110,24 +106,12 @@ class FakePeer implements ServerPeer {
   sendReliable(serialized: string): PeerSendResult {
     if (this.reliableResult === 'sent') {
       this.reliableSent.push(serialized);
-      const message = JSON.parse(serialized) as { kind?: unknown; nonce?: unknown };
-      if (this.autoAcknowledgeHeartbeats && message.kind === 'heartbeat' && typeof message.nonce === 'number') {
-        void Promise.resolve().then(() => this.receiveReliable({
-          version: 1,
-          generationId: this.generationId,
-          kind: 'heartbeat-ack',
-          nonce: message.nonce
-        }));
-      }
     }
     return this.reliableResult;
   }
 
   async sampleRttMs(): Promise<number | null> {
-    this.rttSampleCalls += 1;
-    const pending = this.rttDeferreds.shift();
-    if (pending) return pending.promise;
-    return this.rttSamples.shift() ?? null;
+    return null;
   }
 
   onFastMessage(listener: MessageListener): () => void {
@@ -303,9 +287,9 @@ function eventSafety(matchEpoch = 2, publishedEvent: GameEvent = event): MatchEv
 
 const hubs: GameplayTransportHub[] = [];
 
-function createSubject() {
+function createSubject(now: () => number = Date.now) {
   const factory = new FakePeerFactory();
-  const hub = new GameplayTransportHub({ peerFactory: factory.create, udpPortRange: UDP_PORT_RANGE });
+  const hub = new GameplayTransportHub({ peerFactory: factory.create, udpPortRange: UDP_PORT_RANGE, now });
   hubs.push(hub);
   return { hub, factory };
 }
@@ -675,63 +659,65 @@ describe('GameplayTransportHub', () => {
     expect(hub.modeForPlayer('p1')).toBe('websocket');
   });
 
-  it('samples RTT every two seconds, reports the median of the last five, and clears it after six stale seconds', async () => {
-    const { hub, factory } = createSubject();
+  it('publishes one server-timed RTT per matching heartbeat acknowledgement using the latest-five median', async () => {
+    let serverNow = 0;
+    const advanceServerClock = async (durationMs: number): Promise<void> => {
+      serverNow += durationMs;
+      await vi.advanceTimersByTimeAsync(durationMs);
+    };
+    const { hub, factory } = createSubject(() => serverNow);
     const first = session();
     hub.attachSession(first.session);
     const peer = await negotiateAndActivate(hub, factory);
-    peer.autoAcknowledgeHeartbeats = true;
-    peer.rttSamples.push(50, 10, 30, 100, 20, 0, null, null, null);
 
-    await vi.advanceTimersByTimeAsync(12_000);
-    expect(first.networkSamples).toEqual([
-      { medianMs: 50, sampledAt: 2_000 },
-      { medianMs: 30, sampledAt: 4_000 },
-      { medianMs: 30, sampledAt: 6_000 },
-      { medianMs: 40, sampledAt: 8_000 },
-      { medianMs: 30, sampledAt: 10_000 },
-      { medianMs: 20, sampledAt: 12_000 }
-    ]);
-
-    await vi.advanceTimersByTimeAsync(6_000);
-    expect(first.networkClearTimes).toEqual([18_000]);
-  });
-
-  it('does not let a deferred RTT completion from a replaced generation unlock the new peer sampling lock', async () => {
-    const { hub, factory } = createSubject();
-    const first = session();
-    hub.attachSession(first.session);
-    const oldPeer = await negotiateAndActivate(hub, factory);
-    oldPeer.autoAcknowledgeHeartbeats = true;
-    const oldSample = deferred<number | null>();
-    oldPeer.rttDeferreds.push(oldSample);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(oldPeer.rttSampleCalls).toBe(1);
-
-    await hub.negotiate('s1', {
-      generationId: SECOND_GENERATION,
-      offer: { type: 'offer', sdp: 'replacement' }
+    await advanceServerClock(1_000);
+    const firstHeartbeat = JSON.parse(peer.reliableSent.at(-1)!);
+    await advanceServerClock(50);
+    peer.receiveReliable({
+      version: 1,
+      generationId: FIRST_GENERATION,
+      kind: 'heartbeat-ack',
+      nonce: firstHeartbeat.nonce
     });
-    const newPeer = factory.peers[1]!;
-    newPeer.openBothChannels();
-    newPeer.autoAcknowledgeHeartbeats = true;
-    const newSample = deferred<number | null>();
-    newPeer.rttDeferreds.push(newSample);
-    expect(hub.activate('s1', { generationId: SECOND_GENERATION })).toBe(true);
-    await vi.advanceTimersByTimeAsync(2_000);
-    expect(newPeer.rttSampleCalls).toBe(1);
+    expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 1_050 }]);
 
-    oldSample.resolve(77);
-    await Promise.resolve();
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(2_000);
-    const callsWhileNewSampleWasPending = newPeer.rttSampleCalls;
-    newSample.resolve(25);
-    await Promise.resolve();
-    await Promise.resolve();
+    peer.receiveReliable({
+      version: 1,
+      generationId: FIRST_GENERATION,
+      kind: 'heartbeat-ack',
+      nonce: firstHeartbeat.nonce
+    });
+    peer.receiveReliable({
+      version: 1,
+      generationId: FIRST_GENERATION,
+      kind: 'heartbeat-ack',
+      nonce: firstHeartbeat.nonce + 1
+    });
+    expect(first.networkSamples).toEqual([{ medianMs: 50, sampledAt: 1_050 }]);
 
-    expect(callsWhileNewSampleWasPending).toBe(1);
-    expect(first.networkSamples).toEqual([{ medianMs: 25, sampledAt: 6_000 }]);
+    let nextHeartbeatAt = 2_000;
+    for (const [delayMs, expectedMedianMs] of [[10, 30], [30, 30], [100, 40], [20, 30], [0, 20]] as const) {
+      await advanceServerClock(nextHeartbeatAt - serverNow);
+      const heartbeat = JSON.parse(peer.reliableSent.at(-1)!);
+      await advanceServerClock(delayMs);
+      peer.receiveReliable({
+        version: 1,
+        generationId: FIRST_GENERATION,
+        kind: 'heartbeat-ack',
+        nonce: heartbeat.nonce
+      });
+      expect(first.networkSamples.at(-1)?.medianMs).toBe(expectedMedianMs);
+      nextHeartbeatAt += 1_000;
+    }
+
+    expect(first.networkSamples).toEqual([
+      { medianMs: 50, sampledAt: 1_050 },
+      { medianMs: 30, sampledAt: 2_010 },
+      { medianMs: 30, sampledAt: 3_030 },
+      { medianMs: 40, sampledAt: 4_100 },
+      { medianMs: 30, sampledAt: 5_020 },
+      { medianMs: 20, sampledAt: 6_000 }
+    ]);
   });
 
   it('isolates room publications and peer failure to their server-owned sessions', async () => {

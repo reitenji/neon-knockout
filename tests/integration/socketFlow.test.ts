@@ -48,10 +48,9 @@ class IntegrationPeer implements ServerPeer {
   failNegotiation = false;
   fastResult: PeerSendResult = 'sent';
   reliableResult: PeerSendResult = 'sent';
-  rttMs: number | null = 12;
-  readonly rttSamples: Array<number | null> = [];
-  rttSampleCalls = 0;
   autoAcknowledgeHeartbeats = false;
+  readonly heartbeatAcknowledgementDelaysMs: number[] = [];
+  heartbeatAcknowledgements = 0;
   closeCalls = 0;
   negotiationDeferred: Deferred<IntegrationAnswer> | null = null;
 
@@ -77,20 +76,23 @@ class IntegrationPeer implements ServerPeer {
       this.reliableSent.push(serialized);
       const message = JSON.parse(serialized) as { kind?: unknown; nonce?: unknown };
       if (this.autoAcknowledgeHeartbeats && message.kind === 'heartbeat' && typeof message.nonce === 'number') {
-        queueMicrotask(() => this.receiveReliable({
-          version: GAMEPLAY_PROTOCOL_VERSION,
-          generationId: this.generationId,
-          kind: 'heartbeat-ack',
-          nonce: message.nonce
-        }));
+        const delayMs = this.heartbeatAcknowledgementDelaysMs.shift() ?? 0;
+        setTimeout(() => {
+          this.heartbeatAcknowledgements += 1;
+          this.receiveReliable({
+            version: GAMEPLAY_PROTOCOL_VERSION,
+            generationId: this.generationId,
+            kind: 'heartbeat-ack',
+            nonce: message.nonce
+          });
+        }, delayMs);
       }
     }
     return this.reliableResult;
   }
 
   async sampleRttMs(): Promise<number | null> {
-    this.rttSampleCalls += 1;
-    return this.rttSamples.length > 0 ? this.rttSamples.shift()! : this.rttMs;
+    return null;
   }
 
   onFastMessage(listener: (serialized: string) => void): () => void {
@@ -611,13 +613,13 @@ describe('Socket.IO FFA game server flow', () => {
     expect(peer.closeCalls).toBe(1);
   });
 
-  it('publishes the hub latest-five WebRTC median once, then resumes raw Socket.IO RTT aggregation', async () => {
+  it('publishes the heartbeat-derived latest-five WebRTC median once, then resumes raw Socket.IO RTT aggregation', async () => {
     const match = await startMatch();
     const peer = await negotiateAndActivate(match.hostClient);
     peer.autoAcknowledgeHeartbeats = true;
-    peer.rttSamples.push(50, 10, 30, 100, 20, 0);
+    peer.heartbeatAcknowledgementDelaysMs.push(50, 10, 30, 100, 20, 0);
 
-    await waitFor(() => peer.rttSampleCalls >= 6, 'six varying WebRTC RTT samples', 13_000);
+    await waitFor(() => peer.heartbeatAcknowledgements >= 6, 'six varying WebRTC heartbeat acknowledgements', 7_500);
     server.rooms.advance(STEP_MS);
     expect(snapshot(match.roomCode).network[match.host.playerId]).toMatchObject({
       currentMs: 20,
