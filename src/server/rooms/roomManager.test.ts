@@ -698,6 +698,44 @@ describe('RoomManager FFA lifecycle', () => {
       .toBe(0);
   });
 
+  it('preserves the original bounded view tick when an unprocessed quick edge is followed by a held frame', () => {
+    const subject = fixture();
+    const { roomCode, players } = readyAndStart(subject);
+    advanceCountdown(subject);
+    const attackerId = players[0].playerId;
+    const targetId = players[1].playerId;
+
+    subject.harness.placePlayer(roomCode, attackerId, { x: 600, y: 360 }, { x: 1, y: 0 });
+    subject.harness.placePlayer(roomCode, targetId, { x: 650, y: 360 }, { x: -1, y: 0 });
+    const visibleTick = subject.manager.debugRoom(roomCode)!.tick!;
+    subject.manager.advance(67);
+    subject.harness.placePlayer(roomCode, targetId, { x: 900, y: 360 }, { x: -1, y: 0 });
+    const heldTick = subject.manager.debugRoom(roomCode)!.tick!;
+    expect(heldTick).toBeGreaterThan(visibleTick);
+
+    subject.publications.length = 0;
+    subject.manager.applyInput('c-1', { ...idleInput(0), quick: true, viewTick: visibleTick });
+    subject.manager.applyInput('c-1', { ...idleInput(1), quick: true, viewTick: heldTick });
+    subject.manager.advance(50);
+
+    expect(subject.manager.debugRoom(roomCode)?.playerViewTicks?.[attackerId]).toBe(visibleTick);
+    expect(subject.snapshot(roomCode).players.find((player) => player.playerId === attackerId)?.action.kind)
+      .toBe('QUICK_1');
+
+    subject.manager.applyInput('c-1', { ...idleInput(2), viewTick: heldTick });
+    for (let index = 0; index < 40; index += 1) subject.manager.advance(50);
+    const hits = subject.publications.flatMap((publication) =>
+      publication.type === 'MATCH_EVENT' && publication.event.type === 'HIT'
+        ? [publication.event]
+        : []);
+
+    expect(hits).toEqual([
+      expect.objectContaining({ attackerId, targetId, attack: 'QUICK_1' })
+    ]);
+    expect(subject.snapshot(roomCode).players.find((player) => player.playerId === attackerId)?.stats.completedAttacks)
+      .toBe(1);
+  });
+
   it('continues with two connected players and disconnects without score or statistics penalties', () => {
     const subject = fixture();
     const { roomCode, players } = readyAndStart(subject, 3);

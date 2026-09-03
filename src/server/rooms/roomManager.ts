@@ -450,7 +450,7 @@ export class RoomManager {
     room.inputs.set(player.playerId, unprocessed
       ? {
         ...boundedInput,
-        viewTick: unprocessed.quick && !boundedInput.quick ? unprocessed.viewTick : boundedInput.viewTick,
+        viewTick: unprocessed.quick ? unprocessed.viewTick : boundedInput.viewTick,
         quick: unprocessed.quick || boundedInput.quick,
         dash: unprocessed.dash || boundedInput.dash
       }

@@ -38,6 +38,7 @@ The result is visible in two ways. First, unit and integration tests prove the f
 - [x] (2026-09-03 21:12 +03:00) Implemented Task 3 bounded local reconciliation, semantic correction telemetry, and timeline-owned rollback-budget delivery.
 - [x] (2026-09-03 21:42 +03:00) Implemented Task 4 gameplay protocol v2, required `viewTick`, explicit fixture migration, and ArenaScene presentation-target delivery.
 - [x] (2026-09-03 22:11 +03:00) Implemented Task 5 twelve-frame combat history, server-owned `viewTick` bounds, and conservative melee-only rewind.
+- [x] (2026-09-03 22:33 +03:00) Fixed Task 5 queued quick-edge merging so a newer held frame cannot replace the edge's original bounded `viewTick`.
 - [ ] Implement Task 6 and commit the deterministic impairment harness and RTT-tier browser acceptance.
 - [ ] Run code review and full verification, restart the LAN service, push the feature branch, fast-forward the public `main`, and verify remote refs.
 
@@ -63,6 +64,9 @@ The result is visible in two ways. First, unit and integration tests prove the f
 
 - Observation: `AttackRuntime` fixtures also existed in projectile and shared-protocol tests outside Task 5's focused file list.
   Evidence: The required `viewTick` field exposed those typed fixtures during the two-project TypeScript gate; both received only the explicit neutral test tick.
+
+- Observation: A quick button that remains held can arrive in a newer input before the server consumes the already queued rising edge.
+  Evidence: The Task 5 review regression queued `quick: true` at tick 180 and another held `quick: true` at tick 184; the old merge rule replaced the edge tick with 184 and turned the legitimate historical hit into a whiff.
 
 ## Decision Log
 
@@ -106,9 +110,13 @@ The result is visible in two ways. First, unit and integration tests prove the f
   Rationale: Existing authoritative hits and perfect dodges remain unchanged, while a rewind-created hit cannot bypass connection, respawn, protection, or dash invulnerability at either pose.
   Date/Author: 2026-09-03 / Task 5 implementation.
 
+- Decision: While an unprocessed quick edge is queued, retain that frame's bounded `viewTick` even if a newer input still holds quick.
+  Rationale: The queued edge owns the attack startup claim until simulation consumes it; after consumption there is no unprocessed edge, so subsequent held frames naturally retain their own newer tick without triggering another attack.
+  Date/Author: 2026-09-03 / Task 5 fix round 1.
+
 ## Outcomes & Retrospective
 
-Tasks 1 through 5 now provide the adaptive policy, monotonic remote timeline, bounded local reconciliation, protocol-v2 `viewTick`, and conservative server combat rewind. Every active room retains twelve immutable collision/eligibility frames; input admission constrains the claimed presentation tick with fresh server-owned RTT/jitter or the neutral four-frame fallback; attacks copy that bounded tick and may use only the historical target circle after current contact misses. Current clash, pulse, knockout, score, and result behavior remains authoritative and unrevised. Deterministic impairment E2E and live acceptance remain for Tasks 6 and 7.
+Tasks 1 through 5 now provide the adaptive policy, monotonic remote timeline, bounded local reconciliation, protocol-v2 `viewTick`, and conservative server combat rewind. Every active room retains twelve immutable collision/eligibility frames; input admission constrains the claimed presentation tick with fresh server-owned RTT/jitter or the neutral four-frame fallback; attacks copy that bounded tick and may use only the historical target circle after current contact misses. A queued quick edge now keeps its original bounded tick across newer held frames and still starts exactly one attack. Current clash, pulse, knockout, score, and result behavior remains authoritative and unrevised. Deterministic impairment E2E and live acceptance remain for Tasks 6 and 7.
 
 ## Context and Orientation
 
@@ -679,7 +687,7 @@ If a task requires touching a wide fixture surface, do it in the same task as th
 
 Task 4 recovery boundary: all production producers and typed test inputs now carry explicit protocol-v2 `viewTick`; continue Task 5 from this complete wire contract and do not add a version-1 adapter or schema default.
 
-Task 5 recovery boundary: active rooms now own a twelve-frame collision/eligibility history and input admission stores only a server-bounded `viewTick`. Continue Task 6 without widening the HUD or applying history to attacker geometry, clashes, pulses, ring-outs, scores, or results.
+Task 5 recovery boundary: active rooms now own a twelve-frame collision/eligibility history and input admission stores only a server-bounded `viewTick`. An unprocessed quick edge owns its original bounded tick across newer held inputs; once consumed, normal newer input ticks resume. Continue Task 6 without widening the HUD or applying history to attacker geometry, clashes, pulses, ring-outs, scores, or results.
 
 ## Validation and Acceptance
 
@@ -730,6 +738,8 @@ As work progresses, append short evidence bullets here. Keep each bullet to one 
 - `npm test -- --run src/server/game/CombatFrameHistory.test.ts src/server/game/netcodeCompensation.test.ts src/server/game/combatResolution.test.ts src/server/game/simulation.test.ts src/server/rooms/roomManager.test.ts src/shared/netcodePolicy.test.ts` -> `6 files / 118 tests passed`.
 - Task 5 neighboring server/shared run -> `12 files / 166 tests passed`; full Vitest -> `68 files / 666 tests passed`.
 - Task 5 `npm run typecheck`, focused ESLint over all changed production and fixture files, `git diff --check`, and `git show --check` -> passed.
+- Task 5 fix round 1 `npm test -- --run src/server/rooms/roomManager.test.ts` -> RED: `1 failed, 31 passed`, with the queued quick edge storing tick 184 instead of its original tick 180.
+- Task 5 fix round 1 focused GREEN -> RoomManager `32/32` passed; RoomManager plus simulation/combat resolution `3 files / 105 tests passed`; both TypeScript projects, focused ESLint, and scoped diff check passed.
 
 ## Interfaces and Dependencies
 
@@ -748,3 +758,5 @@ The shared adaptive policy is the single source of truth for frame-budget math. 
 2026-09-03: Recorded Task 4 protocol-v2 completion, explicit fixture migration, presentation-target ownership, and the same-slice cleanup of the stale Task 1 integration API fixture.
 
 2026-09-03: Recorded Task 5 completion, shared client/server budget calculation, twelve-frame room history, current-contact-first conservative melee rewind, lifecycle resets, and complete red-green verification evidence.
+
+2026-09-03: Recorded Task 5 fix round 1, preserving the original bounded quick-edge tick across newer held inputs and proving one historical hit with exactly one completed attack.
