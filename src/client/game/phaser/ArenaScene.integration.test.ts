@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GameEvent, MatchPlayer, MatchSnapshot } from '../../../shared/model.js';
 import { DEFAULT_ROOM_SETTINGS } from '../../../shared/roomSettings.js';
 import type { GamePresentationBridge } from '../GamePresentationBridge.js';
@@ -228,6 +228,11 @@ describe('ArenaScene live presentation integration', () => {
     probes.snapshotReceivedAtMs = 0;
   });
 
+  afterEach(() => {
+    delete (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: unknown })
+      .__NEON_E2E_INPUT_OBSERVER__;
+  });
+
   it('builds the visible sweep capsule from shared profile points and thickness', () => {
     expect(capsuleForAttackTelegraph({ x: 300, y: 360 }, {
       profileId: 'quick-1',
@@ -326,6 +331,56 @@ describe('ArenaScene live presentation integration', () => {
     expect(scene.getPresentationTargetTick()).toBe(10);
     expect(bridge.publishBufferUnderrun).toHaveBeenLastCalledWith(false);
     expect(bridge.publishExtrapolatedFrames).toHaveBeenLastCalledWith(0);
+  });
+
+  it('records the selected median Ping, rollback budget, and local pose only when the fighter is actually rendered', () => {
+    const observer = {
+      inputs: [{ sequence: 7, sampledAtMs: 12 }],
+      acceptedSnapshots: [],
+      reconciliations: [],
+      localPresentations: [] as unknown[],
+      timelineSamples: [] as unknown[]
+    };
+    (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: typeof observer })
+      .__NEON_E2E_INPUT_OBSERVER__ = observer;
+    const bridge = new Bridge();
+    bridge.current = snapshot({
+      network: { p1: { currentMs: 96, medianMs: 80, jitterMs: 0, transport: 'webrtc' } }
+    });
+    probes.sessionPresentation.mockReturnValue({
+      position: { x: 312, y: 360 },
+      velocity: { x: 120, y: 0 },
+      facing: { x: 1, y: 0 },
+      actionStart: { ...idleAction, kind: 'QUICK_1', phase: 'WINDUP', comboStep: 1 }
+    });
+    const now = vi.spyOn(performance, 'now').mockReturnValue(25);
+    probes.snapshotReceivedAtMs = 25;
+    const scene = new ArenaScene(scopeBridgeToPlayer(bridge, 'p1'), false);
+
+    scene.create();
+    expect(observer.localPresentations).toEqual([]);
+    scene.update();
+
+    expect(observer.timelineSamples).toContainEqual(expect.objectContaining({
+      sampledAtMs: 25,
+      pingMs: 80,
+      transport: 'webrtc',
+      delayFrames: 1,
+      rollbackFrames: 4,
+      targetTick: 10,
+      extrapolatedFrames: 0,
+      bufferUnderrun: false
+    }));
+    expect(observer.localPresentations).toContainEqual({
+      inputSequence: 7,
+      sampledAtMs: 12,
+      renderedAtMs: 25,
+      actionKind: 'QUICK_1',
+      positionX: 312,
+      positionY: 360
+    });
+    expect(probes.fighterApply).toHaveBeenCalled();
+    now.mockRestore();
   });
 
   it('feeds accepted-arrival jitter into the adaptive presentation delay', () => {

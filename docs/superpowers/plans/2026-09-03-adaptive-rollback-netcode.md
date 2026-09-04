@@ -39,8 +39,9 @@ The result is visible in two ways. First, unit and integration tests prove the f
 - [x] (2026-09-03 21:42 +03:00) Implemented Task 4 gameplay protocol v2, required `viewTick`, explicit fixture migration, and ArenaScene presentation-target delivery.
 - [x] (2026-09-03 22:11 +03:00) Implemented Task 5 twelve-frame combat history, server-owned `viewTick` bounds, and conservative melee-only rewind.
 - [x] (2026-09-03 22:33 +03:00) Fixed Task 5 queued quick-edge merging so a newer held frame cannot replace the edge's original bounded `viewTick`.
-- [ ] Implement Task 6 and commit the deterministic impairment harness and RTT-tier browser acceptance.
-- [ ] Run code review and full verification, restart the LAN service, push the feature branch, fast-forward the public `main`, and verify remote refs.
+- [x] (2026-09-04) Implemented Task 6 deterministic bidirectional impairment, real render/reconciliation telemetry, adaptive edge-ack timeout, and RTT-tier browser acceptance.
+- [x] (2026-09-04) Built and restarted the LAN service; loopback/private health probes passed and the user accepted physical play at roughly 5-15 ms locally and 25 ms on the other device.
+- [ ] Push the feature branch, fast-forward the public `main`, and verify remote refs. The user explicitly waived another test cycle before publication.
 
 ## Surprises & Discoveries
 
@@ -67,6 +68,9 @@ The result is visible in two ways. First, unit and integration tests prove the f
 
 - Observation: A quick button that remains held can arrive in a newer input before the server consumes the already queued rising edge.
   Evidence: The Task 5 review regression queued `quick: true` at tick 180 and another held `quick: true` at tick 184; the old merge rule replaced the edge tick with 184 and turned the legitimate historical hit into a whiff.
+
+- Observation: The fixed 250 ms quick/dash acknowledgement timeout could eject an otherwise healthy 100-150 ms WebRTC player before the authoritative snapshot acknowledged the edge.
+  Evidence: Browser fallback diagnostics identified `edgeAckTimeout`; a generation-local deadline derived from fresh authoritative RTT/jitter eliminated the premature fallback while retaining the 250 ms no-sample default.
 
 ## Decision Log
 
@@ -114,9 +118,13 @@ The result is visible in two ways. First, unit and integration tests prove the f
   Rationale: The queued edge owns the attack startup claim until simulation consumes it; after consumption there is no unprocessed edge, so subsequent held frames naturally retain their own newer tick without triggering another attack.
   Date/Author: 2026-09-03 / Task 5 fix round 1.
 
+- Decision: Scale quick/dash edge acknowledgement timeout from the current generation's authoritative WebRTC RTT and jitter, bounded between 250 and 1000 ms.
+  Rationale: The supported 150 ms tier needs enough time for input transit, server processing, and authoritative snapshot return without sacrificing bounded automatic fallback when an edge is genuinely lost.
+  Date/Author: 2026-09-04 / Task 6 implementation.
+
 ## Outcomes & Retrospective
 
-Tasks 1 through 5 now provide the adaptive policy, monotonic remote timeline, bounded local reconciliation, protocol-v2 `viewTick`, and conservative server combat rewind. Every active room retains twelve immutable collision/eligibility frames; input admission constrains the claimed presentation tick with fresh server-owned RTT/jitter or the neutral four-frame fallback; attacks copy that bounded tick and may use only the historical target circle after current contact misses. A queued quick edge now keeps its original bounded tick across newer held frames and still starts exactly one attack. Current clash, pulse, knockout, score, and result behavior remains authoritative and unrevised. Deterministic impairment E2E and live acceptance remain for Tasks 6 and 7.
+Tasks 1 through 6 provide the adaptive policy, monotonic remote timeline, bounded local reconciliation, protocol-v2 `viewTick`, conservative server combat rewind, deterministic bidirectional transport impairment, and browser-visible acceptance telemetry without widening the HUD beyond Ping. The final Chromium RTT matrix passed all six cases with measured median Ping 16/49/94/146 ms and reconciliation p95 2/2/5/7 frames for the 20/50/100/150 ms tiers; reorder and forced Socket.IO fallback also passed. The production build and both health probes passed, and the user accepted the physical LAN feel with only occasional spikes. At the user's direction no additional final test cycle is run before publication.
 
 ## Context and Orientation
 

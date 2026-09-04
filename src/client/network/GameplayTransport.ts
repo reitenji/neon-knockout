@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { GAME } from '../../shared/constants.js';
 import {
   ACTIVATION_TIMEOUT_MS,
   CLIENT_MESSAGE_LIMIT_BYTES,
@@ -24,6 +25,15 @@ import type { createMatchPublicationSequencer } from './MatchPublicationSequence
 
 type MatchPublicationSequencer = ReturnType<typeof createMatchPublicationSequencer>;
 type SocketMode = 'websocket' | 'polling';
+type GameplayFallbackReason =
+  | 'edgeAckTimeout'
+  | 'heartbeatGap'
+  | 'channelClose'
+  | 'sendFailure'
+  | 'modeNotice'
+  | 'activationTimeout'
+  | 'activationFailure'
+  | 'transportGap';
 
 type GameplayTransportOptions = Readonly<{
   createPeer?: () => RTCPeerConnection;
@@ -66,12 +76,15 @@ type Generation = {
   pendingQuickSeq: number | null;
   pendingDashSeq: number | null;
   edgeAckTimer: ReturnType<typeof setTimeout> | null;
+  edgeAckTimeoutMs: number;
   edgeInputReplayed: boolean;
 };
 
 const encoder = new TextEncoder();
 const HEARTBEAT_GAP_MS = HEARTBEAT_INTERVAL_MS * MISSED_HEARTBEATS_BEFORE_FALLBACK;
-const INPUT_EDGE_ACK_TIMEOUT_MS = 250;
+const DEFAULT_INPUT_EDGE_ACK_TIMEOUT_MS = 250;
+const MAX_INPUT_EDGE_ACK_TIMEOUT_MS = 1_000;
+const TICK_MS = 1_000 / GAME.tickRate;
 const CANCELLED = Symbol('cancelled');
 const finiteNumberSchema = z.number().finite();
 const nonNegativeIntegerSchema = z.number().int().nonnegative();
@@ -440,10 +453,42 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     }
   }
 
-  function localFallback(generation: Generation, input?: InputFrame): boolean {
+  function recordFallbackReason(generation: Generation, reason: GameplayFallbackReason): void {
+    const candidate = (globalThis as typeof globalThis & {
+      __NEON_E2E_INPUT_OBSERVER__?: unknown;
+    }).__NEON_E2E_INPUT_OBSERVER__;
+    if (typeof candidate !== 'object' || candidate === null) return;
+    const reasons = (candidate as {
+      fallbackReasons?: Array<Readonly<{
+        reason: GameplayFallbackReason;
+        atMs: number;
+        pendingQuickSeq: number | null;
+        pendingDashSeq: number | null;
+        edgeAckTimeoutMs: number;
+        lastSentInputSeq: number | null;
+      }>>;
+    }).fallbackReasons;
+    if (!Array.isArray(reasons)) return;
+    reasons.push({
+      reason,
+      atMs: now(),
+      pendingQuickSeq: generation.pendingQuickSeq,
+      pendingDashSeq: generation.pendingDashSeq,
+      edgeAckTimeoutMs: generation.edgeAckTimeoutMs,
+      lastSentInputSeq: generation.lastSentInput?.seq ?? null
+    });
+    if (reasons.length > 20) reasons.splice(0, reasons.length - 20);
+  }
+
+  function localFallback(
+    generation: Generation,
+    reason: GameplayFallbackReason,
+    input?: InputFrame
+  ): boolean {
     if (current !== generation || generation.fallbackNotified) return false;
     generation.mode = generation.socketMode;
     generation.fallbackNotified = true;
+    recordFallbackReason(generation, reason);
     clearEdgeAckDeadline(generation);
     const replayed = replayEdgeInput(generation, input);
     detachAndClose(generation, false);
@@ -467,13 +512,29 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     if (generation.edgeAckTimer !== null || !hasPendingEdge(generation)) return;
     generation.edgeAckTimer = setTimeout(() => {
       generation.edgeAckTimer = null;
-      if (current === generation && hasPendingEdge(generation)) localFallback(generation);
-    }, INPUT_EDGE_ACK_TIMEOUT_MS);
+      if (current === generation && hasPendingEdge(generation)) localFallback(generation, 'edgeAckTimeout');
+    }, generation.edgeAckTimeoutMs);
+  }
+
+  function edgeAckTimeoutMs(snapshot: MatchSnapshotPublication['snapshot'], localPlayerId: string): number {
+    const sample = snapshot.network[localPlayerId];
+    if (
+      sample?.transport !== 'webrtc'
+      || sample.medianMs === null
+      || sample.jitterMs === null
+    ) return DEFAULT_INPUT_EDGE_ACK_TIMEOUT_MS;
+    const adaptiveTimeoutMs = 2 * Math.max(0, sample.medianMs)
+      + 2 * Math.max(0, sample.jitterMs)
+      + 2 * TICK_MS;
+    return Math.min(
+      MAX_INPUT_EDGE_ACK_TIMEOUT_MS,
+      Math.max(DEFAULT_INPUT_EDGE_ACK_TIMEOUT_MS, Math.ceil(adaptiveTimeoutMs))
+    );
   }
 
   function scheduleActivationDeadline(generation: Generation): void {
     const remaining = Math.max(0, generation.activationDeadline - now());
-    generation.activationTimer = setTimeout(() => localFallback(generation), remaining);
+    generation.activationTimer = setTimeout(() => localFallback(generation, 'activationTimeout'), remaining);
   }
 
   async function waitForGeneration<T>(generation: Generation, operation: () => Promise<T>): Promise<T | typeof CANCELLED> {
@@ -494,7 +555,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
       if (!isCurrent(generation) || generation.mode !== 'webrtc' || generation.heartbeatDeadline === null) return;
       const remaining = generation.heartbeatDeadline - now();
       if (remaining <= 0) {
-        localFallback(generation);
+        localFallback(generation, 'heartbeatGap');
         return;
       }
       generation.heartbeatTimer = setTimeout(check, remaining);
@@ -519,6 +580,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     generation.socketMode = notice.mode;
     generation.mode = notice.mode;
     generation.fallbackNotified = true;
+    recordFallbackReason(generation, 'modeNotice');
     clearEdgeAckDeadline(generation);
     replayEdgeInput(generation);
     if (!generation.failed) detachAndClose(generation, false);
@@ -553,7 +615,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
 
   function sendHeartbeatAck(generation: Generation, nonce: number): void {
     if (generation.reliable.readyState !== 'open') {
-      localFallback(generation);
+      localFallback(generation, 'sendFailure');
       return;
     }
     const acknowledgement: ClientReliableMessage = {
@@ -565,7 +627,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     try {
       generation.reliable.send(JSON.stringify(acknowledgement));
     } catch {
-      localFallback(generation);
+      localFallback(generation, 'sendFailure');
     }
   }
 
@@ -600,16 +662,16 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     generation.reliable.onopen = checkChannels;
     generation.fast.onmessage = (event) => acceptFastMessage(generation, event);
     generation.reliable.onmessage = (event) => acceptReliableMessage(generation, event);
-    generation.fast.onclose = () => localFallback(generation);
-    generation.fast.onerror = () => localFallback(generation);
-    generation.reliable.onclose = () => localFallback(generation);
-    generation.reliable.onerror = () => localFallback(generation);
+    generation.fast.onclose = () => localFallback(generation, 'channelClose');
+    generation.fast.onerror = () => localFallback(generation, 'channelClose');
+    generation.reliable.onclose = () => localFallback(generation, 'channelClose');
+    generation.reliable.onerror = () => localFallback(generation, 'channelClose');
     generation.peer.onconnectionstatechange = () => {
       if (
         generation.peer.connectionState === 'closed'
         || generation.peer.connectionState === 'failed'
         || generation.peer.connectionState === 'disconnected'
-      ) localFallback(generation);
+      ) localFallback(generation, 'channelClose');
     };
     checkChannels();
   }
@@ -648,11 +710,11 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
       !acknowledgement.ok
       || acknowledgement.data.generationId !== generation.generationId
     ) {
-      localFallback(generation);
+      localFallback(generation, 'activationFailure');
       return;
     }
     acceptModeFor(generation, acknowledgement.data);
-    if (acknowledgement.data.mode !== 'webrtc') localFallback(generation);
+    if (acknowledgement.data.mode !== 'webrtc') localFallback(generation, 'modeNotice');
   }
 
   async function start(): Promise<void> {
@@ -716,6 +778,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
         pendingQuickSeq: null,
         pendingDashSeq: null,
         edgeAckTimer: null,
+        edgeAckTimeoutMs: DEFAULT_INPUT_EDGE_ACK_TIMEOUT_MS,
         edgeInputReplayed: false,
       };
       ownedGeneration = generation;
@@ -731,7 +794,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
       if (iceGathered === CANCELLED || !isCurrent(generation)) return;
       const localDescription = peer.localDescription;
       if (localDescription?.type !== 'offer' || typeof localDescription.sdp !== 'string') {
-        localFallback(generation);
+        localFallback(generation, 'activationFailure');
         return;
       }
       const acknowledgement = await waitForGeneration(generation, () => options.negotiate({
@@ -740,7 +803,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
       }));
       if (acknowledgement === CANCELLED || !isCurrent(generation)) return;
       if (!acknowledgement.ok || acknowledgement.data.generationId !== generation.generationId) {
-        localFallback(generation);
+        localFallback(generation, 'activationFailure');
         return;
       }
       const remoteDescriptionSet = await waitForGeneration(generation, () => peer.setRemoteDescription(
@@ -749,7 +812,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
       if (remoteDescriptionSet === CANCELLED || !isCurrent(generation)) return;
       await activateGeneration(generation);
     } catch {
-      if (ownedGeneration !== null && current === ownedGeneration) localFallback(ownedGeneration);
+      if (ownedGeneration !== null && current === ownedGeneration) localFallback(ownedGeneration, 'activationFailure');
     }
   }
 
@@ -772,7 +835,9 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
 
   function acceptAuthoritativeSnapshot(snapshot: MatchSnapshotPublication['snapshot'], localPlayerId: string): void {
     const generation = current;
-    if (generation === null || !hasPendingEdge(generation)) return;
+    if (generation === null) return;
+    generation.edgeAckTimeoutMs = edgeAckTimeoutMs(snapshot, localPlayerId);
+    if (!hasPendingEdge(generation)) return;
     const localPlayer = snapshot.players.find((player) => player.playerId === localPlayerId);
     if (!localPlayer) return;
     if (generation.pendingQuickSeq !== null && localPlayer.lastProcessedInputSeq >= generation.pendingQuickSeq) {
@@ -794,12 +859,12 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     if (
       generation.matchEpoch === null
       || generation.fast.readyState !== 'open'
-    ) return hasPendingEdge(generation) ? localFallback(generation, input) : false;
+    ) return hasPendingEdge(generation) ? localFallback(generation, 'sendFailure', input) : false;
 
     const payload = latchedInput(generation, input);
 
     if (generation.fast.bufferedAmount > FAST_CHANNEL_MAX_BUFFERED_BYTES) {
-      return hasPendingEdge(generation) ? localFallback(generation, input) : false;
+      return hasPendingEdge(generation) ? localFallback(generation, 'sendFailure', input) : false;
     }
 
     const message: ClientFastMessage = {
@@ -813,10 +878,10 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
     try {
       serialized = JSON.stringify(message);
     } catch {
-      return hasPendingEdge(generation) ? localFallback(generation, input) : false;
+      return hasPendingEdge(generation) ? localFallback(generation, 'sendFailure', input) : false;
     }
     if (encoder.encode(serialized).byteLength > CLIENT_MESSAGE_LIMIT_BYTES) {
-      return hasPendingEdge(generation) ? localFallback(generation, input) : false;
+      return hasPendingEdge(generation) ? localFallback(generation, 'sendFailure', input) : false;
     }
     try {
       generation.fast.send(serialized);
@@ -826,7 +891,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
       scheduleEdgeAckDeadline(generation);
       return true;
     } catch {
-      localFallback(generation);
+      localFallback(generation, 'sendFailure');
       return false;
     }
   }
@@ -837,7 +902,7 @@ export function createGameplayTransport(options: GameplayTransportOptions): Read
   }
 
   function fallback(): void {
-    if (current !== null) localFallback(current);
+    if (current !== null) localFallback(current, 'transportGap');
   }
 
   return {

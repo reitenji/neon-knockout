@@ -527,6 +527,8 @@ describe('createGameplayTransport', () => {
 
   it('expires a pending WebRTC edge into acknowledged Socket.IO latching and clears it on dispose', async () => {
     vi.useFakeTimers();
+    const fallbackReasons: Array<{ reason: string; atMs: number }> = [];
+    vi.stubGlobal('__NEON_E2E_INPUT_OBSERVER__', { fallbackReasons });
     const harness = createHarness();
     await activateHarness(harness);
     harness.controller.acceptSocketStarted(started());
@@ -535,12 +537,57 @@ describe('createGameplayTransport', () => {
     expect(harness.controller.sendInput(input(80))).toBe(true);
     await vi.advanceTimersByTimeAsync(250);
     expect(harness.notifyFallback).toHaveBeenCalledOnce();
+    expect(fallbackReasons).toEqual([
+      expect.objectContaining({ reason: 'edgeAckTimeout' })
+    ]);
     expect(harness.controller.sendInput(neutral(81))).toBe(true);
     expect(harness.sendFallbackInput).toHaveBeenLastCalledWith(expect.objectContaining({ seq: 81, quick: true }));
 
     harness.controller.dispose();
     expect(vi.getTimerCount()).toBe(0);
     expect(harness.controller.sendInput(neutral(82))).toBe(false);
+  });
+
+  it('keeps a 150 ms RTT edge on WebRTC until its adaptive acknowledgement deadline', async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    harness.controller.acceptAuthoritativeSnapshot({
+      ...initialPlayerSnapshot(),
+      network: {
+        'player-1': { currentMs: 150, medianMs: 150, jitterMs: 20, transport: 'webrtc' }
+      }
+    }, 'player-1');
+
+    expect(harness.controller.sendInput(input(90))).toBe(true);
+    await vi.advanceTimersByTimeAsync(373);
+    expect(harness.notifyFallback).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(harness.notifyFallback).toHaveBeenCalledOnce();
+  });
+
+  it('cancels an adaptive edge deadline when authority acknowledges the edge in time', async () => {
+    vi.useFakeTimers();
+    const harness = createHarness();
+    await activateHarness(harness);
+    harness.controller.acceptSocketStarted(started());
+    const network = {
+      'player-1': { currentMs: 150, medianMs: 150, jitterMs: 20, transport: 'webrtc' as const }
+    };
+    harness.controller.acceptAuthoritativeSnapshot({ ...initialPlayerSnapshot(), network }, 'player-1');
+    expect(harness.controller.sendInput(input(100))).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(300);
+    harness.controller.acceptAuthoritativeSnapshot({
+      ...initialPlayerSnapshot(),
+      network,
+      players: [{ ...initialPlayerSnapshot().players[0]!, lastProcessedInputSeq: 100 }]
+    }, 'player-1');
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(harness.notifyFallback).not.toHaveBeenCalled();
   });
 
   it('does not latch or replay a heavy release as a quick or dash action', async () => {

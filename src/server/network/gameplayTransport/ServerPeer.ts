@@ -1,6 +1,22 @@
 import type { RtcAnswer, RtcOffer } from '../../../shared/gameplayTransport.js';
 
 export type PeerSendResult = 'sent' | 'backpressured' | 'closed';
+export type TransportImpairment = Readonly<{
+  oneWayDelayMs: number;
+  jitterSequenceMs: readonly number[];
+  dropEveryNthPacket: number | null;
+  reorderWindow: number;
+}>;
+
+export type TransportImpairmentContext = Readonly<{
+  generationId: string;
+  channel: 'fast' | 'reliable';
+  direction: 'inbound' | 'outbound';
+}>;
+
+export type TransportImpairmentResolver = (
+  context: TransportImpairmentContext
+) => TransportImpairment | null;
 
 export interface ServerPeer {
   readonly generationId: string;

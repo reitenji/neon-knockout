@@ -4,10 +4,37 @@ import {
   assertNoUnexpectedErrors,
   expect,
   openPlayer,
+  sampleAnimationFrameDurations,
   test,
   type E2eGame,
   type PlayerPage
 } from './fixtures.js';
+
+test.use({
+  launchOptions: {
+    args: [
+      '--disable-background-timer-throttling',
+      '--disable-backgrounding-occluded-windows',
+      '--disable-features=CalculateNativeWinOcclusion',
+      '--disable-renderer-backgrounding',
+      ...(process.platform === 'darwin' ? ['--use-angle=metal'] : [])
+    ],
+    headless: process.platform !== 'darwin'
+  },
+  gameplayTransportOptions: {
+    impairment: {
+      oneWayDelayMs: 25,
+      jitterSequenceMs: [0, 2, -1, 3],
+      dropEveryNthPacket: null,
+      reorderWindow: 0
+    }
+  }
+});
+
+function percentile95(values: readonly number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.ceil(sorted.length * 0.95) - 1] ?? 0;
+}
 
 async function openMobilePlayer(browser: Browser, origin: string): Promise<PlayerPage> {
   const context = await browser.newContext({
@@ -65,6 +92,7 @@ test('portrait phone lobby rotates into a real touch-controlled authoritative ma
   const guest = await openPlayer(browser, game.origin);
   const cdp = await host.context.newCDPSession(host.page);
   try {
+    await host.page.bringToFront();
     await expect(host.page.getByRole('button', { name: 'Oda Kur' })).toBeVisible();
     await expect(host.page.getByRole('button', { name: 'Odaya Katıl' })).toBeVisible();
     await expect(host.page.getByRole('alert')).toHaveCount(0);
@@ -84,6 +112,7 @@ test('portrait phone lobby rotates into a real touch-controlled authoritative ma
     await guest.page.getByRole('button', { name: 'PULSE gövdesini seç' }).click();
     await host.page.getByRole('button', { name: 'Hazırım' }).click();
     await guest.page.getByRole('button', { name: 'Hazırım' }).click();
+    await host.page.bringToFront();
     await expect(host.page.getByRole('button', { name: 'Maçı Başlat' })).toBeEnabled();
     await host.page.getByRole('button', { name: 'Maçı Başlat' }).click();
 
@@ -94,7 +123,7 @@ test('portrait phone lobby rotates into a real touch-controlled authoritative ma
     const hostPlayerId = initial?.players.find((candidate) => candidate.name === 'Mobil Ada')?.playerId;
     const guestPlayerId = initial?.players.find((candidate) => candidate.name === 'Linus')?.playerId;
     if (!hostPlayerId || !guestPlayerId) throw new Error('Mobile match players were not available.');
-    expect(['webrtc', 'websocket', 'polling']).toContain(game.harness.transportMode(hostPlayerId));
+    await expect.poll(() => game.harness.transportMode(hostPlayerId), { timeout: 10_000 }).toBe('webrtc');
 
     await host.page.setViewportSize({ width: 667, height: 375 });
     await expect(host.page.getByRole('dialog', { name: 'Telefonu yatay çevir' })).toHaveCount(0);
@@ -104,6 +133,9 @@ test('portrait phone lobby rotates into a real touch-controlled authoritative ma
     await expect(host.page.getByRole('button', { name: 'Hızlı saldırı' })).toBeVisible();
     await expect(host.page.getByRole('button', { name: 'Charge saldırı' })).toBeVisible();
     await expect(host.page.getByRole('button', { name: 'Dash' })).toBeVisible();
+    await host.page.bringToFront();
+    const frameDurations = await sampleAnimationFrameDurations(host.page);
+    expect(percentile95(frameDurations)).toBeLessThan(33);
 
     game.harness.placePlayer(code, hostPlayerId, { x: 520, y: 360 }, { x: 1, y: 0 });
     game.harness.placePlayer(code, guestPlayerId, { x: 900, y: 360 }, { x: -1, y: 0 });

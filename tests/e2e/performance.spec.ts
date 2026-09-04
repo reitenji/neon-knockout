@@ -256,6 +256,10 @@ type BrowserSnapshotRecord = Readonly<{
 type BrowserInputObserver = Readonly<{
   inputs: readonly BrowserInputRecord[];
   acceptedSnapshots: readonly BrowserSnapshotRecord[];
+  reconciliations?: ReadonlyArray<Readonly<{
+    correctionDistancePx: number;
+    hardSnap: boolean;
+  }>>;
 }>;
 
 async function observerSequence(player: PlayerPage): Promise<number> {
@@ -513,6 +517,11 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
         (record) => record.sequence === observation.inputSequence
       )?.source).toBe('webrtc');
     }
+    await match.measured.page.evaluate(() => {
+      const observer = (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: BrowserInputObserver })
+        .__NEON_E2E_INPUT_OBSERVER__;
+      if (observer?.reconciliations) (observer.reconciliations as unknown[]).splice(0);
+    });
 
     const before = authoritativePlayer(game, match.code, measuredId);
     const eventMarker = game.harness.recentEvents(match.code).at(-1)?.eventId ?? 0;
@@ -600,6 +609,11 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     console.info(`TRANSPORT_LATENCY_METRICS ${JSON.stringify(transportLatency)}`);
 
     const { medianFrameMs, medianFps, p95FrameMs } = frameMetrics(durations);
+    const reconciliations = await match.measured.page.evaluate(() => {
+      const observer = (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: BrowserInputObserver })
+        .__NEON_E2E_INPUT_OBSERVER__;
+      return observer?.reconciliations ?? [];
+    });
     const metrics = {
       browserContexts: 1,
       authoritativePlayers: 8,
@@ -631,6 +645,10 @@ test('holds one LAN viewport frame budget while eight authoritative players figh
     expect(transportLatency.webRtc.p95Ms).toBeLessThan(MAX_P95_INPUT_LATENCY_MS);
     expect(transportLatency.socketIo.medianMs).toBeLessThanOrEqual(MAX_MEDIAN_INPUT_LATENCY_MS);
     expect(transportLatency.socketIo.p95Ms).toBeLessThan(MAX_P95_INPUT_LATENCY_MS);
+    expect(reconciliations.filter((entry) => !entry.hardSnap)
+      .every((entry) => entry.correctionDistancePx < 160)).toBe(true);
+    const roster = match.measured.page.getByRole('region', { name: 'Oyuncu listesi' });
+    await expect(roster).not.toContainText(/RTT|Delay|Rollback|\bRB\b/);
     expect(companionErrors).toEqual([]);
     await assertNoUnexpectedErrors(game, match.measured);
   } finally {

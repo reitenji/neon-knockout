@@ -63,6 +63,45 @@ function chargeIndicator(
   };
 }
 
+type E2eTimelineObserver = Readonly<{
+  inputs?: Array<Readonly<{
+    sequence: number;
+    sampledAtMs: number;
+  }>>;
+  acceptedSnapshots?: unknown[];
+  reconciliations?: unknown[];
+  localPresentations?: Array<Readonly<{
+    inputSequence: number;
+    sampledAtMs: number;
+    renderedAtMs: number;
+    actionKind: string | null;
+    positionX: number;
+    positionY: number;
+  }>>;
+  timelineSamples?: Array<Readonly<{
+    sampledAtMs: number;
+    targetTick: number | null;
+    delayFrames: number;
+    rollbackFrames: number;
+    extrapolatedFrames: number;
+    bufferUnderrun: boolean;
+    transport: string | null;
+    pingMs: number | null;
+  }>>;
+}>;
+
+function e2eObserver(): E2eTimelineObserver | null {
+  const candidate = (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: unknown })
+    .__NEON_E2E_INPUT_OBSERVER__;
+  if (typeof candidate !== 'object' || candidate === null) return null;
+  return candidate as E2eTimelineObserver;
+}
+
+function pushBounded<T>(values: T[], value: T, limit = 256): void {
+  values.push(value);
+  if (values.length > limit) values.splice(0, values.length - limit);
+}
+
 export class ArenaScene extends Phaser.Scene {
   private readonly localPlayerId: string | null;
   private readonly timeline = new SnapshotTimeline();
@@ -216,6 +255,19 @@ export class ArenaScene extends Phaser.Scene {
     this.bridge.publishPresentationDelay?.(this.timeline.delayMs());
     this.bridge.publishBufferUnderrun?.(sample.bufferUnderrun);
     this.bridge.publishExtrapolatedFrames?.(sample.extrapolatedFrames);
+    const observer = e2eObserver();
+    if (observer?.timelineSamples) {
+      pushBounded(observer.timelineSamples, {
+        sampledAtMs: nowMs,
+        targetTick: sample.targetTick,
+        delayFrames: sample.delayFrames,
+        rollbackFrames: this.timeline.rollbackWindowFrames(),
+        extrapolatedFrames: sample.extrapolatedFrames,
+        bufferUnderrun: sample.bufferUnderrun,
+        transport: localNetwork?.transport ?? null,
+        pingMs: localNetwork?.medianMs ?? null
+      });
+    }
     const frame = sample.frame;
     if (!frame) return;
     this.arenaView?.apply({
@@ -260,6 +312,17 @@ export class ArenaScene extends Phaser.Scene {
           telegraph,
           chargeIndicator(currentPlayer, localPresentation.facing, localPresentation.actionStart)
         );
+        const latestInput = observer?.inputs?.at(-1);
+        if (observer?.localPresentations && latestInput) {
+          pushBounded(observer.localPresentations, {
+            inputSequence: latestInput.sequence,
+            sampledAtMs: latestInput.sampledAtMs,
+            renderedAtMs: nowMs,
+            actionKind: localPresentation.actionStart?.kind ?? null,
+            positionX: localPresentation.position.x,
+            positionY: localPresentation.position.y
+          });
+        }
         continue;
       }
       const telegraph = this.attackTelegraphs.telegraph(

@@ -16,6 +16,7 @@ type E2eInputObserver = {
   inputs: Array<Readonly<{
     sequence: number;
     sampledAtMs: number;
+    viewTick: number;
     moveX: number;
     moveY: number;
     quick: boolean;
@@ -26,6 +27,8 @@ type E2eInputObserver = {
     tick: number;
     lastProcessedInputSeq: number;
     acceptedAtMs: number;
+    transport: MatchSnapshot['network'][string]['transport'] | null;
+    pingMs: number | null;
   }>>;
   reconciliations?: ReconciliationResult[];
 };
@@ -119,6 +122,7 @@ export class ArenaSession {
       pushBounded(observer.inputs, {
         sequence: frame.seq,
         sampledAtMs,
+        viewTick: frame.viewTick,
         moveX: frame.moveX,
         moveY: frame.moveY,
         quick: frame.quick,
@@ -163,7 +167,9 @@ export class ArenaSession {
       pushBounded(observer.acceptedSnapshots, {
         tick: snapshot.tick,
         lastProcessedInputSeq: localPlayer.lastProcessedInputSeq,
-        acceptedAtMs
+        acceptedAtMs,
+        transport: snapshot.network[this.localPlayerId]?.transport ?? null,
+        pingMs: snapshot.network[this.localPlayerId]?.medianMs ?? null
       });
     }
     this.inputSequence = Math.max(this.inputSequence, localPlayer.lastProcessedInputSeq + 1);

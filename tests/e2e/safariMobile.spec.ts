@@ -4,9 +4,26 @@ import {
   assertNoUnexpectedErrors,
   expect,
   openPlayer,
+  sampleAnimationFrameDurations,
   test,
   type E2eGame
 } from './fixtures.js';
+
+test.use({
+  gameplayTransportOptions: {
+    impairment: {
+      oneWayDelayMs: 25,
+      jitterSequenceMs: [0, 2, -1, 3],
+      dropEveryNthPacket: null,
+      reorderWindow: 0
+    }
+  }
+});
+
+function percentile95(values: readonly number[]): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.ceil(sorted.length * 0.95) - 1] ?? 0;
+}
 
 type ObservedInput = Readonly<{
   sequence: number;
@@ -84,6 +101,7 @@ test('Playwright WebKit turns one trusted mobile tap into one authoritative WebR
   });
   const guest = await openPlayer(browser, game.origin);
   try {
+    await host.page.bringToFront();
     await host.page.getByLabel('Oyuncu adı').fill('Safari Ada');
     await host.page.getByRole('button', { name: 'Oda Kur' }).click();
     await expect(host.page.getByRole('region', { name: 'Oda lobisi' })).toBeVisible();
@@ -99,6 +117,7 @@ test('Playwright WebKit turns one trusted mobile tap into one authoritative WebR
     await guest.page.getByRole('button', { name: 'PULSE gövdesini seç' }).click();
     await host.page.getByRole('button', { name: 'Hazırım' }).click();
     await guest.page.getByRole('button', { name: 'Hazırım' }).click();
+    await host.page.bringToFront();
     await expect(host.page.getByRole('button', { name: 'Maçı Başlat' })).toBeEnabled();
     await host.page.getByRole('button', { name: 'Maçı Başlat' }).click();
 
@@ -115,6 +134,9 @@ test('Playwright WebKit turns one trusted mobile tap into one authoritative WebR
     await expect(host.page.getByRole('application', { name: 'Yön pedi' })).toBeVisible();
     const quick = host.page.getByRole('button', { name: 'Hızlı saldırı' });
     await expect(quick).toBeVisible();
+    await host.page.bringToFront();
+    const frameDurations = await sampleAnimationFrameDurations(host.page);
+    expect(percentile95(frameDurations)).toBeLessThan(33);
 
     await expect.poll(() => game.harness.transportMode(hostPlayerId), { timeout: 10_000 }).toBe('webrtc');
     const completedBefore = player(game, code, hostPlayerId).stats.completedAttacks;

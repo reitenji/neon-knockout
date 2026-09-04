@@ -8,6 +8,11 @@ import {
   type Page
 } from '@playwright/test';
 import { createGameServer, type GameServer } from '../../src/server/network/createGameServer.js';
+import {
+  createWeriftServerPeer,
+  readWebRtcUdpPortRange
+} from '../../src/server/network/gameplayTransport/WeriftServerPeer.js';
+import type { TransportImpairment } from '../../src/server/network/gameplayTransport/ServerPeer.js';
 import type { MatchSnapshot } from '../../src/shared/model.js';
 import type { RoomSettings } from '../../src/shared/roomSettings.js';
 
@@ -22,15 +27,37 @@ export type E2eGame = Readonly<{
   serverErrors: readonly string[];
 }>;
 
-export const test = base.extend<{ game: E2eGame }>({
-  // Playwright requires an object pattern even when a worker fixture has no dependencies.
-  // eslint-disable-next-line no-empty-pattern
-  game: [async ({}, provideGame) => {
+export type E2eGameplayTransportOptions = Readonly<{
+  impairment?: TransportImpairment;
+  outboundFastReorderWindow?: number;
+}> | null;
+
+export const test = base.extend<{ game: E2eGame; gameplayTransportOptions: E2eGameplayTransportOptions }>({
+  gameplayTransportOptions: [null, { option: true, scope: 'worker' }],
+  game: [async ({ gameplayTransportOptions }, provideGame) => {
     const serverErrors: string[] = [];
+    const impairment = gameplayTransportOptions?.impairment;
+    const outboundFastReorderWindow = gameplayTransportOptions?.outboundFastReorderWindow;
     const server = createGameServer({
       host: '127.0.0.1',
       port: 0,
       enableTestHarness: true,
+      ...(impairment
+        ? {
+            testGameplayTransport: {
+              peerFactory: createWeriftServerPeer,
+              udpPortRange: readWebRtcUdpPortRange(process.env),
+              impairment: outboundFastReorderWindow === undefined
+                ? impairment
+                : ({ channel, direction }) => ({
+                    ...impairment,
+                    reorderWindow: channel === 'fast' && direction === 'outbound'
+                      ? outboundFastReorderWindow
+                      : 0
+                  })
+            }
+          }
+        : {}),
       logger: {
         error: (...values: unknown[]): void => {
           serverErrors.push(values.map((value) => value instanceof Error ? value.stack ?? value.message : String(value)).join(' '));
@@ -84,7 +111,11 @@ export async function openPlayer(
     await context.addInitScript(() => {
       (window as typeof window & { __NEON_E2E_INPUT_OBSERVER__?: unknown }).__NEON_E2E_INPUT_OBSERVER__ = {
         inputs: [],
-        acceptedSnapshots: []
+        acceptedSnapshots: [],
+        reconciliations: [],
+        localPresentations: [],
+        timelineSamples: [],
+        fallbackReasons: []
       };
     });
   }
@@ -149,6 +180,7 @@ export async function createTwoPlayerMatch(
     observeInput?: boolean;
     hostInitScript?: () => void;
     guestInitScript?: () => void;
+    waitForWebRtcBeforeStart?: boolean;
   }> = {}
 ): Promise<MatchPages> {
   const host = await openPlayer(browser, game.origin, {
@@ -171,10 +203,34 @@ export async function createTwoPlayerMatch(
     await guest.page.getByRole('button', { name: 'Odaya Katıl' }).click();
     await expect(guest.page.getByRole('region', { name: 'Oda lobisi' })).toBeVisible();
 
+    if (options.waitForWebRtcBeforeStart) {
+      const lobbyPlayerIds = game.server.rooms.debugRoom(code)?.playerIds;
+      if (!lobbyPlayerIds || lobbyPlayerIds.length !== 2) {
+        throw new Error('Two lobby player identities were not available to the E2E harness.');
+      }
+      try {
+        await expect.poll(() => lobbyPlayerIds.map((id) => game.harness.transportMode(id)), {
+          timeout: 10_000
+        }).toEqual(['webrtc', 'webrtc']);
+      } catch (error) {
+        const fallbackReasons = await Promise.all([host.page, guest.page].map((page) => page.evaluate(() => {
+          const candidate = (window as typeof window & {
+            __NEON_E2E_INPUT_OBSERVER__?: { fallbackReasons?: unknown[] };
+          }).__NEON_E2E_INPUT_OBSERVER__;
+          return candidate?.fallbackReasons ?? [];
+        })));
+        throw new Error(`WebRTC lobby activation failed: ${JSON.stringify({
+          modes: lobbyPlayerIds.map((id) => game.harness.transportMode(id)),
+          fallbackReasons
+        })}`, { cause: error });
+      }
+    }
+
     if (settings) await applyRoomSettings(host, guest, settings);
 
     await chooseChassisAndReady(host, 'WRAITH');
     await chooseChassisAndReady(guest, 'PULSE');
+    await host.page.bringToFront();
     await expect(host.page.getByRole('button', { name: 'Maçı Başlat' })).toBeEnabled();
     await host.page.getByRole('button', { name: 'Maçı Başlat' }).click();
     await expect(host.page.getByRole('img', { name: 'Neon Knockout oyun alanı' })).toBeVisible();
@@ -202,4 +258,18 @@ export async function assertNoUnexpectedErrors(game: E2eGame, ...players: readon
     expect(player.issues.consoleErrors, `console errors for ${await player.page.title()}`).toEqual([]);
   }
   expect(game.serverErrors, 'unexpected server logger errors').toEqual([]);
+}
+
+export function sampleAnimationFrameDurations(page: Page, sampleCount = 121): Promise<number[]> {
+  return page.evaluate((count) => new Promise<number[]>((resolve) => {
+    const durations: number[] = [];
+    let previous = performance.now();
+    const sample = (now: number): void => {
+      durations.push(now - previous);
+      previous = now;
+      if (durations.length >= count) resolve(durations.slice(1));
+      else requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  }), sampleCount);
 }

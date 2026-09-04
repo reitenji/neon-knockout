@@ -17,7 +17,12 @@ import {
 import { discoverRuntimeNetworkInfo, type NetworkInterfaces } from '../runtime/lanAddresses.js';
 import { registerSocketHandlers, type GameSocket } from './socketHandlers.js';
 import { GameplayTransportHub } from './gameplayTransport/GameplayTransportHub.js';
-import type { ServerPeerFactory } from './gameplayTransport/ServerPeer.js';
+import type {
+  ServerPeerFactory,
+  TransportImpairment,
+  TransportImpairmentResolver
+} from './gameplayTransport/ServerPeer.js';
+import { createTestImpairedPeerFactory } from './gameplayTransport/TestImpairedServerPeer.js';
 import {
   createWeriftServerPeer,
   readWebRtcUdpPortRange
@@ -56,6 +61,7 @@ export type CreateGameServerOptions = Readonly<{
   testGameplayTransport?: Readonly<{
     peerFactory: ServerPeerFactory;
     udpPortRange: readonly [number, number];
+    impairment?: TransportImpairment | TransportImpairmentResolver;
   }>;
 }>;
 
@@ -95,8 +101,11 @@ export function createGameServer(options: CreateGameServerOptions = {}): GameSer
   const testInputHistory = options.enableTestHarness ? new Map<string, AcceptedInputRecord[]>() : null;
   const playerConnections = new Map<string, PlayerConnection>();
   const testTransport = options.enableTestHarness ? options.testGameplayTransport : undefined;
+  const transportPeerFactory = testTransport?.impairment
+    ? createTestImpairedPeerFactory(testTransport.peerFactory, testTransport.impairment, now)
+    : testTransport?.peerFactory ?? createWeriftServerPeer;
   const transportHub = new GameplayTransportHub({
-    peerFactory: testTransport?.peerFactory ?? createWeriftServerPeer,
+    peerFactory: transportPeerFactory,
     udpPortRange: testTransport?.udpPortRange ?? readWebRtcUdpPortRange(process.env),
     now
   });

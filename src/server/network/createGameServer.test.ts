@@ -62,6 +62,46 @@ describe('createGameServer scheduler', () => {
     expect(testServer.testHarness?.acceptedInputs).toBeTypeOf('function');
     expect(testServer.testHarness?.transportGeneration).toBeTypeOf('function');
   });
+
+  it('accepts transport impairment only through the existing test gameplay-transport path', () => {
+    const server = createGameServer({
+      clientDirectory: false,
+      enableTestHarness: true,
+      testGameplayTransport: {
+        peerFactory: () => { throw new Error('No peer expected in this unit test.'); },
+        udpPortRange: [54100, 54131],
+        impairment: {
+          oneWayDelayMs: 25,
+          jitterSequenceMs: [0, 5],
+          dropEveryNthPacket: 3,
+          reorderWindow: 1
+        }
+      }
+    });
+
+    expect(server.testHarness).not.toBeNull();
+  });
+
+  it('accepts peer- and direction-aware impairment only through the test gameplay-transport path', () => {
+    const server = createGameServer({
+      clientDirectory: false,
+      enableTestHarness: true,
+      testGameplayTransport: {
+        peerFactory: () => { throw new Error('No peer expected in this unit test.'); },
+        udpPortRange: [54100, 54131],
+        impairment: ({ generationId, direction }) => generationId === 'unimpaired-peer' || direction === 'inbound'
+          ? null
+          : {
+              oneWayDelayMs: 25,
+              jitterSequenceMs: [],
+              dropEveryNthPacket: null,
+              reorderWindow: 0
+            }
+      }
+    });
+
+    expect(server.testHarness).not.toBeNull();
+  });
 });
 
 describe('Socket.IO RTT sampling', () => {

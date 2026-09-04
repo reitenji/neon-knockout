@@ -75,8 +75,13 @@ describe('ArenaSession', () => {
       .__NEON_E2E_INPUT_OBSERVER__;
   });
 
-  it('records exact sampled sequences and accepted local snapshot acknowledgements in a bounded opt-in observer', () => {
-    const observer = { inputs: [] as unknown[], acceptedSnapshots: [] as unknown[], reconciliations: [] as unknown[] };
+  it('records sampled inputs and authoritative reconciliation while leaving rendered presentation to the scene observer', () => {
+    const observer = {
+      inputs: [] as unknown[],
+      acceptedSnapshots: [] as unknown[],
+      reconciliations: [] as unknown[],
+      localPresentations: [] as unknown[]
+    };
     (globalThis as typeof globalThis & { __NEON_E2E_INPUT_OBSERVER__?: typeof observer })
       .__NEON_E2E_INPUT_OBSERVER__ = observer;
     const bridge = new Bridge();
@@ -97,11 +102,16 @@ describe('ArenaSession', () => {
     for (const listener of bridge.snapshotListeners) listener(bridge.current);
 
     expect(observer.inputs).toContainEqual(expect.objectContaining({
-      sequence: 0, sampledAtMs: 20, moveX: 1, quick: false, dash: false
+      sequence: 0, sampledAtMs: 20, viewTick: 1, moveX: 1, quick: false, dash: false
     }));
-    expect(observer.acceptedSnapshots).toContainEqual({
-      tick: 2, lastProcessedInputSeq: 0, acceptedAtMs: 35
-    });
+    expect(observer.acceptedSnapshots).toContainEqual(expect.objectContaining({
+      tick: 2,
+      lastProcessedInputSeq: 0,
+      acceptedAtMs: 35,
+      transport: 'websocket',
+      pingMs: null
+    }));
+    expect(observer.localPresentations).toEqual([]);
     expect(observer.reconciliations).toContainEqual(expect.objectContaining({
       authoritativeTick: 2,
       rollbackFrames: 0,
