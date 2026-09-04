@@ -41,7 +41,7 @@ The result is visible in two ways. First, unit and integration tests prove the f
 - [x] (2026-09-03 22:33 +03:00) Fixed Task 5 queued quick-edge merging so a newer held frame cannot replace the edge's original bounded `viewTick`.
 - [x] (2026-09-04) Implemented Task 6 deterministic bidirectional impairment, real render/reconciliation telemetry, adaptive edge-ack timeout, and RTT-tier browser acceptance.
 - [x] (2026-09-04) Built and restarted the LAN service; loopback/private health probes passed and the user accepted physical play at roughly 5-15 ms locally and 25 ms on the other device.
-- [ ] Push the feature branch, fast-forward the public `main`, and verify remote refs. The user explicitly waived another test cycle before publication.
+- [x] (2026-09-04) Pushed the feature branch, fast-forwarded public `main`, and verified both remote refs. The user explicitly waived another test cycle before publication.
 
 ## Surprises & Discoveries
 
